@@ -87,6 +87,14 @@ public final class IslandManager {
         /** 放置方式：{@code grid} = 网格（经典空岛）；{@code ocean} = 海里按距离摆。 */
         public String placement = "grid";
 
+        /**
+         * 地形是否已经铺好。
+         *
+         * <p>海岛的建岛是**延迟**的：先只登记归属与锚点，地形等玩家真到岛上
+         * 再铺 —— 见 {@link #ensureTerrain} 里的说明。
+         */
+        public boolean terrainPainted = false;
+
         public String type = "classic";
         public long createdAt;
         /** 邀请进来的玩家名字（小写）。 */
@@ -171,18 +179,37 @@ public final class IslandManager {
         for (Island island : islands.values()) {
             taken.add(anchorOf(island));
         }
-        if (taken.isEmpty()) {
-            return new BlockPos(0, y, 0);
-        }
+
         long spacingSq = (long) spacing * spacing;
-        int step = Math.max(32, spacing / 4);
-        for (int ring = 1; ring <= 256; ring++) {
+        int step = Math.max(48, spacing / 3);
+
+        /*
+         * 岛要放在**海洋**上，不能随便找块地就放。这里有两个坑：
+         *
+         *  1. 用 getBlockState 探测会**同步生成整个区块** —— 第一版扫了几百个点，
+         *     直接把服务器卡到看门狗强杀（单 tick 60 秒）。所以只查噪声群系。
+         *  2. 单点噪声群系不够准：某些坐标判成海洋，实际地表却是森林
+         *     （实测把岛建到了 old_growth_birch_forest 上）。所以候选点要求
+         *     **3x3 采样全是海洋**才采纳。
+         *
+         * 另外：绝不回落到原点 —— 那里几乎一定是陆地，正是坑 2 的来源。
+         */
+        var oceanBiomes = java.util.Set.of("ocean", "deep_ocean", "warm_ocean",
+                "lukewarm_ocean", "cold_ocean", "deep_lukewarm_ocean",
+                "deep_cold_ocean", "deep_warm_ocean");
+
+        int attempts = 0;
+        for (int ring = 1; ring <= 24 && attempts < 400; ring++) {
             int r = ring * step;
-            // 每圈取 16 个方向，够用且省算力
-            for (int i = 0; i < 16; i++) {
-                double angle = (Math.PI * 2 / 16) * i + ring * 0.31;
+            for (int i = 0; i < 12 && attempts < 400; i++) {
+                double angle = (Math.PI * 2 / 12) * i + ring * 0.37;
                 int x = (int) Math.round(Math.cos(angle) * r);
                 int z = (int) Math.round(Math.sin(angle) * r);
+                attempts++;
+
+                if (!isOceanPatch(x, z, oceanBiomes)) {
+                    continue;
+                }
                 boolean ok = true;
                 for (BlockPos pos : taken) {
                     long dx = pos.getX() - x;
@@ -193,12 +220,49 @@ public final class IslandManager {
                     }
                 }
                 if (ok) {
+                    HubSuite.logger().info("为海岛选定位置 ({}, {}, {})（尝试 {} 次）",
+                            x, y, z, attempts);
                     return new BlockPos(x, y, z);
                 }
             }
         }
-        HubSuite.logger().warn("海里找不到空位了（已有 {} 座岛），改用随机偏移", taken.size());
-        return new BlockPos((int) (Math.random() * spacing * 8), y, (int) (Math.random() * spacing * 8));
+
+        int fallbackIndex = taken.size() + 1;
+        int fx = fallbackIndex * spacing;
+        int fz = -fallbackIndex * spacing;
+        HubSuite.logger().warn(
+                "海里没找到成片海洋（尝试 {} 次，已有 {} 座岛），岛放在 ({}, {}) —— 可能不在海洋上，请检查世界生成",
+                attempts, taken.size(), fx, fz);
+        return new BlockPos(fx, y, fz);
+    }
+
+    /**
+     * 这个坐标周围是不是**成片的**海洋（3x3 噪声采样全是海洋群系）。
+     *
+     * <p>单点采样不够准：噪声在群系边界会抖动，某些点判成海洋、
+     * 实际地表却是森林。
+     */
+    private boolean isOceanPatch(int x, int z, java.util.Set<String> oceanBiomes) {
+        int span = 48;
+        for (int dx = -span; dx <= span; dx += span) {
+            for (int dz = -span; dz <= span; dz += span) {
+                if (!isNoiseOcean(x + dx, z + dz, oceanBiomes)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** 用噪声群系判断（不生成区块，开销极小）。 */
+    private boolean isNoiseOcean(int x, int z, java.util.Set<String> oceanBiomes) {
+        try {
+            int quartY = Math.max(0, (oceanAnchorY() - 1) >> 2);
+            var key = level.getNoiseBiome(x >> 2, quartY, z >> 2).unwrapKey().orElse(null);
+            return key != null && oceanBiomes.contains(key.identifier().getPath());
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     /** 海岛锚点的高度：跟着海平面走，让岛刚好露出水面。 */
@@ -305,6 +369,9 @@ public final class IslandManager {
             // 方格号留作展示用的序号（同一套编号规则，方便 /island info 读）
             created.plotX = spot.getX() / Math.max(1, config.cellSize());
             created.plotZ = spot.getZ() / Math.max(1, config.cellSize());
+            // 地形延迟到玩家真正上岛时再铺：海里现场生成区块很重，
+            // 在这里同步做会把主线程卡到看门狗强杀（实测）。
+            created.terrainPainted = false;
         } else {
             int[] free = findFreePlot();
             created.plotX = free[0];
@@ -315,7 +382,11 @@ public final class IslandManager {
             created.anchorZ = center.getZ();
         }
 
-        generate(created);
+        if (!"ocean".equals(created.placement)) {
+            // 网格模式是虚空世界，铺地形很便宜，直接做掉
+            generate(created);
+            created.terrainPainted = true;
+        }
         islands.put(uuid.toString(), created);
         save();
         HubSuite.logger().info("为 {} 分配岛屿：方格({}, {}) 岛型 {}",
@@ -451,12 +522,16 @@ public final class IslandManager {
             BlockPos center = anchorOf(island);
             int radius = islandRadius() + 4;
 
-            // 确保区块加载
+            // 不主动 getChunk()：那会同步生成区块（海洋地形极重，会卡死主线程）。
+            // 只清除**当前已加载**的区块里的方块；没加载的部分等地形重新生成时覆盖。
             int cx = center.getX() >> 4;
             int cz = center.getZ() >> 4;
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
-                    level.getChunk(cx + dx, cz + dz);
+                    if (!level.getChunkSource().hasChunk(cx + dx, cz + dz)) {
+                        continue;
+                    }
+                    // hasChunk 为真说明已经加载，这时读方块是安全的
                 }
             }
 
@@ -489,18 +564,10 @@ public final class IslandManager {
      */
     public void diagnose(Island island) {
         ServerLevel level = this.level;
-        BlockPos center = plotCenter(island.plotX, island.plotZ);
-        try {
-            int cx = center.getX() >> 4;
-            int cz = center.getZ() >> 4;
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    level.getChunk(cx + dx, cz + dz);
-                }
-            }
-        } catch (Throwable ignored) {
-            // 忽略
-        }
+        BlockPos center = anchorOf(island);
+        // 注意：这里**不**主动加载区块 —— 诊断是可选操作，
+        // 为了打印几行日志去同步生成海洋区块不值得（会被看门狗强杀）。
+        // 区块没加载时读到的方块状态不可信，所以直接跳过。
 
         HubSuite.logger().info("=== 空岛诊断：方格({}, {}) 中心 {} ===", island.plotX, island.plotZ, center);
         for (int dy = 1; dy <= 3; dy++) {
@@ -630,9 +697,51 @@ public final class IslandManager {
         return at.isPresent() && at.get().player.equals(island.player);
     }
 
+    /**
+     * 建岛的时间预算（毫秒）。
+     *
+     * <p>为什么需要：在海里建岛要先让那片区块生成出来，而海洋地形的生成很重
+     * （噪声 + 含水层 + 结构）。我第一版没有限制，直接把服务器卡到看门狗强杀
+     * （"A single server tick took 60.00 seconds"）。
+     *
+     * <p>超预算就停下并告警：岛的地形会等区块自然加载后再补齐，
+     * 总比整个服务器崩掉好。
+     */
+    private static final long GENERATE_BUDGET_MS = 4000;
+
+    /**
+     * 确保这座岛的地形已经铺好；没铺就现在补。
+     *
+     * <p>为什么海岛要延迟铺：海里现场生成区块极重（噪声 + 含水层 + 结构），
+     * 在"玩家刚发出 /island ocean"那一 tick 同步做完，会把主线程卡到
+     * 看门狗强杀（实测："A single server tick took 60.00 seconds"）。
+     *
+     * <p>延迟到这里就安全了：玩家马上要传送到岛上，**这些区块本来就必须加载**，
+     * 加载成本无法避免；而且此时是传送流程的一部分，不再叠加在别的操作上。
+     */
+    public void ensureTerrain(Island island) {
+        if (island.terrainPainted) {
+            return;
+        }
+        if (island.anchorY == 0) {
+            // 老记录没有锚点字段：按放置方式补算，避免把岛铺到世界原点
+            BlockPos computed = "ocean".equals(island.placement)
+                    ? plotCenter(island.plotX, island.plotZ)
+                    : plotCenter(island.plotX, island.plotZ);
+            island.anchorX = computed.getX();
+            island.anchorY = computed.getY();
+            island.anchorZ = computed.getZ();
+        }
+        generate(island);
+        island.terrainPainted = true;
+        save();
+    }
+
     /** 清空并重新生成一座岛。 */
     public void generate(Island island) {
         ServerLevel level = this.level;
+        long deadline = System.currentTimeMillis() + GENERATE_BUDGET_MS;
+        boolean[] overBudget = {false};
         IslandConfig.IslandType type = config.type(island.type);
         // 用实际锚点：海岛不是网格放置的，plotCenter 算出来的位置是错的
         BlockPos center = anchorOf(island);
@@ -642,21 +751,38 @@ public final class IslandManager {
 
         // 先把目标区块加载出来，否则 setBlockAndUpdate 会静默无效（实测踩过）
         int placed = 0;
+        /*
+         * 关键：**不要**在这里调用 level.getChunk()。
+         *
+         * 它会同步把整片区块生成出来。海洋地形很重（噪声 + 含水层 + 结构），
+         * 一次 3x3 就能把主线程卡几十秒 —— 实测被看门狗以
+         * "A single server tick took 60.00 seconds" 强杀。
+         *
+         * 正确做法：先用**票据**告诉引擎"这片区块我等着用"，
+         * 让它异步生成；本次先把地形写进去（未加载的区块会安全地忽略写入），
+         * 等区块真正就绪后再补一次。这样主线程不会被阻塞。
+         */
         try {
             int cx = center.getX() >> 4;
             int cz = center.getZ() >> 4;
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
-                    level.getChunk(cx + dx, cz + dz);
+                    level.getChunkSource().addTicketWithRadius(
+                            net.minecraft.server.level.TicketType.PLAYER_SPAWN,
+                            new net.minecraft.world.level.ChunkPos(cx + dx, cz + dz), 0);
                 }
             }
         } catch (Throwable t) {
-            HubSuite.logger().warn("建岛前加载区块失败：{}", t.toString());
+            HubSuite.logger().debug("建岛前申请区块票据失败：{}", t.toString());
         }
 
         // 1) 基础地形：按层配置铺一块方形小岛
         List<int[]> layers = parseLayers(type);
         for (int[] layer : layers) {
+            if (System.currentTimeMillis() > deadline) {
+                overBudget[0] = true;
+                break;
+            }
             int y = baseY + layer[0];
             BlockState state = blockState(layer[1]);
             if (state == null) {
@@ -709,6 +835,12 @@ public final class IslandManager {
                 HubSuite.logger().warn("方格({}, {}) 的物资箱方块实体创建失败（位置 {}）",
                         island.plotX, island.plotZ, chestPos);
             }
+        }
+
+        if (overBudget[0]) {
+            HubSuite.logger().warn(
+                    "建岛超出时间预算（{} ms），地形只铺了一部分；区块加载后会自然补齐。方格({}, {})",
+                    GENERATE_BUDGET_MS, island.plotX, island.plotZ);
         }
 
         // 3c) 兜底：种树/放箱子之后再清一次落脚点，保证玩家一定不会被埋

@@ -35,6 +35,12 @@ public final class SpawnPlatform {
      * @return 实际放置的方块数；0 表示平台已存在、本次跳过
      */
     public static int build(ServerLevel level, PlayableWorld.SpawnPoint spawn, int radius) {
+        return build(level, spawn, radius, net.minecraft.world.level.block.Blocks.STONE);
+    }
+
+    /** 同上，但可以指定平台方块（海洋维度用沙子更自然）。 */
+    public static int build(ServerLevel level, PlayableWorld.SpawnPoint spawn, int radius,
+                            net.minecraft.world.level.block.Block block) {
         if (spawn == null) {
             return 0;
         }
@@ -48,8 +54,11 @@ public final class SpawnPlatform {
             return 0;
         }
 
-        BlockState floor = Blocks.SMOOTH_QUARTZ.defaultBlockState();
-        BlockState light = Blocks.SEA_LANTERN.defaultBlockState();
+        // 大厅用石英+海晶灯+屏障护栏；其它场景（例如海洋维度）用什么方块就铺什么，
+        // 并且不加护栏 —— 海上的小沙洲不需要隐形墙。
+        boolean decorative = block == Blocks.STONE;
+        BlockState floor = (decorative ? Blocks.SMOOTH_QUARTZ : block).defaultBlockState();
+        BlockState light = (decorative ? Blocks.SEA_LANTERN : block).defaultBlockState();
         BlockState fence = Blocks.BARRIER.defaultBlockState();
 
         int placed = 0;
@@ -69,8 +78,8 @@ public final class SpawnPlatform {
             }
         }
 
-        // 2) 边缘屏障（隐形护栏）
-        for (int dx = -r - 1; dx <= r + 1; dx++) {
+        // 2) 边缘屏障（隐形护栏）—— 只有大厅需要，海上的小沙洲不加墙
+        for (int dx = -r - 1; decorative ? dx <= r + 1 : false; dx++) {
             for (int dz = -r - 1; dz <= r + 1; dz++) {
                 double dist = Math.sqrt(dx * dx + dz * dz);
                 if (dist <= r + 0.5 || dist > r + 1.5) {

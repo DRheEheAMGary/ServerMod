@@ -6,6 +6,7 @@ import net.minecraft.core.Holder;
 import net.minecraft.core.HolderGetter;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.world.level.block.Block;
@@ -85,6 +86,42 @@ public final class WorldFactory {
     /** 供外部构造 LevelStem 时复用维度类型解析。 */
     public static Holder<DimensionType> dimensionType(MinecraftServer server, String id) {
         return resolveDimensionType(server, id);
+    }
+
+    /**
+     * 在海洋世界里找一个"开阔海域"的坐标（只查噪声群系，不生成区块）。
+     *
+     * <p>用途：让海岛维度的出生点落在真正的海上，而不是原版算出来的陆地 ——
+     * 自然生成的世界原点附近很可能是大陆，玩家一进去看到的是平原，
+     * "海岛"就名不副实了。
+     *
+     * @return 找到的坐标；没找到返回 null
+     */
+    public static net.minecraft.core.BlockPos findOceanSpot(ServerLevel level, int seaLevel) {
+        var oceanNames = java.util.Set.of("ocean", "deep_ocean", "warm_ocean",
+                "lukewarm_ocean", "cold_ocean", "deep_lukewarm_ocean",
+                "deep_cold_ocean", "deep_warm_ocean");
+        try {
+            int quartY = Math.max(0, (seaLevel - 1) >> 2);
+            // 从小到大绕圈找，命中就返回（近处优先，省得出生点离原点太远）
+            for (int ring = 1; ring <= 48; ring++) {
+                int r = ring * 96;
+                for (int i = 0; i < 16; i++) {
+                    double angle = (Math.PI * 2 / 16) * i + ring * 0.41;
+                    int x = (int) Math.round(Math.cos(angle) * r);
+                    int z = (int) Math.round(Math.sin(angle) * r);
+                    var key = level.getNoiseBiome(x >> 2, quartY, z >> 2).unwrapKey().orElse(null);
+                    if (key != null && oceanNames.contains(key.identifier().getPath())) {
+                        HubSuite.logger().info("海洋出生点已选定：({}, {}, {})，群系 {}",
+                                x, seaLevel + 1, z, key.identifier());
+                        return new net.minecraft.core.BlockPos(x, seaLevel + 1, z);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            HubSuite.logger().warn("寻找海洋出生点失败：{}", t.toString());
+        }
+        return null;
     }
 
     private static Holder<DimensionType> resolveDimensionType(MinecraftServer server, String id) {

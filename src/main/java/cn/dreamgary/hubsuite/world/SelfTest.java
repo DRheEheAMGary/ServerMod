@@ -1001,34 +1001,74 @@ public final class SelfTest {
         }
         var level = ocean.entry().level();
         try {
-            // 采样：只用**噪声群系查询**统计海洋占比（不生成区块 ——
-            // 用 getBlockState 大范围采样会把服务器卡到看门狗强杀，实测踩过）。
-            int oceanBiomeSamples = 0;
-            int total2 = 0;
+            // 检查真正重要的两件事：
+            //   1) 出生点在海洋群系里（玩家一进去看到的是海，不是平原）
+            //   2) 新岛会被放在海洋群系里（而不是随便找块地）
+            //
+            // 不统计"原点附近的海洋占比"：自然世界的原点落在陆地很正常，
+            // 那个指标既不稳定也不代表玩家体验（第一版就栽在这里）。
+            var spawn = ocean.entry().spawn();
+            int sx = (int) Math.floor(spawn.x());
+            int sz = (int) Math.floor(spawn.z());
             int seaLevel = level.getSeaLevel();
-            var oceanNames = java.util.List.of("ocean", "deep_ocean", "warm_ocean",
-                    "lukewarm_ocean", "cold_ocean", "deep_lukewarm_ocean",
-                    "deep_cold_ocean", "deep_warm_ocean");
-            for (int x = -1024; x <= 1024; x += 128) {
-                for (int z = -1024; z <= 1024; z += 128) {
-                    total2++;
-                    var key = level.getNoiseBiome(x >> 2, (seaLevel - 1) >> 2, z >> 2)
-                            .unwrapKey().orElse(null);
-                    if (key != null && oceanNames.contains(key.identifier().getPath())) {
-                        oceanBiomeSamples++;
+
+            var spawnBiomeKey = level.getNoiseBiome(sx >> 2, (seaLevel - 1) >> 2, sz >> 2)
+                    .unwrapKey().orElse(null);
+            String spawnBiome = spawnBiomeKey == null ? "?" : spawnBiomeKey.identifier().getPath();
+            HubSuite.logger().info("  海洋维度出生点 ({}, {}, {}) 的群系：{}",
+                    sx, (int) spawn.y(), sz, spawnBiome);
+
+            if (spawnBiome.contains("ocean")) {
+                ok("海岛维度的出生点在海洋群系里（" + spawnBiome + "）");
+            } else {
+                fail("海岛维度的出生点不在海洋里，而是 " + spawnBiome
+                        + " —— 玩家进去会看到陆地");
+            }
+
+            // 出生点脚下应该是我们铺的沙洲
+            var spawnBlock = level.getBlockState(
+                    new net.minecraft.core.BlockPos(sx, (int) spawn.y() - 1, sz));
+            if (spawnBlock.isAir()) {
+                fail("海洋出生点没有落脚平台，玩家会掉进海里");
+            } else {
+                ok("海洋出生点有落脚平台（" + spawnBlock.getBlock().getName().getString() + "）");
+            }
+
+            // 真建一座海岛，验证它落在海洋群系上
+            var probe = FakePlayers.spawn(server, "hubsuite_oceantest", level, false);
+            if (probe != null) {
+                try {
+                    var island = ocean.manager().getOrCreate(probe.getUUID(),
+                            "hubsuite_oceantest", "ocean");
+                    var anchor = ocean.manager().anchorOf(island);
+                    var key = level.getNoiseBiome(anchor.getX() >> 2,
+                            (seaLevel - 1) >> 2, anchor.getZ() >> 2).unwrapKey().orElse(null);
+                    String biome = key == null ? "?" : key.identifier().getPath();
+                    HubSuite.logger().info("  新建海岛锚点 ({}, {}, {}) 的群系：{}",
+                            anchor.getX(), anchor.getY(), anchor.getZ(), biome);
+
+                    if (biome.contains("ocean")) {
+                        ok("新建的海岛落在海洋群系上（" + biome + "）");
+                    } else {
+                        fail("新建的海岛落在 " + biome + " 上，不是海洋");
+                    }
+
+                    // 岛面应该有实体方块（真的铺了地形）
+                    var surface = level.getBlockState(anchor);
+                    if (surface.isAir()) {
+                        fail("海岛地形没有生成（锚点处是空气）");
+                    } else {
+                        ok("海岛地形已生成（岛面 = "
+                                + surface.getBlock().getName().getString() + "）");
+                    }
+                } finally {
+                    try {
+                        ocean.manager().delete(probe.getUUID());
+                        server.getPlayerList().remove(probe);
+                    } catch (Throwable ignored) {
+                        // 忽略
                     }
                 }
-            }
-            int water = oceanBiomeSamples;
-            int land = total2 - oceanBiomeSamples;
-            HubSuite.logger().info(
-                    "  海洋维度采样（17x17 网格，仅查群系）：海洋 {} / 非海洋 {}",
-                    oceanBiomeSamples, total2 - oceanBiomeSamples);
-
-            if (oceanBiomeSamples >= total2 / 2) {
-                ok("海岛维度是自然海洋（海洋群系 " + oceanBiomeSamples + "/" + total2 + "）");
-            } else {
-                fail("海岛维度不像自然海洋（海洋群系 " + oceanBiomeSamples + "/" + total2 + "）");
             }
         } catch (Throwable t) {
             fail("海洋检查异常：" + t);

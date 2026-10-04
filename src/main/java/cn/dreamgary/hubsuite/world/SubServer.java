@@ -307,11 +307,24 @@ public final class SubServer implements PlayableWorld {
         ServerLevel level = WorldBuilder.create(server, save, dimension, stem, config.seed, true);
         level.getWorldBorder().setAbsoluteMaxSize(server.getAbsoluteMaxWorldSize());
 
-        // 出生点：正常地形让原版算，虚空/超平坦用配置坐标
+        // 出生点：
+        //   虚空 / 超平坦 → 配置坐标
+        //   自定义生成器（海洋）→ 海上找一个开阔海域，再铺个小平台
+        //   普通地形 → 让原版算地表
         PlayableWorld.SpawnPoint spawn;
-        boolean normalTerrain = worldKind == HubSuiteConfig.WorldKind.NORMAL
-                || customGenerator != null;
-        if (normalTerrain) {
+        if (customGenerator != null) {
+            var oceanSpot = WorldFactory.findOceanSpot(level, level.getSeaLevel());
+            if (oceanSpot != null) {
+                spawn = new PlayableWorld.SpawnPoint(
+                        oceanSpot.getX() + 0.5, oceanSpot.getY(), oceanSpot.getZ() + 0.5, 0.0F, 0.0F);
+                // 海上没有落脚点，铺一块小沙洲；玩家一进来就面朝大海
+                int blocks = SpawnPlatform.build(level, spawn, 4, net.minecraft.world.level.block.Blocks.SAND);
+                HubSuite.logger().info("海洋维度 '{}' 的海上出生平台已生成：{} 个方块", entryId, blocks);
+            } else {
+                spawn = new PlayableWorld.SpawnPoint(config.spawnX, config.spawnY, config.spawnZ,
+                        config.spawnYaw, config.spawnPitch);
+            }
+        } else if (worldKind == HubSuiteConfig.WorldKind.NORMAL) {
             PlayableWorld.SpawnPoint vanilla = calculateVanillaSpawn(server, level, config);
             spawn = vanilla != null && hasGroundBelow(level, vanilla.x(), vanilla.y(), vanilla.z())
                     ? sanitizeSpawn(level, config.id + "/" + entryId, vanilla)

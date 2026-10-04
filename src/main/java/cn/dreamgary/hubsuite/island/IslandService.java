@@ -193,10 +193,16 @@ public final class IslandService {
             if (type.isEmpty()) {
                 return;   // 大厅，不用建岛
             }
-            if (type.get().manager().islandOf(player.getUUID()).isPresent()) {
-                return;
+            IslandManager.Island island;
+            Optional<IslandManager.Island> existing =
+                    type.get().manager().islandOf(player.getUUID());
+            if (existing.isPresent()) {
+                island = existing.get();
+            } else {
+                island = createFor(player, type.get().id());
             }
-            createFor(player, type.get().id());
+            // 地形可能是延迟铺的（海岛），落岛前补上
+            type.get().manager().ensureTerrain(island);
         });
 
         // 3) 出生点解析：要落进岛屿维度就落到自己岛上
@@ -330,8 +336,10 @@ public final class IslandService {
         }
         // 先登记意图：入口解析会在建岛之前跑，没有这一步会被判成"回大厅"
         pendingDestination.put(player.getUUID(), type.id());
-        // 建岛（没有的话），落点由 PlayerRouter 的出生点解析负责
-        type.manager().getOrCreate(player.getUUID(), player.getName().getString(), type.id());
+        // 建岛（没有的话）。地形可能还没铺（海岛是延迟铺的），
+        // 在传送前补上 —— 反正马上要传过去，这些区块本来就得加载。
+        var island = type.manager().getOrCreate(player.getUUID(), player.getName().getString(), type.id());
+        type.manager().ensureTerrain(island);
         return PlayerRouter.sendTo(player, server);
     }
 
