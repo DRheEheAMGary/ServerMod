@@ -1,0 +1,586 @@
+package cn.dreamgary.hubsuite.world;
+
+import cn.dreamgary.hubsuite.HubSuite;
+import cn.dreamgary.hubsuite.config.ConfigManager;
+import cn.dreamgary.hubsuite.config.HubSuiteConfig;
+import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.Difficulty;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.dimension.LevelStem;
+import net.minecraft.world.level.storage.LevelData;
+
+import java.io.IOException;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * 一个子服 = 一个独立存档 + 一个可进入的维度 + 一套独立规则。
+ *
+ * <p>扩展一个新子服只要在配置里加一条 {@link HubSuiteConfig.SubServerConfig}，
+ * 本类不需要修改。
+ */
+public final class SubServer implements PlayableWorld {
+
+    private final MinecraftServer server;
+    private final HubSuiteConfig.SubServerConfig config;
+    private final ServerRules rules;
+
+    /** 主维度（玩家默认进这个）。 */
+    private final Entry primary;
+
+    /** 全部维度，按"入口 id"索引。主维度的入口 id 就是 {@code "main"}。 */
+    private final Map<String, Entry> entries;
+
+    /**
+     * 入口解析器：决定某个玩家该进哪个维度。
+     *
+     * <p>空岛服靠它实现"有岛回岛上、没岛回大厅"。返回 null 表示用主维度。
+     */
+    private EntryResolver entryResolver;
+
+    /** 一个维度：自己的存档、维度、出生点。 */
+    public record Entry(String id,
+                        ResourceKey<Level> dimension,
+                        ServerLevel level,
+                        IsolatedSave save,
+                        PlayableWorld.SpawnPoint spawn,
+                        String label) {
+    }
+
+    /** 决定玩家该进哪个维度。 */
+    @FunctionalInterface
+    public interface EntryResolver {
+        Entry resolve(ServerPlayer player, SubServer sub);
+    }
+
+    private SubServer(MinecraftServer server,
+                      HubSuiteConfig.SubServerConfig config,
+                      ServerRules rules,
+                      Entry primary,
+                      Map<String, Entry> entries) {
+        this.server = server;
+        this.config = config;
+        this.rules = rules;
+        this.primary = primary;
+        this.entries = entries;
+    }
+
+    // ------------------------------------------------------------------
+    // 多维度访问
+    // ------------------------------------------------------------------
+
+    /** 全部维度（主维度在前）。 */
+    public Collection<Entry> entries() {
+        return java.util.Collections.unmodifiableCollection(entries.values());
+    }
+
+    /** 按入口 id 取维度。 */
+    public Optional<Entry> entry(String id) {
+        return Optional.ofNullable(entries.get(id));
+    }
+
+    public Entry primaryEntry() {
+        return primary;
+    }
+
+    /** 注册一个额外维度。 */
+    public void addEntry(Entry entry) {
+        entries.put(entry.id(), entry);
+    }
+
+    public void setEntryResolver(EntryResolver resolver) {
+        this.entryResolver = resolver;
+    }
+
+    /**
+     * 解析某个玩家这次该进哪个维度。
+     *
+     * <p>解析器没设、或返回 null 时用主维度。
+     */
+    public Entry entryFor(ServerPlayer player) {
+        if (entryResolver != null) {
+            try {
+                Entry resolved = entryResolver.resolve(player, this);
+                if (resolved != null) {
+                    return resolved;
+                }
+            } catch (Throwable t) {
+                HubSuite.logger().error("解析子服 '{}' 的入口维度失败，回退到主维度", id(), t);
+            }
+        }
+        return primary;
+    }
+
+    /** 这个维度是不是本子服的。 */
+    public boolean owns(ResourceKey<Level> dimension) {
+        for (Entry entry : entries.values()) {
+            if (entry.dimension().equals(dimension)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 某个维度对应的入口。 */
+    public Optional<Entry> entryOf(ResourceKey<Level> dimension) {
+        for (Entry entry : entries.values()) {
+            if (entry.dimension().equals(dimension)) {
+                return Optional.of(entry);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * 决定这个子服"玩家该从哪出生"。
+     *
+     * <p>规则（按优先级）：
+     * <ol>
+     *   <li>配置关了 {@code useWorldSpawn} → 用配置坐标（管理员说了算）；</li>
+     *   <li>正常地形世界 → 用**原版**算出的出生点（新建时让
+     *       {@code setInitialSpawn} 算，已有存档直接读 {@code level.dat}）；</li>
+     *   <li>原版给的坐标**下方没有地面**（虚空/超平坦世界会返回主世界的
+     *       出生点当默认值，跟本维度无关）→ 退回配置坐标。</li>
+     * </ol>
+     * 最后无论走哪条路，都会做一次"能不能站人"的校验，避免把玩家埋进方块里。
+     */
+    private static PlayableWorld.SpawnPoint resolveSpawn(MinecraftServer server, ServerLevel level,
+                                                        HubSuiteConfig.SubServerConfig config,
+                                                        IsolatedSave save) {
+        // 特殊世界：出生点由别的机制负责，配置坐标就是权威值，不做站立校验。
+        //
+        //   void   → 空岛服。小岛是玩家进服时才生成的，此时中心当然是空气；
+        //            而且这是**故意**的：在岛生成之前，玩家必须保持在子服出生点
+        //            （也就是子服的原点），这样 IslandManager 分配岛屿时
+        //            才能算出正确的位置。
+        //   flat   → 超平坦世界，平台本身可能还没生成。
+        HubSuiteConfig.WorldKind kind =
+                HubSuiteConfig.WorldKind.parse(config.worldKind, HubSuiteConfig.WorldKind.NORMAL);
+        boolean specialSpawn = kind == HubSuiteConfig.WorldKind.VOID
+                || kind == HubSuiteConfig.WorldKind.FLAT;
+
+        // 1) 管理员显式要求用固定坐标，或特殊世界 → 直接用配置值
+        if (!config.useWorldSpawn || specialSpawn) {
+            return new PlayableWorld.SpawnPoint(
+                    config.spawnX, config.spawnY, config.spawnZ,
+                    config.spawnYaw, config.spawnPitch);
+        }
+
+        // 2) 先看配置里有没有上次算好的结果（最可靠，不依赖 level.dat）
+        if (config.resolvedSpawnX != null && config.resolvedSpawnY != null
+                && config.resolvedSpawnZ != null
+                && hasGroundBelow(level, config.resolvedSpawnX, config.resolvedSpawnY,
+                        config.resolvedSpawnZ)) {
+            PlayableWorld.SpawnPoint cached = sanitizeSpawn(level, config.id,
+                    new PlayableWorld.SpawnPoint(config.resolvedSpawnX, config.resolvedSpawnY,
+                            config.resolvedSpawnZ, config.spawnYaw, config.spawnPitch));
+            HubSuite.logger().info("子服 '{}' 使用缓存的出生点：({}, {}, {})",
+                    config.id, cached.x(), cached.y(), cached.z());
+            return cached;
+        }
+
+        // 3) 没有缓存 → 让原版算一个
+        PlayableWorld.SpawnPoint vanilla = calculateVanillaSpawn(server, level, config);
+
+        // 4) 候选点必须是"底下真的有地"才可信，然后写回配置长期保存
+        if (vanilla != null && hasGroundBelow(level, vanilla.x(), vanilla.y(), vanilla.z())) {
+            PlayableWorld.SpawnPoint finalSpawn = sanitizeSpawn(level, config.id, vanilla);
+            rememberSpawn(config, finalSpawn);
+            HubSuite.logger().info("子服 '{}' 使用原版出生点：({}, {}, {})",
+                    config.id, finalSpawn.x(), finalSpawn.y(), finalSpawn.z());
+            return finalSpawn;
+        }
+
+        // 5) 退回配置坐标
+        if (vanilla != null) {
+            HubSuite.logger().info("子服 '{}' 原版出生点 ({}, {}, {}) 下方没有地面，"
+                            + "改用配置坐标 ({}, {}, {})",
+                    config.id, vanilla.x(), vanilla.y(), vanilla.z(),
+                    config.spawnX, config.spawnY, config.spawnZ);
+        }
+        return sanitizeSpawn(level, config.id, new PlayableWorld.SpawnPoint(
+                config.spawnX, config.spawnY, config.spawnZ,
+                config.spawnYaw, config.spawnPitch));
+    }
+
+    /** 把算好的出生点写回配置，避免每次启动重算（也避免读到 level.dat 里的坏值）。 */
+    private static void rememberSpawn(HubSuiteConfig.SubServerConfig config,
+                                      PlayableWorld.SpawnPoint spawn) {
+        config.resolvedSpawnX = spawn.x();
+        config.resolvedSpawnY = spawn.y();
+        config.resolvedSpawnZ = spawn.z();
+        try {
+            ConfigManager manager = HubSuite.configManager();
+            if (manager != null) {
+                manager.save();
+            }
+        } catch (Throwable t) {
+            HubSuite.logger().warn("保存出生点缓存失败：{}", t.toString());
+        }
+    }
+
+    /** 按配置创建/载入一个子服。 */
+    public static SubServer load(MinecraftServer server, HubSuiteConfig.SubServerConfig config) throws IOException {
+        GameType gameType = parseGameType(config.gameMode, GameType.SURVIVAL);
+        Difficulty difficulty = parseDifficulty(config.difficulty, Difficulty.NORMAL);
+
+        IsolatedSave save = IsolatedSave.open(
+                server,
+                "hubsuite_" + config.id,
+                config.displayName,
+                gameType,
+                difficulty,
+                true);
+
+        ServerRules rules = new ServerRules(config.id, config.behaviour);
+        rules.initialize(config.gameRules);
+
+        HubSuiteConfig.WorldKind kind = HubSuiteConfig.WorldKind.parse(config.worldKind, HubSuiteConfig.WorldKind.NORMAL);
+        LevelStem stem = WorldFactory.createStem(server, "minecraft:overworld", kind, config.flatLayers);
+        ResourceKey<Level> dimension = WorldBuilder.dimensionKey("server_" + config.id);
+
+        ServerLevel level = WorldBuilder.create(server, save, dimension, stem, config.seed, true);
+        level.getWorldBorder().setAbsoluteMaxSize(server.getAbsoluteMaxWorldSize());
+
+        PlayableWorld.SpawnPoint spawn = resolveSpawn(server, level, config, save);
+
+        applySpawn(level, spawn);
+        applyWorldBorder(level, rules, config);
+
+        save.register(level);
+        save.bindPlayerStorage(dimension);
+        RulesManager.register(dimension, rules);
+
+        Entry primary = new Entry("main", dimension, level, save, spawn, config.displayName);
+        Map<String, Entry> entries = new LinkedHashMap<>();
+        entries.put(primary.id(), primary);
+        return new SubServer(server, config, rules, primary, entries);
+    }
+
+    /**
+     * 给这个子服再加一个维度（用于"一个子服多个世界"，例如空岛服的大厅/经典/海岛）。
+     *
+     * <p>每个维度都是**独立存档**：{@code PlayerDataStorage} 是按存档分目录的，
+     * 共用一份存档的话三个维度的玩家数据会互相覆盖（背包、经验都会串）。
+     *
+     * @param entryId   入口 id，后续用 {@link #entry(String)} 取
+     * @param worldKind 世界类型（void / flat / normal）
+     * @param label     显示名（调试与界面用）
+     */
+    public Entry addDimension(String entryId,
+                              HubSuiteConfig.WorldKind worldKind,
+                              List<String> flatLayers,
+                              String label) throws IOException {
+        return addDimension(entryId, worldKind, flatLayers, label, null);
+    }
+
+    /**
+     * 同上，但可以指定自定义生成器（例如"一片自然海洋"）。
+     *
+     * @param customGenerator 传 null 表示按 {@code worldKind} 用标准生成器
+     */
+    public Entry addDimension(String entryId,
+                              HubSuiteConfig.WorldKind worldKind,
+                              List<String> flatLayers,
+                              String label,
+                              net.minecraft.world.level.chunk.ChunkGenerator customGenerator) throws IOException {
+        String saveName = "hubsuite_" + config.id + "_" + entryId;
+        GameType gameType = parseGameType(config.gameMode, GameType.SURVIVAL);
+        Difficulty difficulty = parseDifficulty(config.difficulty, Difficulty.NORMAL);
+
+        IsolatedSave save = IsolatedSave.open(
+                server, saveName, label, gameType, difficulty, true);
+
+        LevelStem stem = customGenerator != null
+                ? new LevelStem(WorldFactory.dimensionType(server, "minecraft:overworld"), customGenerator)
+                : WorldFactory.createStem(server, "minecraft:overworld", worldKind, flatLayers);
+        ResourceKey<Level> dimension = WorldBuilder.dimensionKey(config.id + "_" + entryId);
+
+        ServerLevel level = WorldBuilder.create(server, save, dimension, stem, config.seed, true);
+        level.getWorldBorder().setAbsoluteMaxSize(server.getAbsoluteMaxWorldSize());
+
+        // 出生点：正常地形让原版算，虚空/超平坦用配置坐标
+        PlayableWorld.SpawnPoint spawn;
+        boolean normalTerrain = worldKind == HubSuiteConfig.WorldKind.NORMAL
+                || customGenerator != null;
+        if (normalTerrain) {
+            PlayableWorld.SpawnPoint vanilla = calculateVanillaSpawn(server, level, config);
+            spawn = vanilla != null && hasGroundBelow(level, vanilla.x(), vanilla.y(), vanilla.z())
+                    ? sanitizeSpawn(level, config.id + "/" + entryId, vanilla)
+                    : new PlayableWorld.SpawnPoint(config.spawnX, config.spawnY, config.spawnZ,
+                            config.spawnYaw, config.spawnPitch);
+        } else {
+            spawn = new PlayableWorld.SpawnPoint(config.spawnX, config.spawnY, config.spawnZ,
+                    config.spawnYaw, config.spawnPitch);
+        }
+
+        applySpawn(level, spawn);
+        applyWorldBorder(level, rules, config);
+        save.register(level);
+        save.bindPlayerStorage(dimension);
+        RulesManager.register(dimension, rules);
+
+        Entry entry = new Entry(entryId, dimension, level, save, spawn, label);
+        entries.put(entryId, entry);
+        HubSuite.logger().info("子服 '{}' 新增维度 '{}'：{}（存档 {}）",
+                config.id, entryId, dimension.identifier(), saveName);
+        return entry;
+    }
+
+    /**
+     * 让**原版**为这个自定义维度算出地表出生点，并原样采用它的结果。
+     *
+     * <p>原版只在创建主世界时调用 {@code MinecraftServer.setInitialSpawn}，
+     * 自定义维度必须自己调一次。它内部会用 {@code PlayerSpawnFinder} 找一个
+     * "实体地面 + 上方无遮挡"的位置 —— 这正是我们想要的，不需要自己再扫一遍。
+     *
+     * <p>（早期版本我自己写了一套"往下找第一块实心方块"，结果找到洞穴顶或
+     * 被树覆盖的地面，把玩家放进地里。已改为完全信任原版。）
+     *
+     * @return 原版算出的出生点；失败时返回 null
+     */
+    private static PlayableWorld.SpawnPoint calculateVanillaSpawn(MinecraftServer server, ServerLevel level,
+                                                                 HubSuiteConfig.SubServerConfig config) {
+        try {
+            net.minecraft.world.level.storage.ServerLevelData data =
+                    (net.minecraft.world.level.storage.ServerLevelData) level.getLevelData();
+            cn.dreamgary.hubsuite.mixin.MinecraftServerLevelsAccessor.hubsuite$setInitialSpawn(
+                    level, data,
+                    false,                 // 不要奖励箱
+                    false,                 // 非调试世界
+                    server.getLevelLoadListener());
+            data.setInitialized(true);
+
+            var respawn = data.getRespawnData();
+            if (respawn != null && respawn.pos() != null) {
+                var pos = respawn.pos();
+                HubSuite.logger().info("子服 '{}' 由原版算出出生点：({}, {}, {})",
+                        config.id, pos.getX(), pos.getY(), pos.getZ());
+                return new PlayableWorld.SpawnPoint(
+                        pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5,
+                        respawn.yaw(), respawn.pitch());
+            }
+        } catch (Throwable t) {
+            HubSuite.logger().warn("原版出生点计算失败（子服 '{}'）：{}", config.id, t.toString());
+        }
+        return null;
+    }
+
+    /**
+     * 把出生点修正到"真正能站人的地表"。
+     *
+     * <p>不再盲目相信任何来源的 Y 值 —— 实测出现过原版/存档给出 {@code Y=100}
+     * 而实际地表在 {@code Y=69}，玩家一进去就卡在地里。
+     *
+     * <p>搜索策略是**就近**：先在原坐标上下 24 格内找。
+     * 不要一路向下扫 —— 那会钻到地下几十格（实测把 Y=83 一路降到 Y=54 的砂砾层）。
+     */
+    private static PlayableWorld.SpawnPoint sanitizeSpawn(ServerLevel level, String id,
+                                                          PlayableWorld.SpawnPoint spawn) {
+        try {
+            int x = (int) Math.floor(spawn.x());
+            int z = (int) Math.floor(spawn.z());
+            int y = (int) Math.floor(spawn.y());
+
+            // 确保这一列所在区块已加载，否则读到的都是"未加载"
+            level.getChunk(x >> 4, z >> 4);
+
+            if (isStandable(level, x, y, z)) {
+                return spawn;
+            }
+
+            for (int offset = 1; offset <= 24; offset++) {
+                int down = y - offset;
+                if (down >= level.getMinY() + 1 && isStandable(level, x, down, z)) {
+                    HubSuite.logger().info("子服 '{}' 出生点 Y={} 悬空，就近下落到 Y={}",
+                            id, y, down);
+                    return new PlayableWorld.SpawnPoint(
+                            x + 0.5, down, z + 0.5, spawn.yaw(), spawn.pitch());
+                }
+                int up = y + offset;
+                if (up <= level.getMaxY() && isStandable(level, x, up, z)) {
+                    HubSuite.logger().info("子服 '{}' 出生点 Y={} 无法站立，就近抬升到 Y={}",
+                            id, y, up);
+                    return new PlayableWorld.SpawnPoint(
+                            x + 0.5, up, z + 0.5, spawn.yaw(), spawn.pitch());
+                }
+            }
+            HubSuite.logger().warn("子服 '{}' 在 ({}, {}) 附近 24 格内找不到可站立的出生点，"
+                    + "沿用原值 Y={}（请检查世界生成或坐标配置）", id, x, z, y);
+        } catch (Throwable t) {
+            HubSuite.logger().warn("修正子服 '{}' 出生点失败：{}", id, t.toString());
+        }
+        return spawn;
+    }
+
+    /**
+     * 某个坐标下方有没有地面（最多向下找 64 格）。
+     *
+     * <p>用于判断"能不能信任这个出生点" —— 虚空世界里这一列全是空气，直接返回 false。
+     */
+    private static boolean hasGroundBelow(ServerLevel level, double x, double y, double z) {
+        try {
+            int bx = (int) Math.floor(x);
+            int bz = (int) Math.floor(z);
+            int by = (int) Math.floor(y);
+            level.getChunk(bx >> 4, bz >> 4);
+            for (int probe = by; probe >= by - 64 && probe >= level.getMinY(); probe--) {
+                var pos = new net.minecraft.core.BlockPos(bx, probe, bz);
+                if (!level.getBlockState(pos).getCollisionShape(level, pos).isEmpty()) {
+                    return true;
+                }
+            }
+        } catch (Throwable t) {
+            HubSuite.logger().debug("检查出生点下方地面失败：{}", t.toString());
+        }
+        return false;
+    }
+
+    /** 判断某个位置能不能站人：脚下实心、本体与头顶可穿过。 */
+    private static boolean isStandable(ServerLevel level, int x, int y, int z) {
+        var feet = new net.minecraft.core.BlockPos(x, y, z);
+        var groundState = level.getBlockState(feet.below());
+        if (groundState.isAir() || !groundState.isSolidRender()) {
+            return false;
+        }
+        return isPassable(level, feet) && isPassable(level, feet.above());
+    }
+
+    /** 玩家能不能站在这个方块里：没有碰撞体积即可（空气、草、流体都算）。 */
+    private static boolean isPassable(ServerLevel level, net.minecraft.core.BlockPos pos) {
+        return level.getBlockState(pos).getCollisionShape(level, pos).isEmpty();
+    }
+
+    private static void applySpawn(ServerLevel level, PlayableWorld.SpawnPoint spawn) {
+        try {
+            level.setRespawnData(LevelData.RespawnData.of(
+                    level.dimension(),
+                    BlockPos.containing(spawn.x(), spawn.y(), spawn.z()),
+                    spawn.yaw(),
+                    spawn.pitch()));
+        } catch (Exception e) {
+            HubSuite.logger().warn("设置子服出生点失败：{}", e.toString());
+        }
+    }
+
+    private static void applyWorldBorder(ServerLevel level, ServerRules rules, HubSuiteConfig.SubServerConfig config) {
+        if (rules.worldBorderRadius() <= 0) {
+            return;
+        }
+        var border = level.getWorldBorder();
+        border.setCenter(config.spawnX, config.spawnZ);
+        border.setSize(rules.worldBorderRadius() * 2.0);
+    }
+
+    private static GameType parseGameType(String raw, GameType fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        return switch (raw.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "survival" -> GameType.SURVIVAL;
+            case "creative" -> GameType.CREATIVE;
+            case "adventure" -> GameType.ADVENTURE;
+            case "spectator" -> GameType.SPECTATOR;
+            default -> fallback;
+        };
+    }
+
+    private static Difficulty parseDifficulty(String raw, Difficulty fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        return switch (raw.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "peaceful" -> Difficulty.PEACEFUL;
+            case "easy" -> Difficulty.EASY;
+            case "normal" -> Difficulty.NORMAL;
+            case "hard" -> Difficulty.HARD;
+            default -> fallback;
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // PlayableWorld
+    // ------------------------------------------------------------------
+
+    @Override
+    public String id() {
+        return config.id;
+    }
+
+    @Override
+    public String displayName() {
+        return config.displayName;
+    }
+
+    @Override
+    public ServerLevel level() {
+        return primary.level();
+    }
+
+    @Override
+    public ServerRules rules() {
+        return rules;
+    }
+
+    @Override
+    public IsolatedSave save() {
+        return primary.save();
+    }
+
+    @Override
+    public PlayableWorld.SpawnPoint spawn() {
+        return primary.spawn();
+    }
+
+    @Override
+    public String description() {
+        return "&7类型 &f" + config.worldKind + " &7| 模式 &f" + config.gameMode + " &7| 难度 &f" + config.difficulty;
+    }
+
+    // ------------------------------------------------------------------
+    // 附加信息
+    // ------------------------------------------------------------------
+
+    public HubSuiteConfig.SubServerConfig config() {
+        return config;
+    }
+
+    public List<ServerLevel> levels() {
+        List<ServerLevel> all = new java.util.ArrayList<>(entries.size());
+        for (Entry entry : entries.values()) {
+            all.add(entry.level());
+        }
+        return all;
+    }
+
+    /** 该子服当前的在线人数（跨它全部维度）。 */
+    public int playerCount() {
+        int total = 0;
+        for (Entry entry : entries.values()) {
+            total += entry.level().players().size();
+        }
+        return total;
+    }
+
+    public void save(boolean flush) {
+        for (Entry entry : entries.values()) {
+            entry.save().save(List.of(entry.level()), flush);
+        }
+    }
+
+    public void close() {
+        for (Entry entry : entries.values()) {
+            RulesManager.unregister(entry.dimension());
+            ServerLevelsAccess.remove(server, entry.dimension());
+            entry.save().close();
+        }
+    }
+}

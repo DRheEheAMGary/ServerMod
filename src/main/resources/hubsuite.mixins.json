@@ -1,0 +1,26 @@
+{
+	"required": true,
+	"minVersion": "0.8",
+	"package": "cn.dreamgary.hubsuite.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"mixins": [
+		"ConnectionChannelAccessor",
+		"DistanceManagerAccessor",
+		"DistanceManagerRemovePlayerMixin",
+		"MinecraftServerLevelsAccessor",
+		"MinecraftServerStorageAccessor",
+		"PlayerListAccessor",
+		"PlayerListFakePlayerMixin",
+		"PlayerListFieldAccessor",
+		"PlayerInfoListedMixin",
+		"PlayerListStorageMixin",
+		"PrepareSpawnTaskMixin",
+		"ServerCommonPacketListenerMixin",
+		"ServerGamePacketListenerMenuMixin",
+		"ServerGamePacketListenerCommandMixin",
+		"ServerLevelGameRulesMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

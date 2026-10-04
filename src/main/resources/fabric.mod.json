@@ -1,0 +1,39 @@
+{
+	"schemaVersion": 1,
+	"id": "hubsuite",
+	"version": "${version}",
+	"name": "HubSuite",
+	"description": "纯服务端的多世界服务器套件：对话框注册/登录、假人大厅、生存/创造/空岛三个独立子服，并对 HuskHomes 与 Text Placeholder API 做适配。",
+	"authors": [
+		"DreamGary"
+	],
+	"contact": {
+		"homepage": "https://dreamgary.cn/",
+		"sources": "https://dreamgary.cn/"
+	},
+	"license": "ARR",
+	"icon": "assets/hubsuite/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"cn.dreamgary.hubsuite.HubSuite"
+		]
+	},
+	"mixins": [
+		{
+			"config": "hubsuite.mixins.json",
+			"environment": "server"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=${loaderVersion}",
+		"minecraft": "${mcVersion}",
+		"java": ">=25",
+		"fabric-api": "*"
+	},
+	"suggests": {
+		"huskhomes": "*",
+		"placeholder-api": "*",
+		"luckperms": "*"
+	}
+}

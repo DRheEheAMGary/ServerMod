@@ -1,0 +1,23 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# 运行目录（真实服务端测试环境，由开发者本地生成）
+run/
+!run/mods/
+
+# 本地依赖 jar（体积大，不入版本库；请按 docs/安装部署.md 自行放置）
+mods/
+libs/
+
+# macOS
+.DS_Store

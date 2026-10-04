@@ -1,0 +1,405 @@
+package cn.dreamgary.hubsuite.island;
+
+import cn.dreamgary.hubsuite.HubSuite;
+import cn.dreamgary.hubsuite.world.PlayableWorld;
+import cn.dreamgary.hubsuite.world.PlayerRouter;
+import cn.dreamgary.hubsuite.world.SubServer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * 空岛服务：**一个子服、多个维度**。
+ *
+ * <pre>
+ *   skyblock_hub      公共大厅（出生平台 + 选岛型的假人）
+ *   skyblock_classic  经典空岛维度（网格方格，每人格子一座）
+ *   skyblock_ocean    海岛维度（自然海洋世界）
+ * </pre>
+ *
+ * <p>每个岛屿维度有自己的 {@link IslandManager}，归属记录也分开存
+ * （{@code islands-classic.json} / {@code islands-ocean.json}）——
+ * 这样一个人可以同时拥有经典空岛和海岛，互不影响。
+ *
+ * <p>进入时的分流由 {@link SubServer#setEntryResolver} 完成：
+ * <ul>
+ *   <li>玩家在岛屿维度里 → 回那座岛；</li>
+ *   <li>否则 → 回大厅。</li>
+ * </ul>
+ */
+public final class IslandService {
+
+    /** {@link #pendingDestination} 里表示"这次去大厅"的标记。 */
+    private static final String HUB_MARKER = "\u0000hub";
+
+    /** 一种岛型 + 它对应的维度 + 管理器。 */
+    public record Type(String id, SubServer.Entry entry, IslandManager manager) {
+    }
+
+    private final SubServer server;
+    private final SubServer.Entry hubEntry;
+    private final Map<String, Type> types = new LinkedHashMap<>();
+    private final IslandConfig config;
+
+    /**
+     * "这个玩家下一步想去哪个岛屿维度"。
+     *
+     * <p>为什么需要：入口解析发生在建岛**之前**。玩家第一次点"海岛"时，
+     * 他还没有岛，{@code entryFor} 会判成"回大厅" —— 于是人进了大厅而不是海岛。
+     * 所以 {@link #visit} 先把意图登记在这里，解析时优先采纳。
+     */
+    private final Map<java.util.UUID, String> pendingDestination = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 主岛屿维度（配置里 defaultType 对应的那个），用于兼容旧调用。 */
+    private final Type primary;
+
+    public IslandService(SubServer skyblockServer, IslandConfig config,
+                         SubServer.Entry hubEntry, Map<String, SubServer.Entry> islandEntries) {
+        this.server = skyblockServer;
+        this.config = config;
+        this.hubEntry = hubEntry;
+
+        for (Map.Entry<String, SubServer.Entry> e : islandEntries.entrySet()) {
+            String typeId = e.getKey();
+            SubServer.Entry entry = e.getValue();
+            types.put(typeId, new Type(typeId, entry, new IslandManager(skyblockServer, entry, config)));
+        }
+        if (types.isEmpty()) {
+            throw new IllegalStateException("空岛服没有任何岛屿维度");
+        }
+        this.primary = types.containsKey(config.defaultType)
+                ? types.get(config.defaultType)
+                : types.values().iterator().next();
+    }
+
+    // ------------------------------------------------------------------
+    // 访问
+    // ------------------------------------------------------------------
+
+    /** 空岛服大厅维度。 */
+    public SubServer.Entry hubEntry() {
+        return hubEntry;
+    }
+
+    /** 兼容旧调用：主岛屿维度。 */
+    public IslandManager manager() {
+        return primary.manager();
+    }
+
+    public SubServer server() {
+        return server;
+    }
+
+    public IslandConfig config() {
+        return config;
+    }
+
+    /** 全部岛型。 */
+    public java.util.Collection<Type> types() {
+        return java.util.Collections.unmodifiableCollection(types.values());
+    }
+
+    /** 按岛型取。 */
+    public Optional<Type> type(String typeId) {
+        return Optional.ofNullable(types.get(typeId));
+    }
+
+    /** 玩家当前所在维度对应的岛型（不在岛屿维度里则为空）。 */
+    public Optional<Type> typeOf(Level level) {
+        for (Type type : types.values()) {
+            if (type.entry().dimension().equals(level.dimension())) {
+                return Optional.of(type);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** 跨全部岛型查玩家的岛。 */
+    public Optional<IslandManager.Island> islandAnywhere(java.util.UUID uuid) {
+        for (Type type : types.values()) {
+            Optional<IslandManager.Island> found = type.manager().islandOf(uuid);
+            if (found.isPresent()) {
+                return found;
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** 玩家是不是在空岛服的任意维度里（大厅或岛屿）。 */
+    public boolean isSkyblock(Level level) {
+        return server.owns(level.dimension());
+    }
+
+    /** 玩家是不是在某个岛屿维度里（不含大厅）。 */
+    public boolean isIslandLevel(Level level) {
+        return typeOf(level).isPresent();
+    }
+
+    // ------------------------------------------------------------------
+    // 注册
+    // ------------------------------------------------------------------
+
+    public void register() {
+        // 1) 入口解析：决定玩家进哪个维度
+        server.setEntryResolver((player, sub) -> {
+            // 0) 刚刚用 /island 或界面明确指定了目的地 → 优先
+            String wanted = pendingDestination.remove(player.getUUID());
+            if (HUB_MARKER.equals(wanted)) {
+                return hubEntry;
+            }
+            if (wanted != null) {
+                Type type = types.get(wanted);
+                if (type != null) {
+                    return type.entry();
+                }
+            }
+
+            // 1) 玩家上次在某个岛屿维度 → 回那座岛
+            var current = player.level().dimension();
+            Optional<SubServer.Entry> staying = sub.entryOf(current);
+            if (staying.isPresent() && !staying.get().id().equals(hubEntry.id())) {
+                return staying.get();
+            }
+            // 2) 有岛但不在岛上（例如从生存服切过来）→ 回他最近玩的那种岛
+            for (Type type : types.values()) {
+                if (type.manager().islandOf(player.getUUID()).isPresent()) {
+                    return type.entry();
+                }
+            }
+            // 3) 没有岛 → 先去大厅
+            return hubEntry;
+        });
+
+        // 注意：下面两个监听器都要用**目标维度**判断岛型。
+        // 玩家实体此刻还在旧维度里（player.level() 是旧的），
+        // 用它判断会把"要进海岛"误判成"在大厅"。
+
+        // 2) 入场：要进岛屿维度但还没岛 → 现场建一座
+        PlayerRouter.addEntryListener((player, world, level) -> {
+            Optional<Type> type = typeOf(level);
+            if (type.isEmpty()) {
+                return;   // 大厅，不用建岛
+            }
+            if (type.get().manager().islandOf(player.getUUID()).isPresent()) {
+                return;
+            }
+            createFor(player, type.get().id());
+        });
+
+        // 3) 出生点解析：要落进岛屿维度就落到自己岛上
+        PlayerRouter.setSpawnResolver((player, target) -> {
+            if (!(target instanceof SubServer sub) || !sub.id().equals(server.id())) {
+                return null;
+            }
+            SubServer.Entry destination = sub.entryFor(player);
+            Optional<Type> type = typeOf(destination.level());
+            if (type.isEmpty()) {
+                return null;   // 大厅：用维度自己的出生点
+            }
+            Optional<IslandManager.Island> island = type.get().manager().islandOf(player.getUUID());
+            if (island.isEmpty()) {
+                return null;
+            }
+            Vec3 spawn = type.get().manager().spawnOf(island.get());
+            return new PlayableWorld.SpawnPoint(spawn.x, spawn.y, spawn.z, 0.0F, 0.0F);
+        });
+
+        // 4) 建造保护
+        PlayerBlockBreakEvents.BEFORE.register((level, player, pos, state, entity) -> {
+            if (!isSkyblock(level) || !(player instanceof ServerPlayer serverPlayer)) {
+                return true;
+            }
+            if (!canBuildHere(serverPlayer, pos)) {
+                serverPlayer.sendSystemMessage(Component.literal("\u00A7c这不是你的岛屿区域，无法破坏。"));
+                return false;
+            }
+            return true;
+        });
+
+        UseBlockCallback.EVENT.register((Player player, Level level, InteractionHand hand, BlockHitResult hit) -> {
+            if (!isSkyblock(level) || !(player instanceof ServerPlayer serverPlayer)) {
+                return InteractionResult.PASS;
+            }
+            // 只拦"放置/使用"类交互；空手右键仍然放行（避免连门都开不了）
+            if (player.getItemInHand(hand).isEmpty()) {
+                return InteractionResult.PASS;
+            }
+            if (!canBuildHere(serverPlayer, hit.getBlockPos())) {
+                serverPlayer.sendSystemMessage(Component.literal("\u00A7c这不是你的岛屿区域，无法放置。"));
+                return InteractionResult.FAIL;
+            }
+            return InteractionResult.PASS;
+        });
+
+        // 5) 在大厅放一个"选择岛屿"假人
+        spawnHubNpc();
+
+        ServerLifecycleEvents.SERVER_STOPPING.register(s -> saveAll());
+    }
+
+    /**
+     * 在空岛服大厅放一个选岛假人。
+     *
+     * <p>假人由 {@link cn.dreamgary.hubsuite.npc.NpcManager} 生成 ——
+     * 它会等服务端起来（维度都加载好）再放，这里只登记意图。
+     */
+    private void spawnHubNpc() {
+        var npcConfig = config.hubNpc == null ? new IslandConfig.HubNpcConfig() : config.hubNpc;
+        if (!npcConfig.enabled) {
+            return;
+        }
+        cn.dreamgary.hubsuite.npc.NpcManager.registerMenuNpc(
+                hubEntry.level(),
+                "hub_island_select",
+                npcConfig.toNpcConfig(),
+                player -> IslandMenu.open(player, this, HubSuite.worlds()));
+        HubSuite.logger().info("空岛服大厅将生成选岛假人 '{}'（位置 {}, {}, {}）",
+                npcConfig.name, npcConfig.x, npcConfig.y, npcConfig.z);
+    }
+
+    /** 按玩家所在维度判断能不能建造（大厅永远允许）。 */
+    private boolean canBuildHere(ServerPlayer player, net.minecraft.core.BlockPos pos) {
+        Optional<Type> type = typeOf(player.level());
+        if (type.isEmpty()) {
+            return true;   // 大厅
+        }
+        return type.get().manager().canBuild(player, pos);
+    }
+
+    /** 保存全部岛型的归属记录。 */
+    public void saveAll() {
+        types.values().forEach(t -> t.manager().save());
+    }
+
+    // ------------------------------------------------------------------
+    // 玩家侧操作
+    // ------------------------------------------------------------------
+
+    /**
+     * 取（必要时创建）玩家在指定岛型上的岛，**不传送**。
+     *
+     * <p>入场流程里必须用这个：{@code PlayerRouter} 会先建岛、再解析出生点、
+     * 最后统一传送一次。这里如果也传送，就会出现"传送两次、落点还不一致"。
+     */
+    public IslandManager.Island createFor(ServerPlayer player, String typeId) {
+        Type type = typeId == null ? primary : types.get(typeId);
+        if (type == null) {
+            type = primary;
+        }
+        IslandManager.Island island = type.manager().getOrCreate(
+                player.getUUID(), player.getName().getString(), type.id());
+        diagnoseSpawn(player, type, island);
+        return island;
+    }
+
+    /** 取（必要时创建）玩家的岛，并把玩家送到岛上（岛屿维度里才有效）。 */
+    public IslandManager.Island home(ServerPlayer player, String typeId) {
+        Type type = typeId == null ? typeOf(player.level()).orElse(primary) : types.get(typeId);
+        if (type == null) {
+            type = primary;
+        }
+        IslandManager.Island island = type.manager().getOrCreate(
+                player.getUUID(), player.getName().getString(), type.id());
+        return island;
+    }
+
+    /**
+     * 把玩家送到指定岛型的岛上（会切维度）。
+     *
+     * <p>走 {@code PlayerRouter} 而不是直接 teleportTo：这样
+     * 入口解析、出生点解析、玩家状态按维度隔离、重生点绑定全都会正常执行。
+     */
+    public boolean visit(ServerPlayer player, String typeId) {
+        Type type = typeId == null ? typeOf(player.level()).orElse(primary) : types.get(typeId);
+        if (type == null) {
+            player.sendSystemMessage(Component.literal("\u00A7c没有这种岛型。"));
+            return false;
+        }
+        // 先登记意图：入口解析会在建岛之前跑，没有这一步会被判成"回大厅"
+        pendingDestination.put(player.getUUID(), type.id());
+        // 建岛（没有的话），落点由 PlayerRouter 的出生点解析负责
+        type.manager().getOrCreate(player.getUUID(), player.getName().getString(), type.id());
+        return PlayerRouter.sendTo(player, server);
+    }
+
+    /** 把玩家送到空岛服大厅。 */
+    public boolean sendToHub(ServerPlayer player) {
+        // 明确表示"这次不要去岛屿维度"，否则入口解析会把有岛的玩家又送回岛上
+        pendingDestination.put(player.getUUID(), HUB_MARKER);
+        return PlayerRouter.sendTo(player, server);
+    }
+
+    /** 把玩家送到他自己的岛（当前维度的那座）。 */
+    public boolean teleportHome(ServerPlayer player, IslandManager.Island island) {
+        Type type = types.get(island.type);
+        if (type == null) {
+            type = primary;
+        }
+        Vec3 spawn = type.manager().spawnOf(island);
+        try {
+            player.teleportTo(type.entry().level(), spawn.x, spawn.y, spawn.z,
+                    java.util.Set.of(), player.getYRot(), player.getXRot(), false);
+            return true;
+        } catch (Throwable t) {
+            HubSuite.logger().error("传送 {} 到空岛失败", player.getName().getString(), t);
+            return false;
+        }
+    }
+
+    /** 掉虚空保护：由 ServerRulesEngine 的 tick 调用。 */
+    public boolean handleVoidFall(ServerPlayer player) {
+        Optional<Type> type = typeOf(player.level());
+        if (type.isEmpty()) {
+            return false;
+        }
+        Optional<IslandManager.Island> island = type.get().manager().islandOf(player.getUUID());
+        if (island.isEmpty()) {
+            // 没有岛（异常情况）：至少送回大厅，别让他一直掉
+            sendToHub(player);
+            return true;
+        }
+        teleportHome(player, island.get());
+        player.sendSystemMessage(Component.literal("\u00A7e你掉进了虚空，已送回你的岛。"));
+        return true;
+    }
+
+    /**
+     * 诊断：打印"代码认为的岛"与"该位置实际方块"。
+     *
+     * <p>用于排查"卡在树里""箱子说不是我的区域"这类坐标对不上的问题。
+     */
+    public void diagnoseSpawn(ServerPlayer player, Type type, IslandManager.Island island) {
+        try {
+            IslandManager manager = type.manager();
+            var center = manager.plotCenter(island.plotX, island.plotZ);
+            var spawn = manager.spawnOf(island);
+            var spawnBlock = net.minecraft.core.BlockPos.containing(spawn.x, spawn.y, spawn.z);
+            ServerLevel level = type.entry().level();
+
+            HubSuite.logger().info("=== 落脚点诊断：{} 的岛（岛型 {}，方格 {},{}）===",
+                    player.getName().getString(), type.id(), island.plotX, island.plotZ);
+            HubSuite.logger().info("  记录：岛中心 {} / 落脚点 {}", center, spawnBlock);
+            HubSuite.logger().info("  实际方块：中心={} 落脚点={} 下方={} 上方={}",
+                    level.getBlockState(center).getBlock().getName().getString(),
+                    level.getBlockState(spawnBlock).getBlock().getName().getString(),
+                    level.getBlockState(spawnBlock.below()).getBlock().getName().getString(),
+                    level.getBlockState(spawnBlock.above()).getBlock().getName().getString());
+        } catch (Throwable t) {
+            HubSuite.logger().warn("落脚点诊断失败：{}", t.toString());
+        }
+    }
+
+}
