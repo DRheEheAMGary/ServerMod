@@ -68,7 +68,9 @@ public abstract class PlayerListAuxDataMixin implements PlayerListAuxAccess {
     /** 统计：进入解析前登记"当前是哪个玩家"。 */
     @Inject(method = "getPlayerStats", at = @At("HEAD"))
     private void hubsuite$enterStats(Player player, CallbackInfoReturnable<ServerStatsCounter> cir) {
-        AuxDataRouter.setContext(player == null ? null : player.getUUID());
+        // 传**维度**而不是 UUID：玩家加入过程中还没进玩家列表，
+        // 靠 UUID 反查会查不到，导致重定向失效、数据落回全局路径。
+        AuxDataRouter.setContext(player == null ? null : player.level().dimension());
     }
 
     @Inject(method = "getPlayerStats", at = @At("RETURN"))
@@ -80,7 +82,9 @@ public abstract class PlayerListAuxDataMixin implements PlayerListAuxAccess {
     @Inject(method = "getPlayerAdvancements", at = @At("HEAD"))
     private void hubsuite$enterAdvancements(ServerPlayer player,
                                             CallbackInfoReturnable<PlayerAdvancements> cir) {
-        AuxDataRouter.setContext(player == null ? null : player.getUUID());
+        // 传**维度**而不是 UUID：玩家加入过程中还没进玩家列表，
+        // 靠 UUID 反查会查不到，导致重定向失效、数据落回全局路径。
+        AuxDataRouter.setContext(player == null ? null : player.level().dimension());
     }
 
     @Inject(method = "getPlayerAdvancements", at = @At("RETURN"))

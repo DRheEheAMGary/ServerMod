@@ -145,7 +145,9 @@ public final class NpcManager {
             }
         }
         spawnExtraMenus(server);
-        HubSuite.logger().info("引导/菜单假人已就绪：{} 个。", npcs.size());
+        // 注意：这里只统计"大厅引导假人"。空岛服的选岛假人由 IslandService
+        // 在稍后注册，数量要等 spawnRegisteredMenus 之后才完整。
+        HubSuite.logger().info("大厅引导假人已就绪：{} 个（空岛服选岛假人随后生成）。", npcs.size());
     }
 
     /**
@@ -157,6 +159,7 @@ public final class NpcManager {
      */
     public void spawnRegisteredMenus(MinecraftServer server) {
         spawnExtraMenus(server);
+        HubSuite.logger().info("全部引导/菜单假人已就绪：{} 个。", npcs.size());
     }
 
     /** 生成运行时注册的额外菜单假人（空岛服大厅的"选择岛屿"）。 */

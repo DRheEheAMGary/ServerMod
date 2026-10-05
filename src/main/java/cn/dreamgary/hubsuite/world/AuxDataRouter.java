@@ -36,12 +36,20 @@ public final class AuxDataRouter {
     private static final Map<ResourceKey<Level>, IsolatedSave> SAVE_BY_DIMENSION = new ConcurrentHashMap<>();
 
     /**
-     * 当前线程正在为其解析成就/统计目录的玩家 UUID。
+     * 当前线程正在为其解析成就/统计目录的**维度**。
      *
      * <p>原版 {@code locateStatsFile(GameProfile)} 只拿得到 profile、拿不到玩家，
-     * 所以在 {@code getPlayerStats(Player)} 入口把玩家记在这里，供路径重定向读取。
+     * 所以在 {@code getPlayerStats(Player)} 入口把这名玩家所在的维度记在这里，
+     * 供路径重定向读取。
+     *
+     * <p><b>为什么记维度而不是 UUID：</b>一开始记的是 UUID，靠
+     * {@code playerList.getPlayer(uuid)} 反查维度 —— 但**玩家加入的过程中
+     * 还没被放进玩家列表**（{@code placeNewPlayer} 末尾才 add），
+     * 于是查不到、重定向返回 null、成就与统计又落回原版的全局路径。
+     * 这个 bug 对真实玩家同样成立，只是被"进服后总会被传送一次"掩盖了。
+     * 直接带维度就没有这个时序问题。
      */
-    private static final ThreadLocal<UUID> CONTEXT = new ThreadLocal<>();
+    private static final ThreadLocal<ResourceKey<Level>> CONTEXT = new ThreadLocal<>();
 
     private AuxDataRouter() {
     }
@@ -57,8 +65,8 @@ public final class AuxDataRouter {
         CONTEXT.remove();
     }
 
-    public static void setContext(UUID uuid) {
-        CONTEXT.set(uuid);
+    public static void setContext(ResourceKey<Level> dimension) {
+        CONTEXT.set(dimension);
     }
 
     public static void clearContext() {
@@ -81,21 +89,7 @@ public final class AuxDataRouter {
     }
 
     private static Path subDirForContext(String sub) {
-        UUID uuid = CONTEXT.get();
-        if (uuid == null) {
-            return null;
-        }
-        var worlds = HubSuite.worlds();
-        var server = worlds == null ? null : worlds.server();
-        if (server == null) {
-            return null;
-        }
-        // 用在线玩家精确定位维度，而不是猜上下文
-        var player = server.getPlayerList().getPlayer(uuid);
-        if (player == null) {
-            return null;
-        }
-        return subDir(player.level().dimension(), sub);
+        return subDir(CONTEXT.get(), sub);
     }
 
     /** 统计文件所在目录（当前上下文维度）。返回 null 表示"不改，用原版路径"。 */

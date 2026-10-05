@@ -48,7 +48,9 @@ public abstract class PlayerInfoListedMixin {
         try {
             if (!source.allowsListing()) {
                 this.listed = false;
-                HubSuite.logger().info("已把 {} 标记为不列入 Tab（listed=false）",
+                // 降到 debug：原版每 600 tick（30 秒）会广播一次 UPDATE_LATENCY，
+                // 每个假人都会再走一遍这里 —— INFO 级别会持续刷屏。
+                HubSuite.logger().debug("已把 {} 标记为不列入 Tab（listed=false）",
                         source.getName().getString());
             }
         } catch (Throwable t) {

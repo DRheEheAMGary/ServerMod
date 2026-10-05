@@ -92,9 +92,13 @@ public final class SelfTest {
         step("玩家数据落盘目录正确", this::checkPlayerDataRouting);
         step("成就与统计按维度隔离", this::checkAuxDataIsolation);
         step("任务系统", this::checkQuests);
+        step("假玩家与假人名字长度合法", this::checkFakeNameLengths);
     }
 
     private void step(String name, ThrowingRunnable body) {
+        // 实时打印"开始"：自检结果是最后一起输出的，一旦某一步卡住主线程
+        // （本项目被看门狗强杀过），没有这行就完全不知道卡在哪。
+        HubSuite.logger().info("  [自检] -> {}", name);
         try {
             body.run();
         } catch (Throwable t) {
@@ -510,7 +514,6 @@ public final class SelfTest {
         }
 
         String testName = "hubsuite_selftest";
-        UUID uuid = UUIDUtil.createOfflinePlayerUUID(testName);
 
         // 用假玩家走**真实入服路径**：这样玩家数据读写与真实玩家完全一致
         ServerPlayer probe = FakePlayers.spawn(server, testName, survival.level(), false);
@@ -518,6 +521,12 @@ public final class SelfTest {
             fail("假玩家创建失败，无法验证玩家数据隔离");
             return;
         }
+        // 注意：UUID 与名字**必须取自 probe 本身**，不能在这里用原始常量另算一遍。
+        // FakePlayers.spawn 会把名字规整到 16 字符以内（原版 player_info 包的
+        // 编码上限，超长会把所有在线玩家踢下线），名字一变 UUID 就跟着变，
+        // 另算的那份就会指向一个根本不存在的文件。实测踩过。
+        UUID uuid = probe.getUUID();
+        testName = probe.getName().getString();
 
         try {
             // placeNewPlayer 会按玩家存档把他放到"上次的位置"，所以这里显式传送一次，
@@ -580,7 +589,8 @@ public final class SelfTest {
             }
 
             // --- 读回并核对内容 ---
-            var loaded = server.getPlayerList().loadPlayerData(new NameAndId(uuid, testName));
+            var loaded = server.getPlayerList().loadPlayerData(
+                    new NameAndId(probe.getUUID(), probe.getName().getString()));
             if (loaded.isEmpty()) {
                 fail("无法读回玩家数据");
             } else {
@@ -900,7 +910,12 @@ public final class SelfTest {
                 "hubsuite_statetest", "hubsuite_spawnprobe", "hubsuite_menutest");
         int removedFiles = 0;
         for (String name : probeNames) {
-            java.util.UUID uuid = net.minecraft.core.UUIDUtil.createOfflinePlayerUUID(name);
+            // 必须用与 FakePlayers.spawn **同一个**规整函数算 UUID。
+            // spawn 会把名字截到 16 字符以内（原版 player_info 包的编码上限），
+            // 用原始名字另算一遍会得到不同的 UUID，清理就会指向不存在的文件 ——
+            // 测试残留永远清不掉。
+            java.util.UUID uuid = net.minecraft.core.UUIDUtil.createOfflinePlayerUUID(
+                    cn.dreamgary.hubsuite.fake.FakePlayers.validName(name));
             for (var world : worlds.allWorlds()) {
                 try {
                     java.nio.file.Path dir = null;
@@ -929,7 +944,8 @@ public final class SelfTest {
         // 2) 清空自检写进内存的玩家状态暂存
         for (String name : probeNames) {
             cn.dreamgary.hubsuite.world.PlayerStateStash.forget(
-                    net.minecraft.core.UUIDUtil.createOfflinePlayerUUID(name));
+                    net.minecraft.core.UUIDUtil.createOfflinePlayerUUID(
+                            cn.dreamgary.hubsuite.fake.FakePlayers.validName(name)));
         }
         HubSuite.logger().info("自检收尾：已清理 {} 个测试数据文件与测试岛屿归属", removedFiles);
     }
@@ -1752,6 +1768,9 @@ public final class SelfTest {
         }
         try {
             probe.getInventory().clearContent();
+            // 先清空该玩家的任务进度：自检必须**可重复执行**，
+            // 否则同一会话跑第二次会看到"进度没变"而误报失败。
+            manager.clearProgress(probe.getUUID());
 
             // 找一个"破坏方块"类里程碑，把进度推满
             var breakQuest = config.ofKind(cn.dreamgary.hubsuite.quest.Quest.Kind.MILESTONE)
@@ -1848,6 +1867,120 @@ public final class SelfTest {
             } catch (Throwable ignored) {
                 // 忽略
             }
+        }
+    }
+
+    /**
+     * 所有假玩家/假人的名字必须 ≤ 16 字符。
+     *
+     * <p><b>这是本项目最贵的一个坑：</b>名字会进入
+     * {@code ClientboundPlayerInfoUpdatePacket}，原版对它的编码上限是 16 字符。
+     * 超长会让包编码失败，**每个在线客户端都被踢下线**，日志只报
+     * {@code Failed to encode packet 'clientbound/minecraft:player_info_update'}，
+     * 从现象上完全看不出是"某个假人名字太长"。
+     *
+     * <p>实测被它坑过两次：空岛选岛假人 {@code hub_island_select}（17 字符）
+     * 导致**服务器完全进不去**；自检自己的 {@code hubsuite_islandtest}（19 字符）
+     * 导致**跑一次自检就把在线玩家全踢了**。
+     *
+     * <p>单靠"记得别写太长"是守不住的，所以这里逐个校验。
+     */
+    private void checkFakeNameLengths() {
+        int limit = cn.dreamgary.hubsuite.fake.FakePlayers.MAX_NAME_LENGTH;
+
+        // 1) 规整函数本身的边界
+        String tooLong = cn.dreamgary.hubsuite.fake.FakePlayers.validName(
+                "hubsuite_very_long_test_name");
+        String tooShort = cn.dreamgary.hubsuite.fake.FakePlayers.validName("ab");
+        String dirty = cn.dreamgary.hubsuite.fake.FakePlayers.validName("hub te$st!");
+        if (tooLong.length() <= limit && tooShort.length() >= 3
+                && dirty.matches("[A-Za-z0-9_]+")) {
+            ok("假玩家名字规整正常（超长截断/过短补全/非法字符过滤）");
+        } else {
+            fail("假玩家名字规整异常：" + tooLong + " / " + tooShort + " / " + dirty);
+        }
+
+        // 2) 当前在大厅里的假人名字（这是最要命的一类：真实客户端会收到它们的
+        //    玩家信息包，名字超长就会把玩家踢下线）
+        StringBuilder bad = new StringBuilder();
+        var npcManager = HubSuite.npcs();
+        List<cn.dreamgary.hubsuite.npc.HubNpc> npcs =
+                npcManager == null ? List.of() : npcManager.npcs();
+        {
+            for (var npc : npcs) {
+                String name = npc.npcName();
+                if (name == null || name.length() < 3 || name.length() > limit) {
+                    bad.append(name).append("(").append(name == null ? 0 : name.length())
+                            .append(") ");
+                }
+            }
+        }
+        if (bad.isEmpty()) {
+            ok("大厅假人名字长度合法（" + npcs.size() + " 个）");
+        } else {
+            fail("假人名字超长会导致所有玩家被踢下线：" + bad);
+        }
+
+        /*
+         * 3) **直接复现崩溃条件**：把当前所有在线玩家（含假人）编进
+         *    ClientboundPlayerInfoUpdatePacket 并真正编码一次。
+         *
+         *    这比"检查名字长度"更硬 —— 它跑的就是当初炸掉的那条路径
+         *    （Utf8String.write 的 16 字符硬检查）。只要有人名字超长，
+         *    这里就会抛 EncoderException，而不是等到真实玩家连接时才炸。
+         */
+        try {
+            // 不能用 getPlayers() —— 它会过滤掉 MarkedFakePlayer（假人不该出现在
+            // Tab 与在线人数里），而**恰恰是假人的名字**在真实客户端连接时会被
+            // 编进 player_info 包。用它等于编了个空包，什么都没验证。
+            //
+            // 这里直接取底层列表：真实玩家 + 假人 + 大厅/空岛假人，一个不漏。
+            java.util.List<net.minecraft.server.level.ServerPlayer> players =
+                    new java.util.ArrayList<>(server.getPlayerList().getPlayers());
+            for (var npc : (HubSuite.npcs() == null
+                    ? java.util.List.<cn.dreamgary.hubsuite.npc.HubNpc>of()
+                    : HubSuite.npcs().npcs())) {
+                var entity = npc.entity();
+                if (entity != null && !players.contains(entity)) {
+                    players.add(entity);
+                }
+            }
+            if (players.isEmpty()) {
+                fail("编码自检没有可用的样本（连假人都没有）");
+            }
+            var packet = new net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket(
+                    java.util.EnumSet.of(
+                            net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket.Action.ADD_PLAYER,
+                            net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket.Action.UPDATE_LISTED),
+                    players);
+            // 26.1 的包编解码走 RegistryFriendlyByteBuf（需要 registry 访问）
+            var buf = new net.minecraft.network.RegistryFriendlyByteBuf(
+                    io.netty.buffer.Unpooled.buffer(),
+                    server.registryAccess());
+            try {
+                net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket.STREAM_CODEC
+                        .encode(buf, packet);
+                ok("玩家信息包可以正常编码（" + players.size() + " 个玩家/假人，"
+                        + buf.readableBytes() + " 字节）");
+            } finally {
+                buf.release();
+            }
+        } catch (Throwable t) {
+            fail("玩家信息包编码失败 —— 真实客户端连接时会被踢下线：" + t);
+        }
+
+        // 4) 子服 NPC 的命名路径也要安全（用最长的子服 id 试一次）
+        String longest = "hubsuite";
+        for (var sub : worlds.subServers()) {
+            if (sub.id().length() > longest.length()) {
+                longest = sub.id();
+            }
+        }
+        String derived = cn.dreamgary.hubsuite.npc.HubNpc.sanitizeName("hub_" + longest);
+        if (derived.length() <= limit) {
+            ok("子服 NPC 命名路径安全（" + derived + "）");
+        } else {
+            fail("子服 NPC 名字可能超长：" + derived + "（" + derived.length() + "）");
         }
     }
 

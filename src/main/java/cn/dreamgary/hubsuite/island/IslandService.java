@@ -277,7 +277,7 @@ public final class IslandService {
         }
         cn.dreamgary.hubsuite.npc.NpcManager.registerMenuNpc(
                 hubEntry.level(),
-                "hub_island_select",
+                "hub_island",
                 npcConfig.toNpcConfig(),
                 player -> IslandMenu.open(player, this, HubSuite.worlds()));
         HubSuite.logger().info("空岛服大厅将生成选岛假人 '{}'（位置 {}, {}, {}）",

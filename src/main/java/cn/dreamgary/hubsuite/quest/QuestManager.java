@@ -449,6 +449,21 @@ public final class QuestManager {
         return new ItemStack(item, Math.max(1, Math.min(amount, max)));
     }
 
+    /**
+     * 清空某个玩家的全部任务进度。
+     *
+     * <p>管理用途（玩家想重做任务、或者数据错乱时重置），
+     * 自检也用它来保证**可重复执行** —— 不清的话第二次跑就会看到
+     * "进度没变"而误报失败（实测踩过）。
+     */
+    public void clearProgress(java.util.UUID uuid) {
+        if (uuid == null) {
+            return;
+        }
+        players.remove(uuid.toString());
+        save();
+    }
+
     /** 今天是不是任务日的第一天（诊断用）。 */
     public String debugDay() {
         return currentDay() + "（重置点 " + config.dailyResetHour + ":00）";

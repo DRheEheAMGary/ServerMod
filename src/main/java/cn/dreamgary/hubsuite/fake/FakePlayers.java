@@ -30,6 +30,36 @@ public final class FakePlayers {
     }
 
     /**
+     * 把名字规整成**合法的 Minecraft 用户名**（3..16 个字符）。
+     *
+     * <p><b>为什么所有假玩家都必须过这一关：</b>名字会进入
+     * {@code ClientboundPlayerInfoUpdatePacket}，而原版对它的编码上限是
+     * 16 字符（{@code Utf8String.write} 硬性检查）。超长会让包编码失败，
+     * **每个连接中的真实客户端都会被踢下线**，报
+     * {@code EncoderException: String too big (was 17 characters, max 16)}。
+     *
+     * <p>实测踩过两次：
+     * <ol>
+     *   <li>空岛选岛假人取名 {@code hub_island_select}（17 字符）→ 服务器进不去；</li>
+     *   <li>自检用的 {@code hubsuite_islandtest}（19 字符）→ **跑一次自检就把
+     *       在线玩家全踢了**。</li>
+     * </ol>
+     * 所以统一在入口处截断，而不是指望每个调用方自己数长度。
+     */
+    public static String validName(String raw) {
+        String cleaned = raw == null ? "" : raw.replaceAll("[^A-Za-z0-9_]", "");
+        if (cleaned.length() < 3) {
+            cleaned = "hub_fake";
+        }
+        return cleaned.length() > MAX_NAME_LENGTH
+                ? cleaned.substring(0, MAX_NAME_LENGTH)
+                : cleaned;
+    }
+
+    /** 原版用户名上限，也是 player_info 包的编码上限。 */
+    public static final int MAX_NAME_LENGTH = 16;
+
+    /**
      * 创建一个假玩家并让他"加入"服务端。
      *
      * @param name       名字（离线 UUID 由名字推导，名字必须唯一）
@@ -37,6 +67,7 @@ public final class FakePlayers {
      * @param visibleInTab 是否出现在玩家列表里（大厅 NPC 通常设为 false）
      */
     public static ServerPlayer spawn(MinecraftServer server, String name, ServerLevel level, boolean visibleInTab) {
+        name = validName(name);
         GameProfile profile = new GameProfile(UUIDUtil.createOfflinePlayerUUID(name), name);
 
         ClientInformation info = new ClientInformation(

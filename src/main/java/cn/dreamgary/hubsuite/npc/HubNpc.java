@@ -70,10 +70,8 @@ public final class HubNpc {
         if (cleaned.length() < 3) {
             cleaned = target.id();
         }
-        if (cleaned.length() > 11) {
-            cleaned = cleaned.substring(0, 11);
-        }
-        return new HubNpc(target, target.config().npc, NAME_PREFIX + cleaned.toLowerCase(Locale.ROOT), false);
+        return new HubNpc(target, target.config().npc,
+                sanitizeName(NAME_PREFIX + cleaned.toLowerCase(Locale.ROOT)), false);
     }
 
     /**
@@ -83,8 +81,41 @@ public final class HubNpc {
      * @param npcName 实体名（必须唯一，且只含 {@code [A-Za-z0-9_]}）
      */
     public static HubNpc createMenu(HubSuiteConfig.NpcConfig config, String npcName) {
-        return new HubNpc(null, config, npcName, true);
+        return new HubNpc(null, config, sanitizeName(npcName), true);
     }
+
+    /**
+     * 把实体名规整成**合法的 Minecraft 用户名**。
+     *
+     * <p><b>为什么必须做：</b>实体名会进入
+     * {@code ClientboundPlayerInfoUpdatePacket}，而原版对名字的编码上限是
+     * **16 个字符**（{@code Utf8String.write} 硬性检查）。
+     * 超长会让包编码失败，客户端收到
+     * {@code EncoderException: String too big} 并被**直接踢下线** ——
+     * 而且是在"每个玩家连接时"都会触发，等于整个服务器进不去。
+     *
+     * <p>实测踩过：把空岛选岛假人取名 {@code hub_island_select}（17 字符），
+     * 结果任何玩家一连上就掉线，日志报
+     * {@code Failed to encode packet 'clientbound/minecraft:player_info_update'}。
+     *
+     * <p>所以名字只保留 {@code [A-Za-z0-9_]}，并强制 3..16 个字符。
+     */
+    public static String sanitizeName(String raw) {
+        String cleaned = raw == null ? "" : raw
+                .replaceAll("\u00A7.", "")
+                .replaceAll("&[0-9a-fk-orA-FOR]", "")
+                .replaceAll("[^A-Za-z0-9_]", "");
+        if (cleaned.length() < 3) {
+            cleaned = NAME_PREFIX + "npc";
+        }
+        if (cleaned.length() > MAX_NAME_LENGTH) {
+            cleaned = cleaned.substring(0, MAX_NAME_LENGTH);
+        }
+        return cleaned;
+    }
+
+    /** 原版用户名上限。超过这个长度会让 player_info 包编码失败、玩家被踢。 */
+    public static final int MAX_NAME_LENGTH = 16;
 
     /** 是否是菜单假人。 */
     public boolean isMenuNpc() {

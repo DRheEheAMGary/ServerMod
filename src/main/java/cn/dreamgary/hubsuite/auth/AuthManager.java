@@ -113,7 +113,24 @@ public final class AuthManager {
     // 进入 / 退出
     // ------------------------------------------------------------------
 
+    /**
+     * 假人（NPC）不参与认证流程。
+     *
+     * <p><b>踩过的坑：</b>大厅/空岛服的引导假人是真正的 {@code ServerPlayer}，
+     * 所以会触发 {@code ServerPlayConnectionEvents.JOIN}。没有这道豁免时
+     * 认证系统会把它们当成"未登录玩家"：传送回大厅、弹注册表单、
+     * 每 tick 冻结 —— 结果是**假人根本不在它该在的维度里**
+     * （日志实证：{@code 切服请求：hub_island -> lobby}），
+     * 而且被反复拉来拉去。
+     */
+    private static boolean isFake(ServerPlayer player) {
+        return player instanceof cn.dreamgary.hubsuite.fake.MarkedFakePlayer;
+    }
+
     private void onJoin(ServerPlayer player) {
+        if (isFake(player)) {
+            return;   // 假人不注册账号、不弹表单、不钉位置
+        }
         if (!config.enabled) {
             return;
         }
@@ -235,6 +252,9 @@ public final class AuthManager {
                 player.connection.disconnect(Component.literal(
                         "\u00A7c登录超时\u00A7r\n\u00A77请在 " + config.loginTimeoutSeconds + " 秒内完成注册或登录。"));
                 continue;
+            }
+            if (isFake(player)) {
+                continue;   // 假人不需要被"钉住"
             }
             hold(player);
         }
