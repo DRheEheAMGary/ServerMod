@@ -98,6 +98,8 @@ public final class SelfTest {
         step("右键箱子真的能打开", this::checkChestActuallyOpens);
         step("海洋地形是真正的海（不是平板）", this::checkOceanTerrainQuality);
         step("海岛附近有海洋结构", this::checkOceanStructures);
+        step("死亡重生不会掉进虚空", this::checkRespawnDimension);
+        step("子服入口绝不会是虚空主维度", this::checkEntryNeverVoid);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -2679,6 +2681,140 @@ public final class SelfTest {
         } finally {
             try {
                 ocean.manager().delete(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 死亡重生必须回到**玩家所在的那个维度**，不能是子服主维度。
+     *
+     * <p>锁住用户反馈的"kill 一下自己就卡住了"：
+     * 空岛服的主维度（{@code hubsuite:server_skyblock}）是个**虚空世界**，
+     * 而 {@code SubServer.level()} 恒返回它。重生逻辑原来用
+     * {@code teleportTo(sub.level(), ...)}，于是玩家在海岛自杀后
+     * 被送进虚空、一直往下掉。
+     *
+     * <p>这里直接检查"绑定的重生点维度"是否等于玩家当前维度 ——
+     * 这正是原版决定重生去哪儿的依据。
+     */
+    private void checkRespawnDimension() {
+        var islands = HubSuite.islands();
+        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
+        if (ocean == null) {
+            fail("缺少 ocean 岛型");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_respawn",
+                ocean.entry().level(), false);
+        if (probe == null) {
+            fail("重生测试用假玩家创建失败");
+            return;
+        }
+        try {
+            // 走真实路径进海岛（会绑重生点）
+            islands.visit(probe, "ocean");
+            var island = ocean.manager().getOrCreate(
+                    probe.getUUID(), probe.getName().getString(), "ocean");
+            var anchor = ocean.manager().anchorOf(island);
+            PlayerRouter.sendTo(probe, islands.server());
+
+            var config = probe.getRespawnConfig();
+            if (config == null || config.respawnData() == null) {
+                fail("进入海岛后没有绑定重生点");
+                return;
+            }
+            var respawnDim = config.respawnData().dimension();
+
+            // 1) 绝不能是子服主维度（那是虚空）
+            if (respawnDim.equals(islands.server().level().dimension())) {
+                fail("重生点被绑到了子服主维度 " + respawnDim.identifier()
+                        + "（空岛服的主维度是虚空世界）—— 死亡后会一直往下掉");
+                return;
+            }
+            // 2) 必须是一个真实的岛屿/大厅维度
+            if (!islands.server().owns(respawnDim)) {
+                fail("重生点维度 " + respawnDim.identifier() + " 不属于空岛服");
+                return;
+            }
+            ok("海岛重生点绑在 " + respawnDim.identifier() + "（不是虚空主维度）");
+
+            // 3) 重生坐标必须落在岛附近，且在世界高度范围内
+            var respawnPos = config.respawnData().pos();
+            double dist = Math.sqrt(Math.pow(respawnPos.getX() - anchor.getX(), 2)
+                    + Math.pow(respawnPos.getZ() - anchor.getZ(), 2));
+            if (dist > 8) {
+                fail("重生点离岛中心 " + String.format("%.1f", dist) + " 格，太远");
+            } else if (respawnPos.getY() < ocean.entry().level().getMinY() + 4) {
+                fail("重生点 Y=" + respawnPos.getY() + " 低于世界底部，会掉出世界");
+            } else {
+                ok("重生点坐标合理（距岛 " + String.format("%.1f", dist)
+                        + " 格，Y=" + respawnPos.getY() + "）");
+            }
+        } catch (Throwable t) {
+            fail("重生维度检查异常：" + t);
+        } finally {
+            try {
+                ocean.manager().delete(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 子服解析出来的入口维度**绝不能是主维度**。
+     *
+     * <p>空岛服的主维度（{@code hubsuite:server_skyblock}）是启动时顺手建的
+     * **虚空世界**，没有任何地形。任何路径把人送进去，结果都是无限下坠。
+     *
+     * <p>这条同时锁住两个曾经的真 bug：
+     * <ol>
+     *   <li>{@code entryFor()} 的兜底曾经 {@code return primary} —— 解析失败就把人丢进虚空；</li>
+     *   <li>{@code owns()} 曾经不包含主维度 —— 人掉进主维度后
+     *       {@code worldOf()} 返回空，子服规则与虚空救援**全部跳过**。</li>
+     * </ol>
+     */
+    private void checkEntryNeverVoid() {
+        var skyblock = worlds.subServer("skyblock").orElse(null);
+        if (skyblock == null) {
+            fail("缺少 skyblock 子服");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_entry",
+                worlds.lobby().orElseThrow().level(), false);
+        if (probe == null) {
+            fail("入口检查用假玩家创建失败");
+            return;
+        }
+        try {
+            // 1) 兜底入口不能是主维度
+            var entry = skyblock.entryFor(probe);
+            if (entry.dimension().equals(skyblock.level().dimension())) {
+                fail("子服入口解析成了主维度 " + entry.dimension().identifier()
+                        + "（空岛服的主维度是虚空世界）");
+            } else {
+                ok("子服入口是 " + entry.dimension().identifier() + "（不是虚空主维度）");
+            }
+
+            // 2) owns() 必须覆盖主维度，否则掉进主维度时救援不触发
+            if (skyblock.owns(skyblock.level().dimension())) {
+                ok("owns() 覆盖子服主维度（掉进去也能触发规则与虚空救援）");
+            } else {
+                fail("owns() 不包含主维度 —— 玩家掉进主维度后规则与虚空救援会被跳过");
+            }
+            if (worlds.worldOfDimension(skyblock.level().dimension()).isPresent()) {
+                ok("主维度能被 worldOfDimension 识别");
+            } else {
+                fail("worldOfDimension 认不出子服主维度");
+            }
+        } catch (Throwable t) {
+            fail("入口检查异常：" + t);
+        } finally {
+            try {
                 server.getPlayerList().remove(probe);
             } catch (Throwable ignored) {
                 // 忽略

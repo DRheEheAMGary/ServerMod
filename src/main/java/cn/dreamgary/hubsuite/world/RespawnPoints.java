@@ -38,6 +38,21 @@ public final class RespawnPoints {
      */
     public static void bind(ServerPlayer player, PlayableWorld world, boolean force,
                            PlayableWorld.SpawnPoint customSpawn) {
+        bind(player, world, force, customSpawn, null);
+    }
+
+    /**
+     * 绑定重生点。
+     *
+     * @param level 玩家**当前所在的维度**。多维度子服必须传它 ——
+     *              {@link PlayableWorld#level()} 对 {@code SubServer} 恒返回
+     *              **主维度**，而空岛服的主维度是那个虚空世界。
+     *              不传的话，在经典空岛/海岛死掉会被重生到虚空里，
+     *              一直往下掉（用户实测："kill 一下自己就卡住了"）。
+     */
+    public static void bind(ServerPlayer player, PlayableWorld world, boolean force,
+                            PlayableWorld.SpawnPoint customSpawn,
+                            net.minecraft.server.level.ServerLevel level) {
         try {
             var current = player.getRespawnConfig();
             if (!force && current != null && !current.forced() && current.respawnData() != null
@@ -48,8 +63,10 @@ public final class RespawnPoints {
 
             PlayableWorld.SpawnPoint spawn = customSpawn != null ? customSpawn : world.spawn();
             BlockPos pos = BlockPos.containing(spawn.x(), spawn.y(), spawn.z());
+            // 维度优先用调用方给的（玩家真实所在维度），拿不到才退回场所的主维度
+            var dimension = level != null ? level.dimension() : world.level().dimension();
             LevelData.RespawnData data = LevelData.RespawnData.of(
-                    world.level().dimension(), pos, spawn.yaw(), spawn.pitch());
+                    dimension, pos, spawn.yaw(), spawn.pitch());
 
             if (isOurSpawn(data, world) && current != null && current.isSamePosition(
                     new ServerPlayer.RespawnConfig(data, false))) {

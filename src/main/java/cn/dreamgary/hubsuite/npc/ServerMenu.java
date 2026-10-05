@@ -85,7 +85,9 @@ public final class ServerMenu {
         lore.add("");
         lore.add("\u00A7e▶ 点击传送");
 
-        boolean here = sub.level().dimension().equals(player.level().dimension());
+        // 用 owns()：空岛服的玩家在 hub/classic/ocean 三个维度里，
+        // 拿主维度比会永远显示"可以传送"
+        boolean here = sub.owns(player.level().dimension());
         String name = here
                 ? "\u00A78" + stripColor(sub.displayName()) + " \u00A77(你已在此)"
                 : "\u00A7f\u00A7l" + stripColor(sub.displayName());

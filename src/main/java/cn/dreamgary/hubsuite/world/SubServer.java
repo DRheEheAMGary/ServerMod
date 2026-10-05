@@ -113,14 +113,43 @@ public final class SubServer implements PlayableWorld {
                     return resolved;
                 }
             } catch (Throwable t) {
-                HubSuite.logger().error("解析子服 '{}' 的入口维度失败，回退到主维度", id(), t);
+                HubSuite.logger().error("解析子服 '{}' 的入口维度失败，回退到安全入口", id(), t);
             }
+        }
+        return fallbackEntry();
+    }
+
+    /**
+     * 解析不出入口时的兜底。
+     *
+     * <p><b>绝不能退回 primary。</b>多维度子服的主维度是启动时顺手建的，
+     * 对空岛服来说它是一个**没有地形的虚空世界** —— 玩家被送进去就是无限下坠。
+     * 退回"大厅"（或多维度里的第一个维度）永远是安全的。
+     */
+    private Entry fallbackEntry() {
+        if (!entries.isEmpty()) {
+            Entry hub = entries.get("hub");
+            if (hub != null) {
+                return hub;
+            }
+            return entries.values().iterator().next();
         }
         return primary;
     }
 
     /** 这个维度是不是本子服的。 */
+    /**
+     * 这个维度是否属于本子服。
+     *
+     * <p><b>必须包含主维度。</b>一开始只遍历 {@code entries}（大厅/岛屿维度），
+     * 主维度被漏掉 —— 后果是玩家一旦落进主维度，{@code WorldsManager.worldOf()}
+     * 就返回空，于是**子服规则和虚空救援全部跳过**，人会一直往下掉，
+     * 看起来就是"卡住了"（用户实测：kill 一下自己就卡住）。
+     */
     public boolean owns(ResourceKey<Level> dimension) {
+        if (primary.dimension().equals(dimension)) {
+            return true;
+        }
         for (Entry entry : entries.values()) {
             if (entry.dimension().equals(dimension)) {
                 return true;

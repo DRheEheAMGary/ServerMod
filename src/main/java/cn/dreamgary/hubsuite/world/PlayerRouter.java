@@ -192,7 +192,10 @@ public final class PlayerRouter {
             // 必须 force=true：原版重生点是全局一份的，玩家上次进过别的子服时，
             // 那个子服的出生点会留在他的 respawnConfig 里；不强制覆盖就会出现
             // "在生存服摔死却重生到空岛服"（实测踩过）。
-            RespawnPoints.bind(player, target, true, spawn);
+            // 必须带上 level：多维度子服的主维度不是玩家要去的地方。
+            // 不带的话，在空岛服的岛屿维度里绑出来的重生点是**虚空主维度**，
+            // 一死就一直往下掉（用户实测："kill 一下自己就卡住了"）。
+            RespawnPoints.bind(player, target, true, spawn, level);
 
             HubSuite.logger().info("切服完成：{} 现在位于 {}（{}，{} 人）",
                     player.getName().getString(), target.id(),

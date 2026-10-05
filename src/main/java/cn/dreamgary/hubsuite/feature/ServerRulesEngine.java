@@ -140,19 +140,52 @@ public final class ServerRulesEngine {
         saveMemory();
     }
 
-    /** 死亡重生：回到该子服记录的位置（生存服要求"回原位"）。 */
+    /**
+     * 重生后回到原位。
+     *
+     * <p><b>这里踩过一个很贵的坑</b>（用户反馈"kill 一下自己就卡住了"）：
+     * 原实现是
+     * <pre>
+     *   newPlayer.teleportTo(sub.level(), spot[0], spot[1], spot[2], ...)
+     * </pre>
+     * 而 {@code sub.level()} 对多维度子服恒返回**主维度** ——
+     * 空岛服的主维度是个**虚空世界**。于是在海岛/经典空岛自杀后，
+     * 玩家会被传送进虚空，一直往下掉，看起来就是"卡住了"。
+     *
+     * <p>现在改成：
+     * <ol>
+     *   <li>按**维度**取记忆（与 {@link #remember} 的 key 一致，
+     *       原来用 {@code world.id()}，而三个维度的 id 都是 skyblock）；</li>
+     *   <li>传送到**死亡时所在的那个维度**，绝不碰主维度；</li>
+     *   <li>坐标要过合法性检查 —— 在虚空里往下掉时记下的 Y 是负几百，
+     *       照搬会把玩家又送回虚空（审计报告里提过的"救援死循环"）。</li>
+     * </ol>
+     */
     private void onRespawn(ServerPlayer oldPlayer, ServerPlayer newPlayer, boolean alive) {
         PlayableWorld world = worlds.worldOf(oldPlayer).orElse(null);
         if (!(world instanceof SubServer sub) || !sub.config().rememberLastLocation) {
             return;
         }
-        double[] spot = recall(oldPlayer.getUUID(), world.id());
+        var deathDimension = oldPlayer.level().dimension();
+        double[] spot = recall(oldPlayer.getUUID(), deathDimension.identifier().toString());
         if (spot == null || spot.length < 5) {
             return;
         }
-        newPlayer.level().getServer().execute(() -> {
+
+        var server = oldPlayer.level().getServer();
+        var target = server.getLevel(deathDimension);
+        if (target == null) {
+            return;
+        }
+        // 虚空救援时记下的 Y 会远低于世界底部，照搬等于再掉一次
+        if (spot[1] < target.getMinY() + 4) {
+            HubSuite.logger().debug("记录的重生点 Y={} 低于世界底部，改用场所默认出生点", spot[1]);
+            return;
+        }
+
+        server.execute(() -> {
             try {
-                newPlayer.teleportTo(sub.level(), spot[0], spot[1], spot[2],
+                newPlayer.teleportTo(target, spot[0], spot[1], spot[2],
                         java.util.Set.of(), (float) spot[3], (float) spot[4], false);
             } catch (Throwable t) {
                 HubSuite.logger().debug("重生回原位失败：{}", t.toString());

@@ -134,13 +134,15 @@ public final class PlaceholderService {
         return level == null ? Optional.empty() : worldByLevel(level);
     }
 
+    /**
+     * 按维度找所属场所。
+     *
+     * <p>必须用 {@link WorldsManager#worldOfDimension}（它会遍历子服的全部维度）——
+     * 直接比 {@code world.level().dimension()} 只能匹配到**主维度**，
+     * 玩家在经典空岛/海岛时占位符会解析成"不在任何场所"。
+     */
     private Optional<PlayableWorld> worldByLevel(net.minecraft.server.level.ServerLevel level) {
-        for (PlayableWorld world : worlds.allWorlds()) {
-            if (world.level().dimension().equals(level.dimension())) {
-                return Optional.of(world);
-            }
-        }
-        return Optional.empty();
+        return worlds.worldOfDimension(level.dimension());
     }
 
     private int serverPlayerCount() {

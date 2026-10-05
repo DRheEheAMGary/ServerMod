@@ -163,7 +163,7 @@ public final class HubCommand {
             }
             source.sendSuccess(() -> Text.of(
                     " \u00A78- " + sub.displayName() + " \u00A77(/hub " + sub.id() + ") \u00A7f"
-                            + sub.level().players().size() + " 人"), false);
+                            + sub.playerCount() + " 人"), false);
         }
         source.sendSuccess(() -> Component.literal("\u00A77点大厅里的假人，或用 \u00A7f/menu \u00A77打开选择界面。"), false);
         return 1;
