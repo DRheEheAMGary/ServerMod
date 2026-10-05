@@ -2817,6 +2817,43 @@ public final class SelfTest {
                     + "改 OceanWorldGenerator.TEMPERATURE_BANDS 的第 1 段上界"
                     + "（上面那行给了精确分位）", frozenPct));
         }
+
+        /*
+         * 玩家视角的多样性：出生点周围多大范围里能看到几种海洋。
+         *
+         * 这条才是"体感"—— 全球占比再好看，身边一万格只有一种也没意义。
+         * 跨带距离由温度噪声波长决定：2048 格 = 走 2 公里换一种。
+         *
+         * 另外提醒：**别去读存档里的群系字段**。没生成完的区块
+         * （Status = structure_starts）群系字段还是构造时的默认值
+         * minecraft:plains，从 region 文件里统计会得出"海洋维度 58% 是陆地"
+         * 的鬼结论（实测踩过）。这里走 getNoiseBiome 直接问群系源，
+         * 不经过区块数据，所以不受影响。
+         */
+        int qy = Math.max(0, (SEA_LEVEL_FOR_BIOME - 1) >> 2);
+        for (int reach : new int[]{1000, 2000, 4000}) {
+            java.util.Set<String> seen = new java.util.TreeSet<>();
+            int step = Math.max(25, reach / 16);
+            for (int dz = -reach; dz <= reach; dz += step) {
+                for (int dx = -reach; dx <= reach; dx += step) {
+                    int x = (int) ocean.entry().spawn().x() + dx;
+                    int z = (int) ocean.entry().spawn().z() + dz;
+                    var key = level.getNoiseBiome(x >> 2, qy, z >> 2).unwrapKey().orElse(null);
+                    if (key != null) {
+                        seen.add(key.identifier().getPath());
+                    }
+                }
+            }
+            if (seen.isEmpty()) {
+                continue;
+            }
+            String detail = String.join(", ", seen);
+            ok("出生点 " + (reach * 2 / 1000) + "km 见方内有 " + seen.size() + " 种群系：" + detail);
+            if (reach == 2000 && seen.size() < 2) {
+                fail("出生点 2km 见方内只有 1 种群系（" + detail + "）—— 温度噪声波长太长，"
+                        + "把 OceanWorldGenerator.TEMPERATURE_XZ_SCALE 调大");
+            }
+        }
     }
 
     /** 取群系用的参考高度（贴着水面）。 */
