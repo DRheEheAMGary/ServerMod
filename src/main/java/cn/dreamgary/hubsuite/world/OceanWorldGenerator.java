@@ -186,21 +186,25 @@ public final class OceanWorldGenerator {
             /*
              * 冰冻带的上界是**量出来的**，不是拍的。
              *
-             * 温度噪声（原版 minecraft:temperature，firstOctave -10、xzScale 0.25，
-             * 波长约 4096 格）在全球尺度上的分位实测值（4096 点 / ±30000 格）：
-             *     1% → -0.887    2% → -0.774   2.5% → -0.730   3% → -0.703
-             *     5% → -0.604   10% → -0.481
-             * 用户要求"冻洋占全世界 2~3%"，所以上界取 2.5% 分位 -0.73。
-             * （原来取的 -0.45 是原版海洋的"冻洋"边界，实测占 11.2% —— 太多。）
+             * 温度噪声（原版 minecraft:temperature，firstOctave -10，
+             * 域扭曲 shift_a/shift_b 保持原版，xzScale 见 TEMPERATURE_XZ_SCALE）
+             * 在全球尺度上的分位实测值（4096 点 / ±30000 格，自检每次都会打印）：
+             *     1% → -0.897   2% → -0.801   2.5% → -0.755   3% → -0.729
+             *     5% → -0.635  10% → -0.492
+             * 用户要求"冻洋占全世界 2~3%"，所以上界取 2.5% 分位 -0.755。
              *
-             * 两端的 ±2.0 是**包住实测范围**（-1.38 ~ +1.19）：Climate.Parameter
+             * 注意：改 TEMPERATURE_XZ_SCALE 会**轻微改变这个分布**（频率越高，
+             * 域扭曲把采样点推得越远，极值尾巴越厚 —— 实测范围从 ±1.19 变成 ±1.36，
+             * 2.5% 分位从 -0.730 挪到 -0.755）。所以调完频率要回来自检里核对分位。
+             *
+             * 两端的 ±2.0 是**包住实测范围**（-1.36 ~ +1.36）：Climate.Parameter
              * 允许超出 [-1,1]，这样每个坐标都确定落在某一段里，不会出现
              * "落在所有段之外、由 R 树就近猜"的情况。
              */
-            {-2.00F, -0.73F},   // 冰冻  ≈2.5%
-            {-0.73F, -0.15F},   // 寒冷  ≈30%
-            {-0.15F, 0.20F},    // 温和  ≈35%
-            {0.20F, 2.00F},     // 温暖  ≈33%
+            {-2.00F, -0.755F},  // 冰冻  ≈2.5%
+            {-0.755F, -0.15F},  // 寒冷  ≈33%
+            {-0.15F, 0.20F},    // 温和  ≈33%
+            {0.20F, 2.00F},     // 温暖  ≈31%
     };
 
     /** 温度带名字（日志与自检报告用，顺序同 {@link #TEMPERATURE_BANDS}）。 */
@@ -226,14 +230,43 @@ public final class OceanWorldGenerator {
                 .noiseRouter().temperature();
     }
 
-    /** 深海 / 浅海的 continentalness 分界（与原版海洋判定一致）。 */
-    private static final float DEEP_THRESHOLD = -0.455F;
+    /**
+     * 深海 / 浅海的 continentalness 分界。
+     *
+     * <p>数值是**量出来的**：continentalness 的全球分位（4096 点 / ±30000 格）为
+     * {@code 10%→-0.752  25%→-0.656  50%→-0.556  74.6%→-0.455  90%→-0.357}。
+     *
+     * <p>原版海洋用的分界是 -0.455，落在 **74.6% 分位**上 —— 也就是深海占 74.6%、
+     * 浅海只占 25.4%，亮色的浅海群系（{@code lukewarm_ocean} / {@code warm_ocean}，
+     * 有珊瑚、能看见海底那种）合计只有 17.7%。用户要求"浅海多一点"，
+     * 所以取 **50% 分位 -0.556** → 深/浅各半。
+     *
+     * <p>注意这个值**只决定群系标签**（颜色、生物、装饰、结构），
+     * 不参与地形密度计算 —— 海床高度由 {@link #DEPTH_VARIATION} 那套算，
+     * 与它无关。但有个副作用要知道：海底神殿的生成标签是
+     * {@code #minecraft:is_deep_ocean}（**只在深海群系**），
+     * 深海变少 → 海底神殿也会变少（沉船是 {@code #is_ocean}，不受影响）。
+     */
+    private static final float DEEP_THRESHOLD = -0.556F;
     private static final float SHORE_THRESHOLD = -0.11F;
 
     /** 深海 / 浅海分界值（自检统计深浅占比用）。 */
     public static float deepThreshold() {
         return DEEP_THRESHOLD;
     }
+
+    /**
+     * 温度噪声的频率倍数（相对原版）。
+     *
+     * <p>原版的 {@code minecraft:temperature} 用 {@code xz_scale = 0.25}，
+     * 第一八度 -10 → 波长 {@code 2^10 / 0.25 = 4096} 格。也就是说
+     * **要走 4 公里才能跨过一个温度带**，一座岛周围几千格内只有一种海洋。
+     *
+     * <p>用户要求"群系变化更快"，所以取 0.5 → 波长 **2048 格**。
+     * 只改频率，其余（噪声本身、域扭曲、温度带边界）都不动，
+     * 所以各温度带的全球占比不变，只是"换得更勤"。
+     */
+    private static final double TEMPERATURE_XZ_SCALE = 0.5;
 
     /**
      * 只含海洋群系的 {@link MultiNoiseBiomeSource}。
@@ -292,15 +325,17 @@ public final class OceanWorldGenerator {
     /**
      * 把主世界的路由器改造成"一定是海"的版本。
      *
-     * <p>改动三处：
+     * <p>改动四处：
      * <ul>
      *   <li>{@code continents} —— 压缩到远海区间 {@code [-0.95, -0.15]}，
      *       供群系选择用（深海/浅海）；</li>
      *   <li>{@code finalDensity} —— 换成一个受控函数，海床恒定在海平面以下。</li>
      *   <li>{@code preliminarySurfaceLevel} —— 按**我们自己的**密度重算，
      *       否则原版表层规则（沙/砾石沉积物）会因为"地表不在预期位置"而全部失效。</li>
+     *   <li>{@code temperature} —— 原样重建但频率翻倍（波长 4096 → 2048 格），
+     *       让群系换得更勤。</li>
      * </ul>
-     * 其余（温度/侵蚀/洞穴/结构）保持原版，
+     * 其余（侵蚀/洞穴/结构）保持原版，
      * 这样海底地形、洞穴、沉船结构仍然正常。
      */
     private static NoiseRouter oceanRouter(NoiseRouter vanilla,
@@ -362,12 +397,33 @@ public final class OceanWorldGenerator {
         DensityFunction preliminarySurface = DensityFunctions.findTopSurface(
                 finalDensity, DensityFunctions.constant(MAX_Y), MIN_Y, 8);
 
+        /*
+         * 改造点 4：温度噪声的频率。
+         *
+         * 原版的 temperature 是 {@code shifted_noise(temperature, shift_x, shift_z,
+         * xz_scale = 0.25)}。这里用公开工厂把它**原样重建**一遍，只把 xz_scale
+         * 换成 {@link #TEMPERATURE_XZ_SCALE}（波长 4096 → 2048 格），
+         * 域扭曲（shift_a / shift_b）保持不变，所以群系形状的"手感"和原版一致，
+         * 只是换带更勤。各温度带的全球占比只由噪声分布与温度带边界决定，
+         * 与频率无关 —— 自检里有分位数可以核对。
+         *
+         * 注意别把 shift_a / shift_b 换成别的噪声：它们用的是 {@code minecraft:shift}，
+         * 换错了幅度会让群系形状扭曲得不成样子。
+         */
+        DensityFunction temperature = DensityFunctions.shiftedNoise2d(
+                DensityFunctions.shiftA(noises.getOrThrow(
+                        net.minecraft.world.level.levelgen.Noises.SHIFT)),
+                DensityFunctions.shiftB(noises.getOrThrow(
+                        net.minecraft.world.level.levelgen.Noises.SHIFT)),
+                TEMPERATURE_XZ_SCALE,
+                noises.getOrThrow(net.minecraft.world.level.levelgen.Noises.TEMPERATURE));
+
         return new NoiseRouter(
                 vanilla.barrierNoise(),
                 vanilla.fluidLevelFloodednessNoise(),
                 vanilla.fluidLevelSpreadNoise(),
                 vanilla.lavaNoise(),
-                vanilla.temperature(),
+                temperature,         // ← 改造点 4：频率翻倍（波长 2048 格）
                 vanilla.vegetation(),
                 continents,          // ← 改造点 1：群系选择
                 vanilla.erosion(),
