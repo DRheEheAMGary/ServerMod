@@ -84,9 +84,12 @@ public final class HubSuite implements ModInitializer {
 
         rulesEngine = new cn.dreamgary.hubsuite.feature.ServerRulesEngine(worldsManager);
         rulesEngine.register();
-        PlayerRouter.setSpawnResolver((player, target) -> target instanceof cn.dreamgary.hubsuite.world.SubServer sub
-                ? rulesEngine.resolveEntry(player, sub)
-                : target.spawn());
+        // 出生点解析器：多维度子服要把**具体维度**也传进去 ——
+        // 坐标记忆是按维度存的（大厅/经典/海岛的场所 id 都是 skyblock）
+        PlayerRouter.addSpawnResolver((player, target, level) ->
+                target instanceof cn.dreamgary.hubsuite.world.SubServer sub
+                        ? rulesEngine.resolveEntry(player, sub, level.dimension())
+                        : target.spawn());
 
         // 未登录锁定 + 命令闸门 + 权限
         permissions = new cn.dreamgary.hubsuite.feature.PermissionService();

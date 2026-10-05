@@ -206,7 +206,7 @@ public final class IslandService {
         });
 
         // 3) 出生点解析：要落进岛屿维度就落到自己岛上
-        PlayerRouter.setSpawnResolver((player, target) -> {
+        PlayerRouter.addSpawnResolver((player, target, level) -> {
             if (!(target instanceof SubServer sub) || !sub.id().equals(server.id())) {
                 return null;
             }
@@ -243,7 +243,39 @@ public final class IslandService {
             if (player.getItemInHand(hand).isEmpty()) {
                 return InteractionResult.PASS;
             }
+
+            /*
+             * 对**容器类方块**（箱子/工作台/熔炉…）每次右键都记一条日志。
+             *
+             * 用户反复反馈"对着箱子右键打不开"，而自检里箱子是能打开的 ——
+             * 说明问题只可能出在真实客户端这条路径上。这条日志能一次性区分：
+             *   · 被岛屿保护拦下（会打印"拦下"并给出坐标与手持物）
+             *   · 压根没进到模组的回调（那就一条都不打印 → 问题在别处）
+             */
+            var clicked = level.getBlockState(hit.getBlockPos());
+            boolean container = clicked.is(net.minecraft.world.level.block.Blocks.CHEST)
+                    || clicked.is(net.minecraft.world.level.block.Blocks.TRAPPED_CHEST)
+                    || clicked.is(net.minecraft.world.level.block.Blocks.BARREL)
+                    || clicked.is(net.minecraft.world.level.block.Blocks.CRAFTING_TABLE)
+                    || clicked.is(net.minecraft.world.level.block.Blocks.FURNACE);
+            if (container) {
+                boolean allowed = canBuildHere(serverPlayer, hit.getBlockPos());
+                HubSuite.logger().info(
+                        "右键容器：{} 点 {} {} @ {} 维度 {} 手持 {} → {}",
+                        serverPlayer.getName().getString(),
+                        clicked.getBlock().getName().getString(),
+                        hit.getBlockPos(), level.dimension().identifier(),
+                        player.getItemInHand(hand).getItem(),
+                        allowed ? "放行" : "被保护拦下");
+            }
+
             if (!canBuildHere(serverPlayer, hit.getBlockPos())) {
+                // 记日志：用户反馈"对着箱子右键打不开"时，这是唯一能区分
+                // "被保护拦下"和"根本没走到这里"的证据。
+                HubSuite.logger().info("右击被岛屿保护拦下：{} @ {} 维度 {}（手持 {}）",
+                        serverPlayer.getName().getString(), hit.getBlockPos(),
+                        level.dimension().identifier(),
+                        player.getItemInHand(hand).getItem());
                 serverPlayer.sendSystemMessage(Component.literal("\u00A7c这不是你的岛屿区域，无法放置。"));
                 return InteractionResult.FAIL;
             }

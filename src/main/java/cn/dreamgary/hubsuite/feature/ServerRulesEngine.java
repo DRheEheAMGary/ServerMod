@@ -160,11 +160,19 @@ public final class ServerRulesEngine {
         });
     }
 
-    /** 记录位置（进入子服时优先使用记忆值）。 */
+    /**
+     * 记录位置（下次进入同一个地方时优先使用记忆值）。
+     *
+     * <p><b>按维度记，不能按场所 id 记。</b>空岛服是一个"多维度子服"——
+     * 大厅/经典空岛/海岛三个维度的 {@code id()} 都是 {@code skyblock}，
+     * 用 id 当 key 会让三个维度共用一份坐标：从经典空岛切到海岛，
+     * 玩家会被丢到"经典空岛里的那个坐标"上（用户实测反馈）。
+     */
     public void remember(ServerPlayer player, PlayableWorld world,
                          double x, double y, double z, float yaw, float pitch) {
+        String key = player.level().dimension().identifier().toString();
         memory.computeIfAbsent(player.getUUID().toString(), k -> new LinkedHashMap<>())
-                .put(world.id(), new double[]{x, y, z, yaw, pitch});
+                .put(key, new double[]{x, y, z, yaw, pitch});
     }
 
     /** 取回记忆的位置；没有则返回 null。 */
@@ -176,10 +184,17 @@ public final class ServerRulesEngine {
         return perPlayer.get(worldId);
     }
 
-    /** 进入子服时的落点：记忆优先，其次配置出生点。 */
-    public cn.dreamgary.hubsuite.world.PlayableWorld.SpawnPoint resolveEntry(ServerPlayer player, SubServer sub) {
-        if (sub.config().rememberLastLocation) {
-            double[] spot = recall(player.getUUID(), sub.id());
+    /**
+     * 进入子服时的落点：记忆优先，其次配置出生点。
+     *
+     * @param dimension 这次要进入的**具体维度**；坐标记忆是按它存的
+     *                  （多维度子服必须区分，见 {@link #remember}）
+     */
+    public cn.dreamgary.hubsuite.world.PlayableWorld.SpawnPoint resolveEntry(
+            ServerPlayer player, SubServer sub,
+            net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
+        if (sub.config().rememberLastLocation && dimension != null) {
+            double[] spot = recall(player.getUUID(), dimension.identifier().toString());
             if (spot != null && spot.length >= 5) {
                 return new cn.dreamgary.hubsuite.world.PlayableWorld.SpawnPoint(
                         spot[0], spot[1], spot[2], (float) spot[3], (float) spot[4]);

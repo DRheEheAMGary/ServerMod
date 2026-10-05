@@ -96,6 +96,7 @@ public final class SelfTest {
         step("空岛服可以正常交互方块", this::checkInteractionAllowed);
         step("海岛地形形状符合预期", this::checkOceanIslandShape);
         step("右键箱子真的能打开", this::checkChestActuallyOpens);
+        step("海洋地形是真正的海（不是平板）", this::checkOceanTerrainQuality);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -2391,6 +2392,89 @@ public final class SelfTest {
             } catch (Throwable ignored) {
                 // 忽略
             }
+        }
+    }
+
+    /**
+     * 海洋地形质量：**整片都是海、海床有起伏、不会冒出天然陆地**。
+     *
+     * <p>锁住用户截图里的问题：地形变成"大片齐平的沙地 + 垂直悬崖"。
+     * 根因是 yClampedGradient 在 [minY, seaLevel] 之外会**截断**，
+     * 海平面以上所有高度的密度都等于同一个常数，只要它大于 0 就是整片实心。
+     * 现在改成覆盖整个世界高度的渐变，不会截断。
+     *
+     * <p>检查方式：在出生点周围取若干根柱子，逐格往下找第一块实心，
+     * 得到海床高度。要求：
+     * <ol>
+     *   <li>每根柱子的海床都**低于海平面**（否则就是陆地）；</li>
+     *   <li>海床高度**有变化**（否则就是平板）。</li>
+     * </ol>
+     */
+    private void checkOceanTerrainQuality() {
+        var islands = HubSuite.islands();
+        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
+        if (ocean == null) {
+            fail("缺少 ocean 岛型");
+            return;
+        }
+        var level = ocean.entry().level();
+        var spawn = ocean.entry().spawn();
+        int sea = cn.dreamgary.hubsuite.world.OceanWorldGenerator.seaLevel();
+
+        int[] xs = {64, 128, 192, 256, -64, -128};
+        int[] zs = {64, 128, 192, 256, -64, -128};
+        int sampled = 0;
+        int aboveSea = 0;
+        int minFloor = Integer.MAX_VALUE;
+        int maxFloor = Integer.MIN_VALUE;
+        StringBuilder bad = new StringBuilder();
+
+        for (int i = 0; i < xs.length; i++) {
+            int x = (int) spawn.x() + xs[i];
+            int z = (int) spawn.z() + zs[i];
+            // 只抽查已加载的柱子：未加载就跳过，绝不主动 getChunk
+            if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) {
+                continue;
+            }
+            sampled++;
+            int floor = Integer.MIN_VALUE;
+            for (int y = sea + 6; y > level.getMinY(); y--) {
+                var st = level.getBlockState(new net.minecraft.core.BlockPos(x, y, z));
+                if (st.isAir() || !st.getFluidState().isEmpty()) {
+                    continue;
+                }
+                floor = y;
+                break;
+            }
+            if (floor == Integer.MIN_VALUE) {
+                continue;
+            }
+            if (floor >= sea) {
+                aboveSea++;
+                if (bad.length() < 120) {
+                    bad.append('(').append(x).append(',').append(floor).append(") ");
+                }
+            }
+            minFloor = Math.min(minFloor, floor);
+            maxFloor = Math.max(maxFloor, floor);
+        }
+
+        if (sampled == 0) {
+            ok("海洋地形抽查跳过（周围区块未加载）");
+            return;
+        }
+        if (aboveSea > 0) {
+            fail("有 " + aboveSea + "/" + sampled + " 根柱子的地面高过海平面（会变成陆地）：" + bad);
+        } else {
+            ok("抽查 " + sampled + " 根柱子，地面全部低于海平面（Y<" + sea + "）");
+        }
+        int spread = maxFloor - minFloor;
+        if (spread >= 3) {
+            ok("海床有起伏（Y=" + minFloor + "~" + maxFloor + "，落差 " + spread + " 格）");
+        } else if (spread == 0) {
+            fail("海床完全齐平（都是 Y=" + minFloor + "）—— 地形像一块平板");
+        } else {
+            ok("海床起伏较小（Y=" + minFloor + "~" + maxFloor + "，落差 " + spread + " 格）");
         }
     }
 

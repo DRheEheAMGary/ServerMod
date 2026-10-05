@@ -26,13 +26,40 @@ public final class PlayerRouter {
     /** 可选的落点解析器（由 ServerRulesEngine 注入，用于"回到上次位置"）。 */
     @FunctionalInterface
     public interface SpawnResolver {
-        PlayableWorld.SpawnPoint resolve(ServerPlayer player, PlayableWorld target);
+        /**
+         * @param level 这次要进入的**具体维度**（多维度子服必须区分：
+         *              空岛服的大厅/经典/海岛场所 id 都是 skyblock，
+         *              坐标记忆按维度存，不能再按 id 存）
+         */
+        PlayableWorld.SpawnPoint resolve(ServerPlayer player, PlayableWorld target,
+                                        ServerLevel level);
     }
 
-    private static SpawnResolver spawnResolver;
+    /**
+     * 落点解析器**链**（后注册的优先）。
+     *
+     * <p>为什么是链而不是单个：空岛系统与规则引擎各自都要参与解析
+     * （前者管"落到自己的岛上"，后者管"回到上次的位置"）。
+     * 一开始用的是 {@code setSpawnResolver}（单值覆盖）——
+     * 结果空岛系统注册得晚，把规则引擎那个**整个顶掉了**，
+     * 于是所有子服的"回到上次位置"都失效（实测发现）。
+     *
+     * <p>解析顺序：从后往前问，第一个返回非 null 的生效；
+     * 全都返回 null 才用场所默认出生点。
+     */
+    private static final java.util.List<SpawnResolver> spawnResolvers =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
 
+    public static void addSpawnResolver(SpawnResolver resolver) {
+        if (resolver != null) {
+            spawnResolvers.add(resolver);
+        }
+    }
+
+    /** @deprecated 用 {@link #addSpawnResolver} —— 覆盖式注册会顶掉别人 */
+    @Deprecated
     public static void setSpawnResolver(SpawnResolver resolver) {
-        spawnResolver = resolver;
+        addSpawnResolver(resolver);
     }
 
     /** 入场监听器：玩家落地后调用（例如空岛服要为首次进入的玩家建岛）。 */
@@ -139,7 +166,7 @@ public final class PlayerRouter {
             PlayerStateStash.apply(player, level.dimension().identifier().toString());
 
             // 步骤 2b：解析这个玩家在该场所的实际出生点
-            PlayableWorld.SpawnPoint spawn = spawnFor(player, target);
+            PlayableWorld.SpawnPoint spawn = spawnFor(player, target, level);
 
             // 步骤 3：用票据加载目标区块（比手动强载安全，见 addLoadingTicket）
             addLoadingTicket(level, spawn.x(), spawn.z());
@@ -242,15 +269,17 @@ public final class PlayerRouter {
      * <p>默认就是场所自己的出生点；但像空岛服这种"玩家站在自己的岛上"的地方，
      * 需要由 {@link #setSpawnResolver} 注入的解析器换成岛上的位置。
      */
-    private static PlayableWorld.SpawnPoint spawnFor(ServerPlayer player, PlayableWorld target) {
-        if (spawnResolver != null) {
+    private static PlayableWorld.SpawnPoint spawnFor(ServerPlayer player, PlayableWorld target,
+                                                     ServerLevel level) {
+        for (int i = spawnResolvers.size() - 1; i >= 0; i--) {
             try {
-                PlayableWorld.SpawnPoint custom = spawnResolver.resolve(player, target);
+                PlayableWorld.SpawnPoint custom =
+                        spawnResolvers.get(i).resolve(player, target, level);
                 if (custom != null) {
                     return custom;
                 }
             } catch (Throwable t) {
-                HubSuite.logger().debug("解析出生点失败，用场所默认值：{}", t.toString());
+                HubSuite.logger().debug("出生点解析器执行失败，继续问下一个：{}", t.toString());
             }
         }
         return target.spawn();

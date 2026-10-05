@@ -55,11 +55,28 @@ public final class OceanWorldGenerator {
      */
     private static final double BASE_DEPTH = 18.0;
 
-    /** 海床起伏幅度（格）。 */
-    private static final double DEPTH_VARIATION = 12.0;
+    /**
+     * 海床起伏幅度（格）。
+     *
+     * <p>必须保证 {@code BASE_DEPTH - DEPTH_VARIATION - DETAIL_VARIATION} 与
+     * {@code BASE_DEPTH + ...} 都落在海平面以下 —— 一旦海床有机会高过海平面，
+     * 就会冒出天然陆地（而"到处都是海"正是这个维度存在的意义）。
+     */
+    private static final double DEPTH_VARIATION = 8.0;
 
-    /** 洋流起伏的细节噪声幅度（格）。 */
-    private static final double DETAIL_VARIATION = 4.0;
+    /**
+     * 细节噪声幅度（格），做海底的中小尺度起伏。
+     *
+     * <p>中尺度 + 细尺度两个噪声各占一半，合起来幅度约 ±1，
+     * 乘上这个系数就是"格"。
+     */
+    private static final double DETAIL_VARIATION = 5.0;
+
+    /** 世界最低层（与 NoiseSettings.create(-64, 384, 1, 2) 对应）。 */
+    private static final int MIN_Y = -64;
+
+    /** 世界最高层。 */
+    private static final int MAX_Y = MIN_Y + 384;
 
     private OceanWorldGenerator() {
     }
@@ -88,8 +105,18 @@ public final class OceanWorldGenerator {
                     vanilla.spawnTarget(),
                     SEA_LEVEL,
                     vanilla.disableMobGeneration(),
-                    vanilla.aquifersEnabled(),
-                    vanilla.oreVeinsEnabled(),
+                    /*
+                     * 关掉含水层。
+                     *
+                     * 含水层是原版为"洞穴里有水"设计的系统，它会**覆盖**我们的
+                     * 密度函数来决定流体高度，结果与"整片世界都是海"的目标打架：
+                     * 实测出现大片齐平的沙地平台（用户截图）。
+                     * 关掉之后原版走最简单的规则 —— 密度 < 0 且低于海平面就是水，
+                     * 正是海洋世界想要的。
+                     */
+                    false,
+                    // 矿脉同理：它按原版地形的高度分布设计，在我们的密度下没有意义
+                    false,
                     vanilla.useLegacyRandomSource());
 
             var biomeSource = oceanBiomeSource(biomes);
@@ -205,12 +232,26 @@ public final class OceanWorldGenerator {
                 DensityFunctions.constant(-0.55),
                 DensityFunctions.mul(DensityFunctions.constant(0.40), vanilla.continents()));
 
-        // 海床起伏的细节噪声：复用原版的侵蚀噪声（3D），
-        // 它的频率正好适合做海底的中小尺度起伏。
-        DensityFunction detail = DensityFunctions.mul(
-                DensityFunctions.constant(0.10),
+        /*
+         * 海床起伏用**两个尺度**的噪声叠加。
+         *
+         * 踩过的坑：一开始只用原版 EROSION 噪声（第一八度 -9，波长约 512 格），
+         * 频率太低 —— 用户截图里海床是一整片齐平的沙地
+         * （自检实测"海床完全齐平，都是 Y=41"）。
+         *
+         * DensityFunctions.noise(holder, xzScale, yScale) 会把采样坐标乘上倍数，
+         * 相当于提高频率。这里叠一个中尺度（波长约 100 格）和一个细尺度
+         * （波长约 30 格），做出自然的丘陵感。
+         */
+        DensityFunction medium = DensityFunctions.mul(
+                DensityFunctions.constant(0.5),
                 DensityFunctions.noise(noises.getOrThrow(
-                        net.minecraft.world.level.levelgen.Noises.EROSION)));
+                        net.minecraft.world.level.levelgen.Noises.EROSION), 5.0, 2.0));
+        DensityFunction fine = DensityFunctions.mul(
+                DensityFunctions.constant(0.5),
+                DensityFunctions.noise(noises.getOrThrow(
+                        net.minecraft.world.level.levelgen.Noises.SURFACE), 16.0, 8.0));
+        DensityFunction detail = DensityFunctions.add(medium, fine);
 
         DensityFunction finalDensity = seabedDensity(continents, detail);
         DensityFunction depth = DensityFunctions.yClampedGradient(
@@ -249,27 +290,44 @@ public final class OceanWorldGenerator {
      */
     private static DensityFunction seabedDensity(DensityFunction continents,
                                                  DensityFunction detail) {
-        NoiseSettings settings = NoiseSettings.create(-64, 384, 1, 2);
-        int minY = settings.minY();
-        double span = SEA_LEVEL - minY;                 // 斜坡覆盖的垂直范围
-        double slope = 2.0 / span;                      // 每格密度变化量
+        /*
+         * 用**整个世界高度**的渐变，而不是 [minY, seaLevel]。
+         *
+         * 踩过的坑：一开始渐变只覆盖到海平面，而 yClampedGradient 在区间外会
+         * **截断**成端值。于是海平面以上所有高度的密度都等于同一个常数，
+         * 只要那个常数大于 0，就会生成"一整片齐平的实心"——
+         * 用户截图里那种大片平坦沙地 + 垂直悬崖就是这么来的。
+         *
+         * 改成覆盖 [minY, maxY] 之后，渐变在整个世界里都是线性的、不会截断，
+         * 零 crossing 的位置就严格等于海床高度。
+         */
+        int minY = MIN_Y;
+        int maxY = MAX_Y;
+        double span = maxY - minY;                 // 384
+        double slope = 2.0 / span;                 // 每格密度变化量
 
-        // 把过零点从斜坡中点推到"海平面下 BASE_DEPTH 格"
-        double targetY = SEA_LEVEL - BASE_DEPTH;
-        double shift = slope * (targetY - (minY + span / 2.0));
+        /*
+         * 把零 crossing 放到目标海床高度：
+         *   密度(y) = 1 - 2*(y - minY)/span + 偏移
+         *   令密度 = 0 → y = minY + (span/2) * (1 + 偏移)
+         * 所以  偏移 = 2*(targetY - minY)/span - 1
+         */
+        double midY = SEA_LEVEL - BASE_DEPTH;      // 海床平均高度（45）
+        double shift = 2.0 * (midY - minY) / span - 1.0;
 
         // continents ∈ [-1.03, -0.15]，中点约 -0.59。
-        // 越靠外海（更负）→ 海床越深。映射到 ±DEPTH_VARIATION 格。
+        // 越靠外海（更负）→ 海床越深。换算成"格 → 密度"。
         DensityFunction depthOffset = DensityFunctions.mul(
                 DensityFunctions.constant(slope * DEPTH_VARIATION / 0.44),
                 DensityFunctions.add(continents, DensityFunctions.constant(0.59)));
 
-        // 细节噪声同样换算成"格 → 密度"
+        // 细节噪声同样换算（幅度小，只做海底的中小尺度起伏）
+        // detail 是两个 ±0.5 噪声之和，幅度约 ±1
         DensityFunction detailOffset = DensityFunctions.mul(
-                DensityFunctions.constant(slope * DETAIL_VARIATION / 0.10), detail);
+                DensityFunctions.constant(slope * DETAIL_VARIATION), detail);
 
         DensityFunction base = DensityFunctions.yClampedGradient(
-                minY, SEA_LEVEL, 1.0, -1.0);
+                minY, maxY, 1.0, -1.0);
         return DensityFunctions.add(
                 DensityFunctions.add(DensityFunctions.add(base,
                         DensityFunctions.constant(shift)), depthOffset),
