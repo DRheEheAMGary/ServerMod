@@ -86,6 +86,7 @@ public final class SelfTest {
         step("颜色码渲染", this::checkTextColors);
         step("箱子式服务器选择界面", this::checkServerMenu);
         step("海岛维度是自然海洋", this::checkOceanWorld);
+        step("空岛入口分流与保护", this::checkIslandRouting);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -1025,6 +1026,36 @@ public final class SelfTest {
                         + " —— 玩家进去会看到陆地");
             }
 
+            // "独立海洋玩法"不能只有水：沉船、海底废墟这些结构必须能生成。
+            // 直接查结构注册表：Structure.biomes() 就是"这个结构能在哪些群系生成"，
+            // 是纯注册表读取，不生成任何区块，非常便宜。
+            var structureRegistry = level.getServer().registryAccess()
+                    .lookupOrThrow(net.minecraft.core.registries.Registries.STRUCTURE);
+            StringBuilder structureReport = new StringBuilder();
+            int oceanStructures = 0;
+            for (String wanted : new String[]{"shipwreck", "ocean_ruin", "ruined_portal"}) {
+                var key = net.minecraft.resources.ResourceKey.create(
+                        net.minecraft.core.registries.Registries.STRUCTURE,
+                        net.minecraft.resources.Identifier.withDefaultNamespace(wanted));
+                var holder = structureRegistry.get(key).orElse(null);
+                if (holder == null) {
+                    continue;
+                }
+                var biomeHolderRef = level.getNoiseBiome(sx >> 2, (seaLevel - 1) >> 2, sz >> 2);
+                boolean inBiome = holder.value().biomes().contains(biomeHolderRef);
+                structureReport.append(wanted).append(inBiome ? " ✓ " : " ✗ ");
+                if (inBiome) {
+                    oceanStructures++;
+                }
+            }
+            HubSuite.logger().info("  海洋结构可用性（针对出生点群系）：{}", structureReport);
+
+            if (oceanStructures > 0) {
+                ok("海洋结构能在出生点群系生成（" + structureReport.toString().trim() + "）");
+            } else {
+                fail("没有任何海洋结构能在该群系生成，沉船不会出现");
+            }
+
             // 出生点脚下应该是我们铺的沙洲
             var spawnBlock = level.getBlockState(
                     new net.minecraft.core.BlockPos(sx, (int) spawn.y() - 1, sz));
@@ -1053,13 +1084,26 @@ public final class SelfTest {
                         fail("新建的海岛落在 " + biome + " 上，不是海洋");
                     }
 
-                    // 岛面应该有实体方块（真的铺了地形）
+                    // 地形是**延迟生成**的（海洋区块太重，不能在建岛那一 tick 同步做），
+                    // 所以这里要先触发补铺，再验证地形真的落到了世界里。
+                    if (!island.terrainPainted) {
+                        ocean.manager().ensureTerrain(island);
+                    }
+
                     var surface = level.getBlockState(anchor);
                     if (surface.isAir()) {
-                        fail("海岛地形没有生成（锚点处是空气）");
+                        fail("补铺地形后锚点处仍是空气");
                     } else {
-                        ok("海岛地形已生成（岛面 = "
+                        ok("海岛地形延迟生成正常（岛面 = "
                                 + surface.getBlock().getName().getString() + "）");
+                    }
+
+                    // 岛面下方也该是实体方块（不是浮空一层）
+                    var below = level.getBlockState(anchor.below());
+                    if (below.isAir()) {
+                        fail("海岛只有一层皮，下方是空气");
+                    } else {
+                        ok("海岛下方有支撑（" + below.getBlock().getName().getString() + "）");
                     }
                 } finally {
                     try {
@@ -1072,6 +1116,120 @@ public final class SelfTest {
             }
         } catch (Throwable t) {
             fail("海洋检查异常：" + t);
+        }
+    }
+
+    /**
+     * 空岛服的**入口分流**与维度隔离。
+     *
+     * <p>验证需求里最核心的三条：
+     * <ol>
+     *   <li>没有岛 → 进空岛服被送到大厅（而不是掉进某个虚空/海洋维度）；</li>
+     *   <li>建了岛 → 再进空岛服会被送到**他那座岛**；</li>
+     *   <li>两种岛型各有归属，互不影响。</li>
+     * </ol>
+     */
+    private void checkIslandRouting() {
+        var islands = HubSuite.islands();
+        if (islands == null) {
+            fail("空岛系统未初始化");
+            return;
+        }
+        var sub = islands.server();
+        var classic = islands.type("classic").orElse(null);
+        var ocean = islands.type("ocean").orElse(null);
+        if (classic == null || ocean == null) {
+            fail("缺少 classic / ocean 岛型");
+            return;
+        }
+
+        var probe = FakePlayers.spawn(server, "hubsuite_routetest", worlds.lobby().orElseThrow().level(), false);
+        if (probe == null) {
+            fail("分流测试用假玩家创建失败");
+            return;
+        }
+        try {
+            // 1) 没有岛时：入口应解析到大厅维度
+            var beforeIsland = sub.entryFor(probe);
+            if (islands.hubEntry().id().equals(beforeIsland.id())) {
+                ok("没有岛时进空岛服会落到大厅（维度 " + beforeIsland.dimension().identifier() + "）");
+            } else {
+                fail("没有岛时入口解析成了 " + beforeIsland.id() + "，应该去大厅");
+            }
+
+            // 2) 建经典空岛后：入口应解析到 classic 维度
+            classic.manager().getOrCreate(probe.getUUID(), "hubsuite_routetest", "classic");
+            var afterClassic = sub.entryFor(probe);
+            if ("classic".equals(afterClassic.id())) {
+                ok("有了经典空岛后，进空岛服会回到那座岛");
+            } else {
+                fail("有了经典空岛，入口却解析成了 " + afterClassic.id());
+            }
+
+            // 3) 两种岛型互不影响：海岛归属应当是空的
+            if (ocean.manager().islandOf(probe.getUUID()).isEmpty()) {
+                ok("经典空岛与海岛归属互不影响（一个人可以各有一座）");
+            } else {
+                fail("建了经典空岛，海岛归属却也有了 —— 两种岛型串了");
+            }
+
+            // 4) 海里建一座海岛，两座岛应当在不同维度
+            var oceanIsland = ocean.manager().getOrCreate(probe.getUUID(), "hubsuite_routetest", "ocean");
+            var classicIsland = classic.manager().islandOf(probe.getUUID()).orElseThrow();
+            if (!oceanIsland.type.equals(classicIsland.type)
+                    && !ocean.entry().dimension().equals(classic.entry().dimension())) {
+                ok("两座岛分属不同维度（" + classic.entry().dimension().identifier()
+                        + " / " + ocean.entry().dimension().identifier() + "）");
+            } else {
+                fail("两种岛型的维度没有分开");
+            }
+
+            // 5) 保护：别人不能在我的岛上建造
+            var intruder = FakePlayers.spawn(server, "hubsuite_intruder", worlds.lobby().orElseThrow().level(), false);
+            if (intruder != null) {
+                try {
+                    var mine = classic.manager().anchorOf(classicIsland);
+                    if (!classic.manager().canBuild(intruder, mine)) {
+                        ok("别人不能在我的岛上建造（保护生效）");
+                    } else {
+                        fail("陌生人竟然能在我岛上建造 —— 保护没生效");
+                    }
+                    // 岛主自己可以
+                    if (classic.manager().canBuild(probe, mine)) {
+                        ok("岛主可以在自己岛上建造");
+                    } else {
+                        fail("岛主被自己的保护挡住了");
+                    }
+                } finally {
+                    try {
+                        server.getPlayerList().remove(intruder);
+                    } catch (Throwable ignored) {
+                        // 忽略
+                    }
+                }
+            }
+
+            // 6) 海面是公共区域：谁都不能在离岛很远的海上建造
+            var farAway = new net.minecraft.core.BlockPos(
+                    ocean.manager().anchorOf(oceanIsland).getX() + 2000,
+                    ocean.manager().anchorOf(oceanIsland).getY(),
+                    ocean.manager().anchorOf(oceanIsland).getZ() + 2000);
+            if (!ocean.manager().canBuild(probe, farAway)) {
+                ok("海岛之外的海面是公共区域（不能被圈占）");
+            } else {
+                fail("玩家竟然能在远离自己岛的海面上建造");
+            }
+        } catch (Throwable t) {
+            fail("分流检查异常：" + t);
+            HubSuite.logger().error("分流自检失败", t);
+        } finally {
+            try {
+                classic.manager().delete(probe.getUUID());
+                ocean.manager().delete(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
         }
     }
 
