@@ -141,9 +141,8 @@ public final class IslandService {
      * <p>只在**变化时**打印，平时零开销。
      */
     private static void watchContainers(net.minecraft.server.MinecraftServer server) {
-        if (++containerWatchTicker % 5 != 0) {
-            return;
-        }
+        // 每 tick 都查：容器"开了又立刻被关掉"在 5 tick 的间隔里会被漏掉
+        containerWatchTicker++;
         for (var player : server.getPlayerList().getPlayers()) {
             String now = player.containerMenu.getClass().getSimpleName()
                     + "#" + player.containerMenu.containerId;
@@ -303,6 +302,15 @@ public final class IslandService {
         });
 
         UseBlockCallback.EVENT.register((Player player, Level level, InteractionHand hand, BlockHitResult hit) -> {
+            // 诊断：无条件记录（之前那版写在两个提前 return 之后，
+            // 生存服/空手的情况根本记不到，白排查了一轮）
+            if (player instanceof ServerPlayer serverPlayer) {
+                HubSuite.logger().info(
+                        "[交互诊断] IslandService 判定：{} 是否空岛={} 空手={}（维度 {}，目标 {}）",
+                        serverPlayer.getName().getString(), isSkyblock(level),
+                        player.getItemInHand(hand).isEmpty(),
+                        level.dimension().identifier(), hit.getBlockPos());
+            }
             if (!isSkyblock(level) || !(player instanceof ServerPlayer serverPlayer)) {
                 return InteractionResult.PASS;
             }

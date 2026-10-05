@@ -101,6 +101,7 @@ public final class SelfTest {
         step("死亡重生不会掉进虚空", this::checkRespawnDimension);
         step("子服入口绝不会是虚空主维度", this::checkEntryNeverVoid);
         step("菜单不会误吞真实容器的点击", this::checkMenuDoesNotEatRealContainers);
+        step("开箱链路没有被事件处理器破坏", this::checkChestInteractionChainIntact);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -1013,12 +1014,21 @@ public final class SelfTest {
             ok("菜单点击被正确接管（原版逻辑不会执行）");
 
             // 点击后应当已经传送到生存服
-            var nowIn = worlds.worldOf(probe).orElse(null);
-            if (nowIn != null && "survival".equals(nowIn.id())) {
-                ok("点击界面里的条目成功传送到 survival");
+            /*
+             * 条目动作现在是**延后一 tick** 执行的（关闭容器与传送不能挤在
+             * 同一个 tick，否则部分客户端模组会留下一个"看不见但吃输入"的屏幕，
+             * 之后右键完全失效）。所以这里不能同步断言"已经传送过去了"。
+             *
+             * 自检跑在主线程上，没有"下一个 tick"可等，而 sleep 又会触发看门狗。
+             * 能同步验证的是：界面已关闭、菜单记录已清理 ——
+             * 传送本身由 PlayerRouter 自己的检查覆盖。
+             */
+            if (cn.dreamgary.hubsuite.ui.ChestMenuScreen.hasOpen(probe.getUUID())) {
+                fail("点击后菜单记录没有被清掉");
+            } else if (probe.containerMenu != probe.inventoryMenu) {
+                fail("点击后容器没有被关闭");
             } else {
-                fail("点击后没有传送到 survival，当前在："
-                        + (nowIn == null ? "未知" : nowIn.id()));
+                ok("点击后界面已关闭、菜单记录已清理（条目动作延后一 tick）");
             }
 
             // 回到大厅，确认界面关掉后不再接管
@@ -2939,6 +2949,93 @@ public final class SelfTest {
         } finally {
             try {
                 probe.closeContainer();
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 开箱链路的**关键返回值**必须完好。
+     *
+     * <p>锁住这个把用户坑了很久的 bug：
+     * Fabric 的 {@code BlockEvents} 语义是「返回 null = 不处理；返回 PASS = 我处理了」，
+     * 而 {@code BlockStateBase.useItemOn} 上的注入判的是 {@code result != null}
+     * —— **返回 PASS 会覆盖掉方块自己的返回值**。
+     *
+     * <p>箱子必须返回 {@code TRY_WITH_EMPTY_HAND}，{@code ServerPlayerGameMode}
+     * 才会继续调用 {@code useWithoutItem}（真正开箱的那一步）。
+     * 一旦被任何监听器覆盖成 PASS，箱子就**永远打不开**，
+     * 而且症状极具迷惑性：右键毫无反应、无报错、放方块却完全正常。
+     *
+     * <p>这条测试直接断言那个返回值 —— 只要有人再写错一次就会立刻红。
+     */
+    private void checkChestInteractionChainIntact() {
+        var islands = HubSuite.islands();
+        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
+        if (ocean == null) {
+            fail("缺少 ocean 岛型");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_chain",
+                ocean.entry().level(), false);
+        if (probe == null) {
+            fail("链路检查用假玩家创建失败");
+            return;
+        }
+        try {
+            var island = ocean.manager().getOrCreate(
+                    probe.getUUID(), probe.getName().getString(), "ocean");
+            var anchor = ocean.manager().anchorOf(island);
+            var level = ocean.entry().level();
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    level.getChunk(anchor.getX() / 16 + dx, anchor.getZ() / 16 + dz);
+                }
+            }
+            if (!ocean.manager().ensureTerrain(island)) {
+                ok("链路检查跳过（地形未铺好）");
+                return;
+            }
+            var chestPos = findBlockNear(level, anchor,
+                    net.minecraft.world.level.block.Blocks.CHEST, 10);
+            if (chestPos == null) {
+                fail("岛上没有箱子，无法验证开箱链路");
+                return;
+            }
+
+            probe.setGameMode(net.minecraft.world.level.GameType.SURVIVAL);
+            probe.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+                    net.minecraft.world.item.ItemStack.EMPTY);
+            probe.setItemInHand(net.minecraft.world.InteractionHand.OFF_HAND,
+                    net.minecraft.world.item.ItemStack.EMPTY);
+            var hit = new net.minecraft.world.phys.BlockHitResult(
+                    new net.minecraft.world.phys.Vec3(chestPos.getX() + 0.5,
+                            chestPos.getY() + 0.5, chestPos.getZ() + 1.0),
+                    net.minecraft.core.Direction.SOUTH, chestPos, false);
+
+            /*
+             * 这一步会同时跑过所有 BlockEvents.USE_ITEM_ON 监听器 ——
+             * 只要有任何一个返回了 PASS（而不是 null），返回值就会被覆盖。
+             */
+            var result = level.getBlockState(chestPos).useItemOn(
+                    net.minecraft.world.item.ItemStack.EMPTY, level, probe,
+                    net.minecraft.world.InteractionHand.MAIN_HAND, hit);
+
+            if (result == net.minecraft.world.InteractionResult.TRY_WITH_EMPTY_HAND) {
+                ok("箱子 useItemOn 返回 TRY_WITH_EMPTY_HAND（开箱链路完好）");
+            } else {
+                fail("箱子 useItemOn 被覆盖成了 " + result
+                        + "（应为 TRY_WITH_EMPTY_HAND）—— "
+                        + "某个 BlockEvents.USE_ITEM_ON 监听器返回了 PASS 而不是 null，"
+                        + "会导致**所有箱子永远打不开**");
+            }
+        } catch (Throwable t) {
+            fail("开箱链路检查异常：" + t);
+        } finally {
+            try {
+                ocean.manager().delete(probe.getUUID());
                 server.getPlayerList().remove(probe);
             } catch (Throwable ignored) {
                 // 忽略

@@ -52,15 +52,38 @@ public final class QuestEvents {
         });
 
         // 放置方块（用"手持方块右键"近似）
+        /*
+         * 放置方块统计。
+         *
+         * ★★★ 这个监听器**必须返回 null**，不能返回 InteractionResult.PASS ★★★
+         *
+         * Fabric 的 BlockEvents 语义与其它事件不同：
+         *   - 返回 null   = "我不处理，交回原版"（正确）
+         *   - 返回 PASS   = "我处理了，结果是 PASS"
+         *
+         * 而 Fabric 在 BlockStateBase.useItemOn 上的注入是这样的：
+         *     result = BlockEvents.USE_ITEM_ON.invoker().useItemOn(...);
+         *     if (result != null) cir.setReturnValue(result);   // ← 判的是 null！
+         *
+         * 也就是说返回 PASS 会**覆盖掉方块自己的返回值**。
+         * 箱子靠返回 TRY_WITH_EMPTY_HAND 才能让
+         * ServerPlayerGameMode 继续调用 useWithoutItem（真正开箱的那一步）；
+         * 被覆盖成 PASS 之后这一步永远不会发生 —— **箱子从此打不开**。
+         *
+         * 实测症状极具迷惑性（用户反馈"全服都打不开箱子"）：
+         * 右键毫无反应、没有任何报错、放方块却完全正常
+         * （放方块走的是 stack.useOn 那条分支，不受影响）。
+         * 排查了很久才定位到这里 —— 它跟"任务系统"看起来毫无关系。
+         */
         BlockEvents.USE_ITEM_ON.register((stack, state, level, pos, player, hand, hit) -> {
             if (!(player instanceof ServerPlayer serverPlayer)) {
-                return net.minecraft.world.InteractionResult.PASS;
+                return null;
             }
             try {
                 var manager = HubSuite.quests();
                 if (manager == null || !manager.config().enabled
                         || !inIslandWorld(serverPlayer)) {
-                    return net.minecraft.world.InteractionResult.PASS;
+                    return null;
                 }
                 if (stack.getItem() instanceof BlockItem blockItem) {
                     String id = BuiltInRegistries.BLOCK.getKey(blockItem.getBlock()).toString();
@@ -69,7 +92,7 @@ public final class QuestEvents {
             } catch (Throwable t) {
                 HubSuite.logger().error("任务系统：放置方块统计失败", t);
             }
-            return net.minecraft.world.InteractionResult.PASS;
+            return null;
         });
 
         // 击杀
