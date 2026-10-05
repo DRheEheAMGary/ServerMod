@@ -160,13 +160,23 @@ public final class OceanWorldGenerator {
             }
         }
 
-        // 兜底：万一上面的区间有缝（例如 continentalness 超出预期范围），
-        // 至少保证任何位置都会得到一个海洋群系，而不是报"找不到群系"。
-        biomes.get(ResourceKey.create(Registries.BIOME,
-                        net.minecraft.resources.Identifier.withDefaultNamespace("ocean")))
-                .ifPresent(biome -> points.add(Pair.of(
-                        Climate.parameters(any, any, any, any, any, any, 0.0F), biome)));
-
+        /*
+         * 这里**故意不加"全覆盖兜底条目"**。
+         *
+         * 第一版加了一个 span(-1,1) × 6 的兜底（怕区间有缝会找不到群系），
+         * 结果它把其它群系全吞了 —— 用户实测"海洋群系只有常规海洋，没有别的"。
+         * 原因：ParameterList 是找**距离最近**的条目，而一个覆盖全空间的条目
+         * 距离恒为 0，会和更具体的条目打平，谁被选中取决于 R 树结构。
+         *
+         * 不加也不会出错：ParameterList.findValue 的 R 树在列表非空时
+         * 一定会返回一个结果（返回最近的），不存在"找不到群系"。
+         * 而上面的温度区间已经完整覆盖 [-1, 1]，
+         * continents 也被我们压缩到 [-1.03, -0.15]（落在 [-1.2, -0.11] 内），
+         * 所以每个坐标都能精确命中一个海洋群系。
+         */
+        if (points.isEmpty()) {
+            throw new IllegalStateException("没有任何海洋群系可用（生物群系注册表异常）");
+        }
         return MultiNoiseBiomeSource.createFromList(new Climate.ParameterList<>(points));
     }
 
@@ -266,8 +276,24 @@ public final class OceanWorldGenerator {
                 detailOffset);
     }
 
-    /** 海平面高度，供岛屿生成对齐用。 */
+    /**
+     * 海平面（噪声设置里的参考值）。
+     *
+     * <p>注意它**不等于最上层水方块的高度** —— 原版的语义是"水面在这个高度"，
+     * 水方块本身占到此高度以下。要判断"水面上方一格"请用 {@link #waterSurface()}。
+     */
     public static int seaLevel() {
         return SEA_LEVEL;
+    }
+
+    /**
+     * 最上层**水方块**的高度。
+     *
+     * <p>实测这个世界是 Y=62（seaLevel=63）。岛屿顶面要"高出水面一格"，
+     * 就应该放在 63 —— 用 seaLevel 当水面会高出一格，
+     * 这正是用户反馈"岛屿高出海平面 2 格"的来源。
+     */
+    public static int waterSurface() {
+        return SEA_LEVEL - 1;
     }
 }

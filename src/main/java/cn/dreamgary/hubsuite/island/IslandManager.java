@@ -185,7 +185,6 @@ public final class IslandManager {
      */
     private BlockPos findFreeOceanSpot() {
         int spacing = Math.max(64, config.oceanSpacing);
-        int y = oceanAnchorY();
         List<BlockPos> taken = new ArrayList<>();
         for (Island island : islands.values()) {
             taken.add(anchorOf(island));
@@ -231,6 +230,9 @@ public final class IslandManager {
                     }
                 }
                 if (ok) {
+                    // Y 必须在**选定坐标之后**才算：它要实测那个位置的水面，
+                    // 而不同位置的水面未必一样高（浅海 vs 深海）。
+                    int y = oceanAnchorY(x, z);
                     HubSuite.logger().info("为海岛选定位置 ({}, {}, {})（尝试 {} 次）",
                             x, y, z, attempts);
                     return new BlockPos(x, y, z);
@@ -244,7 +246,7 @@ public final class IslandManager {
         HubSuite.logger().warn(
                 "海里没找到成片海洋（尝试 {} 次，已有 {} 座岛），岛放在 ({}, {}) —— 可能不在海洋上，请检查世界生成",
                 attempts, taken.size(), fx, fz);
-        return new BlockPos(fx, y, fz);
+        return new BlockPos(fx, oceanAnchorY(fx, fz), fz);
     }
 
     /**
@@ -268,7 +270,7 @@ public final class IslandManager {
     /** 用噪声群系判断（不生成区块，开销极小）。 */
     private boolean isNoiseOcean(int x, int z, java.util.Set<String> oceanBiomes) {
         try {
-            int quartY = Math.max(0, (oceanAnchorY() - 1) >> 2);
+            int quartY = Math.max(0, (oceanAnchorY(x, z) - 1) >> 2);
             var key = level.getNoiseBiome(x >> 2, quartY, z >> 2).unwrapKey().orElse(null);
             return key != null && oceanBiomes.contains(key.identifier().getPath());
         } catch (Throwable t) {
@@ -276,15 +278,23 @@ public final class IslandManager {
         }
     }
 
-    /** 海岛锚点的高度：跟着海平面走，让岛刚好露出水面。 */
-    private int oceanAnchorY() {
+    /**
+     * 海岛锚点的高度 = **实测水面 + 1**。
+     *
+     * <p>必须和 {@link #buildOceanIsland} 用**同一个**算法，否则会出现
+     * "地形铺在 Y=63、锚点却记成 Y=64"这种错位 —— 出生点和箱子都会
+     * 悬在岛上方一格（用户实测反馈"岛屿高出海平面 2 格"就是这个）。
+     *
+     * <p>注意不能直接用 {@code level.getSeaLevel()}：那是噪声设置里的
+     * "海平面参考值"，实测这个维度水面在 Y=62 而 seaLevel=63，
+     * 差一格就会让岛看起来高出一格。
+     */
+    private int oceanAnchorY(int x, int z) {
         if (config.oceanIslandY > 0) {
             return config.oceanIslandY;
         }
         try {
-            int sea = level.getSeaLevel();
-            // 岛面定在海平面 +1：下面几层填到水里，上面留出干燥的沙地
-            return sea + 1;
+            return findWaterSurface(level, x, z) + 1;
         } catch (Throwable t) {
             return 64;
         }
@@ -796,11 +806,16 @@ public final class IslandManager {
                 pendingTerrain.remove(uuid);
                 continue;
             }
-            boolean someoneThere = level.players().stream()
-                    .anyMatch(p -> p.getUUID().toString().equals(uuid));
-            if (!someoneThere) {
-                continue;   // 玩家还没到，等下一轮
-            }
+            /*
+             * 不再要求"玩家已经在岛上"。
+             *
+             * 一开始的条件是 level.players() 里必须有这个玩家 —— 但区块加载的
+             * 原因很多（别的玩家路过、票据、结构生成），玩家没到不代表区块没加载。
+             * 而 generate() 开头就有 hasChunk 守卫，没加载会**立刻返回**，
+             * 每 tick 对每座待铺岛做 9 次 hasChunk 查询的成本可以忽略。
+             *
+             * 放宽之后，岛只要区块就绪就会被铺好，不再依赖"玩家恰好站在那里"。
+             */
             if (ensureTerrain(island)) {
                 HubSuite.logger().info("方格({}, {}) 的地形已补铺完成", island.plotX, island.plotZ);
             }
@@ -1045,7 +1060,15 @@ public final class IslandManager {
      */
     private boolean buildOceanIsland(ServerLevel level, BlockPos center, int radius,
                                      List<int[]> layers, long deadline, boolean[] overBudget) {
-        int topY = cn.dreamgary.hubsuite.world.OceanWorldGenerator.seaLevel() + 1;   // 高于海平面一格
+        /*
+         * 顶面高度 = **实测的水面 + 1**，而不是假设"seaLevel 就是水面"。
+         *
+         * 踩过的坑：一开始写死 seaLevel+1，用户实测"岛屿高出海平面 2 格"。
+         * 因为 NoiseGeneratorSettings 里的 seaLevel 是"水面判定用的参考值"，
+         * 实际最上层的水方块未必正好在那一格。与其猜，不如扫一遍。
+         */
+        int waterTop = findWaterSurface(level, center.getX(), center.getZ());
+        int topY = waterTop + 1;
 
         // 层配置里的 dy 是相对"地表基准"的，这里把基准挪到 topY。
         // 例如 0:grass_block → topY；-1:dirt → topY-1。
@@ -1066,26 +1089,41 @@ public final class IslandManager {
                 int x = center.getX() + dx;
                 int z = center.getZ() + dz;
 
-                // 1) 按配置铺顶部若干层（草/泥土/沙……）
+                /*
+                 * 用**不同的更新标志**分层放置，这是性能关键。
+                 *
+                 * setBlockAndUpdate 等价于 setBlock(..., UPDATE_ALL)，
+                 * 每放一格都会触发邻居更新与光照重算。海岛的填充深度
+                 * 是"一直到底下几十格的海床"，81 根柱子 × 几十格 = 几千次 ——
+                 * 实测直接把 4000ms 的建岛预算撑爆，导致地形"待补铺"却永远补不上。
+                 *
+                 * 所以：
+                 *   · 表层（玩家能看到、会走上去的 2 层）用 UPDATE_ALL，保证
+                 *     光照和邻居状态正确；
+                 *   · 深处的填充只在客户端可见性上更新，跳过邻居/光照传播 ——
+                 *     那些方块埋在海底，没人看得见。
+                 */
                 for (int[] layer : sorted) {
                     BlockState state = blockState(layer[1]);
                     if (state == null) {
                         continue;
                     }
-                    level.setBlockAndUpdate(new BlockPos(x, topY + layer[0], z), state);
+                    int flags = layer[0] >= -1
+                            ? net.minecraft.world.level.block.Block.UPDATE_ALL
+                            : net.minecraft.world.level.block.Block.UPDATE_CLIENTS;
+                    level.setBlock(new BlockPos(x, topY + layer[0], z), state, flags);
                 }
 
-                // 2) 再往下填石头，直到碰到天然海床（或到达配置的最深层）
+                // 再往下填石头，直到碰到天然海床（或到达配置的最深层）
                 int floorY = findSeabed(level, x, topY + deepestConfigured - 1, z);
                 BlockState filler = net.minecraft.world.level.block.Blocks.STONE.defaultBlockState();
-                if (filler != null) {
-                    for (int y = topY + deepestConfigured - 1; y > floorY; y--) {
-                        var pos = new BlockPos(x, y, z);
-                        if (!level.getBlockState(pos).isAir()) {
-                            break;   // 已经碰到实心（海床），停
-                        }
-                        level.setBlockAndUpdate(pos, filler);
+                for (int y = topY + deepestConfigured - 1; y > floorY; y--) {
+                    var pos = new BlockPos(x, y, z);
+                    if (isSolidGround(level.getBlockState(pos))) {
+                        break;   // 碰到真正的实心（海床），停
                     }
+                    level.setBlock(pos, filler,
+                            net.minecraft.world.level.block.Block.UPDATE_CLIENTS);
                 }
             }
         }
@@ -1105,11 +1143,58 @@ public final class IslandManager {
     private int findSeabed(ServerLevel level, int x, int fromY, int z) {
         int limit = Math.max(level.getMinY() + 1, fromY - MAX_SEABED_SEARCH);
         for (int y = fromY; y > limit; y--) {
-            if (!level.getBlockState(new BlockPos(x, y, z)).isAir()) {
+            if (isSolidGround(level.getBlockState(new BlockPos(x, y, z)))) {
                 return y;
             }
         }
         return limit;
+    }
+
+    /**
+     * 这一格算不算"实心地面"（海床）。
+     *
+     * <p><b>不能用 {@code isAir()} 判断</b> —— 水不是空气，
+     * {@code !isAir()} 会把水当成海床，于是填充循环在第一格水就 break，
+     * 岛变成一块**浮在水里的薄板**，底下全是水。
+     * 实测症状：同一位置的两座岛锚点算出 Y=63 和 Y=55 两个值
+     * （后者的"水面"其实是从薄板下面漏下去的水）。
+     */
+    private static boolean isSolidGround(BlockState state) {
+        return !state.isAir() && state.getFluidState().isEmpty();
+    }
+
+    /**
+     * 实测某根柱子上的**水面高度**（最上层水/流体方块所在的 Y）。
+     *
+     * <p>从海平面以上往下扫，找到第一格流体就是水面。
+     * 找不到（例如那里已经是我们铺过的岛）就退回生成器的海平面。
+     */
+    private int findWaterSurface(ServerLevel level, int x, int z) {
+        int sea = cn.dreamgary.hubsuite.world.OceanWorldGenerator.seaLevel();
+
+        /*
+         * 只在海平面上下一个**很窄**的窗口里找水面。
+         *
+         * 踩过的坑：一开始一路扫到世界底部，结果噪声世界里存在**地下含水层**，
+         * 扫到 Y=-22 的水就当成"海面"，算出的岛顶高度是 Y=-21 ——
+         * 岛直接被埋到地底（实测日志里出现"为海岛选定位置 (99, -21, 38)"）。
+         *
+         * 海洋的表面必然紧贴海平面，所以窗口取 ±8 格足够，
+         * 找不到就退回海平面本身（说明这一列已经是陆地/被清过）。
+         */
+        int top = sea + 8;
+        int bottom = sea - 8;
+        for (int y = top; y >= bottom; y--) {
+            var state = level.getBlockState(new BlockPos(x, y, z));
+            if (state.getFluidState().isEmpty()) {
+                continue;
+            }
+            // 找到最上面的一格水
+            return y;
+        }
+        // 窗口里没有水（说明这一列已经是陆地，或者刚被清过）：
+        // 退回**水方块的高度**而不是 seaLevel —— 后者会让岛顶再高出一格。
+        return cn.dreamgary.hubsuite.world.OceanWorldGenerator.waterSurface();
     }
 
     /** 往下找海床的最大深度（防止在极深的海洋里铺太久）。 */
