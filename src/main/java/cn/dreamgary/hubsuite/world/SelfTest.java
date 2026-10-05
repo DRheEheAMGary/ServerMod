@@ -99,6 +99,7 @@ public final class SelfTest {
         step("删掉海岛不会在海里留下空气坑", this::checkOceanDeleteRestoresWater);
         step("右键箱子真的能打开", this::checkChestActuallyOpens);
         step("海洋地形是真正的海（不是平板）", this::checkOceanTerrainQuality);
+        step("海床有原版沉积物覆盖（表层规则生效）", this::checkOceanSeabedSediment);
         step("海岛附近有原版天然海洋结构", this::checkOceanStructures);
         step("死亡重生不会掉进虚空", this::checkRespawnDimension);
         step("子服入口绝不会是虚空主维度", this::checkEntryNeverVoid);
@@ -2537,6 +2538,109 @@ public final class SelfTest {
             } catch (Throwable ignored) {
                 // 忽略
             }
+        }
+    }
+
+    /**
+     * 海床表面必须是**原版的沉积物**（砾石/沙/黏土），不能是一片裸石头。
+     *
+     * <p>锁住的坑：原版 {@code surface_rule} 的最外层是
+     * {@code ifTrue(above_preliminary_surface())} —— 所有海底沉积物都挂在这道门后面。
+     * 我们换了 {@code finalDensity} 却**沿用了主世界的 preliminary surface**，
+     * 两者对不上 → 表层规则几乎不生效。从存档里抽样实测（21586 列）：
+     * <pre>
+     *   修复前：沉积物 19.6%（砾石 18.8% / 沙 0.7%）  裸岩石 77.8%  还露着煤/铜/铁矿
+     *   修复后：沉积物 95.8%（该区域是冻洋 → 原版就是砾石为主）  裸岩石 3.4%
+     * </pre>
+     * 岩石占比高说明"表层装饰没铺上去"，这是**看不见报错**的那类问题 ——
+     * 只有把方块导出来数才知道。
+     */
+    private void checkOceanSeabedSediment() {
+        var islands = HubSuite.islands();
+        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
+        if (ocean == null) {
+            fail("缺少 ocean 岛型");
+            return;
+        }
+        var level = ocean.entry().level();
+        var spawn = ocean.entry().spawn();
+
+        // 原版表层规则铺出来的沉积物（海床表面只可能是这几种之一）
+        var sediment = java.util.Set.of(
+                net.minecraft.world.level.block.Blocks.GRAVEL,
+                net.minecraft.world.level.block.Blocks.SAND,
+                net.minecraft.world.level.block.Blocks.CLAY,
+                net.minecraft.world.level.block.Blocks.DIRT,
+                net.minecraft.world.level.block.Blocks.COARSE_DIRT,
+                net.minecraft.world.level.block.Blocks.PODZOL,
+                net.minecraft.world.level.block.Blocks.MYCELIUM);
+        // 水面之上的东西（冻洋有冰）以及水里长的植物，都要跳过
+        var skip = java.util.Set.of(
+                net.minecraft.world.level.block.Blocks.WATER,
+                net.minecraft.world.level.block.Blocks.ICE,
+                net.minecraft.world.level.block.Blocks.PACKED_ICE,
+                net.minecraft.world.level.block.Blocks.BLUE_ICE,
+                net.minecraft.world.level.block.Blocks.SNOW_BLOCK,
+                net.minecraft.world.level.block.Blocks.KELP,
+                net.minecraft.world.level.block.Blocks.KELP_PLANT,
+                net.minecraft.world.level.block.Blocks.SEAGRASS,
+                net.minecraft.world.level.block.Blocks.TALL_SEAGRASS);
+
+        int sampled = 0;
+        int soft = 0;
+        int rock = 0;
+        StringBuilder examples = new StringBuilder();
+        int reach = 96;
+        for (int dz = -reach; dz <= reach; dz += 3) {
+            for (int dx = -reach; dx <= reach; dx += 3) {
+                int x = (int) spawn.x() + dx;
+                int z = (int) spawn.z() + dz;
+                // 只查已加载区块：绝不为了抽样去 getChunk（会同步生成整片区块）
+                if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) {
+                    continue;
+                }
+                var top = level.getBlockState(new net.minecraft.core.BlockPos(x, 62, z));
+                if (!top.is(net.minecraft.world.level.block.Blocks.WATER)
+                        && !top.is(net.minecraft.world.level.block.Blocks.ICE)
+                        && !top.is(net.minecraft.world.level.block.Blocks.PACKED_ICE)
+                        && !top.is(net.minecraft.world.level.block.Blocks.BLUE_ICE)) {
+                    continue;   // 岛 / 平台 / 未生成
+                }
+                var state = net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
+                for (int y = 61; y > level.getMinY() + 1; y--) {
+                    var s = level.getBlockState(new net.minecraft.core.BlockPos(x, y, z));
+                    if (s.isAir() || skip.contains(s.getBlock())) {
+                        continue;
+                    }
+                    state = s;
+                    break;
+                }
+                sampled++;
+                if (sediment.contains(state.getBlock())) {
+                    soft++;
+                } else {
+                    rock++;
+                    if (examples.length() < 90) {
+                        examples.append('(').append(x).append(',').append(state.getBlock()
+                                .getName().getString()).append(") ");
+                    }
+                }
+            }
+        }
+
+        if (sampled < 100) {
+            ok("海床沉积物抽查跳过（已加载的海洋柱子只有 " + sampled + " 根）");
+            return;
+        }
+        double ratio = (double) soft / sampled;
+        if (ratio >= 0.5) {
+            ok("海床有沉积物覆盖：" + soft + "/" + sampled + " 根柱子（"
+                    + Math.round(ratio * 100) + "%）是原版表层方块，裸岩石 " + rock + " 根");
+        } else {
+            fail("海床只有 " + Math.round(ratio * 100) + "% 是沉积物，" + rock + "/" + sampled
+                    + " 根是裸石头 —— 原版表层规则没生效"
+                    + "（多半是 preliminarySurfaceLevel 和自建 finalDensity 对不上）。"
+                    + "例子：" + examples);
         }
     }
 

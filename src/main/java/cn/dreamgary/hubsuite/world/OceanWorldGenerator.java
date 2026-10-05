@@ -250,13 +250,15 @@ public final class OceanWorldGenerator {
     /**
      * 把主世界的路由器改造成"一定是海"的版本。
      *
-     * <p>改动两处：
+     * <p>改动三处：
      * <ul>
      *   <li>{@code continents} —— 压缩到远海区间 {@code [-0.95, -0.15]}，
      *       供群系选择用（深海/浅海）；</li>
      *   <li>{@code finalDensity} —— 换成一个受控函数，海床恒定在海平面以下。</li>
+     *   <li>{@code preliminarySurfaceLevel} —— 按**我们自己的**密度重算，
+     *       否则原版表层规则（沙/砾石沉积物）会因为"地表不在预期位置"而全部失效。</li>
      * </ul>
-     * 其余（温度/湿度/侵蚀/洞穴/含水层/矿脉）保持原版，
+     * 其余（温度/侵蚀/洞穴/结构）保持原版，
      * 这样海底地形、洞穴、沉船结构仍然正常。
      */
     private static NoiseRouter oceanRouter(NoiseRouter vanilla,
@@ -272,20 +274,16 @@ public final class OceanWorldGenerator {
          * 海床起伏用**两个尺度**的噪声叠加。
          *
          * 踩过的坑：一开始只用原版 EROSION 噪声（第一八度 -9，波长约 512 格），
-         * 频率太低 —— 用户截图里海床是一整片齐平的沙地
-         * （自检实测"海床完全齐平，都是 Y=41"）。
+         * 频率太低 —— 海床是一整片齐平的沙地（自检实测"海床完全齐平，都是 Y=41"）。
          *
-         * DensityFunctions.noise(holder, xzScale, yScale) 会把采样坐标乘上倍数，
-         * 相当于提高频率。这里叠一个中尺度（波长约 100 格）和一个细尺度
-         * （波长约 30 格），做出自然的丘陵感。
-         */
-        /*
-         * 频率要**贴近原版**：原版海底的起伏尺度是几百格一级，
-         * 近看很平滑，不会出现密集的小疙瘩。
-         *
-         * 第一版用了 xz×5 与 xz×16（波长约 100 / 30 格），用户反馈
-         * "海床太崎岖了，应该和原版一样的平滑"。这里降到 xz×1.5 与 xz×4
-         * （波长约 340 / 128 格），并把细尺度的权重压到 1/3。
+         * 波长怎么算：噪声第一八度的格距是 {@code 2^-firstOctave} 个**采样单位**，
+         * 采样坐标 = 方块坐标 × xzScale，所以
+         *   波长(格) = 2^(-firstOctave) / xzScale
+         *   EROSION  firstOctave = -9 → 512 / 1.5 ≈ 341 格（大尺度缓坡）
+         *   SURFACE  firstOctave = -6 →  64 / 4.0 =  16 格（细密的小起伏）
+         * 注意 SURFACE 的第一八度是 -6，不是 -9 —— 我第一版按 -9 估成 128 格，
+         * 实际只有 16 格，所以细尺度的权重必须压得很低（否则近看是一片小疙瘩，
+         * 用户反馈过"海床太崎岖了，应该和原版一样的平滑"）。
          */
         DensityFunction medium = DensityFunctions.mul(
                 DensityFunctions.constant(0.67),
@@ -301,6 +299,27 @@ public final class OceanWorldGenerator {
         DensityFunction depth = DensityFunctions.yClampedGradient(
                 -64, SEA_LEVEL, -1.0, 1.0);
 
+        /*
+         * 改造点 3：**初步地表高度**必须按我们自己的密度算。
+         *
+         * 这个函数不参与地形本身，但它决定"表层规则"会不会生效 ——
+         * 原版 surface_rule 的最外层就是 {@code ifTrue(above_preliminary_surface())}，
+         * 沙/砾石/黏土这些海底沉积物全挂在里面；条件不成立就只剩裸石头。
+         *
+         * 踩过的坑：一开始直接沿用主世界那一份（它按主世界的密度算），
+         * 和自建海床完全对不上。实测后果：海床 **77.8% 是裸石头**、
+         * 沙只有 0.7%、还到处露着煤/铜/铁矿石 —— 而原版海洋应该是
+         * 砾石/沙为主（同一批抽样里沉积物只占 19.6%）。
+         *
+         * {@code findTopSurface(density, upperBound, lowerBound, cellHeight)}
+         * 的语义（字节码实证）：从 {@code upperBound} 求出的高度开始，
+         * 每 {@code cellHeight} 格往下找第一个**密度 > 0** 的高度，
+         * 找不到就返回 {@code lowerBound}。所以这里传：
+         *   起点 = 世界顶部（一定在海面之上）、下限 = 世界底部、步长 = 8（同原版）
+         */
+        DensityFunction preliminarySurface = DensityFunctions.findTopSurface(
+                finalDensity, DensityFunctions.constant(MAX_Y), MIN_Y, 8);
+
         return new NoiseRouter(
                 vanilla.barrierNoise(),
                 vanilla.fluidLevelFloodednessNoise(),
@@ -312,7 +331,7 @@ public final class OceanWorldGenerator {
                 vanilla.erosion(),
                 depth,               // ← 与自建海床一致的深度函数（供表面规则判断水下）
                 vanilla.ridges(),
-                vanilla.preliminarySurfaceLevel(),
+                preliminarySurface,  // ← 改造点 3：表层规则的开关（必须和地形自洽）
                 finalDensity,        // ← 改造点 2：地形
                 vanilla.veinToggle(),
                 vanilla.veinRidged(),
