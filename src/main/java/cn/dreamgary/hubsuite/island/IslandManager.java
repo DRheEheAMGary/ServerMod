@@ -298,7 +298,7 @@ public final class IslandManager {
             return config.oceanIslandY;
         }
         try {
-            return findWaterSurface(level, x, z) + 1;
+            return findWaterSurface(level, x, z) + OCEAN_ISLAND_ABOVE_WATER;
         } catch (Throwable t) {
             return 64;
         }
@@ -1087,7 +1087,7 @@ public final class IslandManager {
          * 实际最上层的水方块未必正好在那一格。与其猜，不如扫一遍。
          */
         int waterTop = findWaterSurface(level, center.getX(), center.getZ());
-        int topY = waterTop + 1;
+        int topY = waterTop + OCEAN_ISLAND_ABOVE_WATER;
 
         // 层配置里的 dy 是相对"地表基准"的，这里把基准挪到 topY。
         // 例如 0:grass_block → topY；-1:dirt → topY-1。
@@ -1216,6 +1216,16 @@ public final class IslandManager {
         return cn.dreamgary.hubsuite.world.OceanWorldGenerator.waterSurface();
     }
 
+    /**
+     * 海岛岛面相对**水面**的高度差（格）。
+     *
+     * <p>0 = 与水面齐平，1 = 高出水面一格。用户实测后要求"再往下一格"，
+     * 所以现在是 0（岛面正好和最上层的水方块同高）。
+     * 想微调就改这一个数 —— 锚点高度与地形铺设都用它，不会出现
+     * "地形在一层、出生点在另一层"的错位。
+     */
+    private static final int OCEAN_ISLAND_ABOVE_WATER = 0;
+
     /** 往下找海床的最大深度（防止在极深的海洋里铺太久）。 */
     private static final int MAX_SEABED_SEARCH = 48;
 
@@ -1232,7 +1242,40 @@ public final class IslandManager {
         }
     }
 
+    /**
+     * 在岛上种一棵树。
+     *
+     * <p><b>优先用原版的橡树特征</b>（{@code TreeFeatures.OAK}）——
+     * 手写的那版是"4 格树干 + 5×5×3 的树叶方块"，长出来是个方方正正的团，
+     * 跟原版树完全不像（用户反馈"空岛的树生成有问题"）。
+     * 原版特征会生成有枝干层次、树叶有随机缺损的正常橡树。
+     *
+     * <p>特征放置失败（例如位置不合法）时才回落到手写版本，保证岛上一定有树。
+     */
     private void placeTree(ServerLevel level, BlockPos base) {
+        try {
+            var features = level.registryAccess()
+                    .lookupOrThrow(net.minecraft.core.registries.Registries.CONFIGURED_FEATURE);
+            var oak = features.get(
+                    net.minecraft.data.worldgen.features.TreeFeatures.OAK).orElse(null);
+            if (oak != null) {
+                // 先把落脚点清出来（树苗位置上方要能长）
+                level.setBlockAndUpdate(base, Blocks.AIR.defaultBlockState());
+                if (oak.value().place(level, level.getChunkSource().getGenerator(),
+                        level.getRandom(), base)) {
+                    HubSuite.logger().debug("用原版橡树特征种树成功 @ {}", base);
+                    return;
+                }
+                HubSuite.logger().debug("原版橡树特征没有落地（位置可能不合适），回落到手写版本");
+            }
+        } catch (Throwable t) {
+            HubSuite.logger().debug("调用原版橡树特征失败，回落到手写版本：{}", t.toString());
+        }
+        placeTreeFallback(level, base);
+    }
+
+    /** 手写树（原版特征不可用时的兜底）。 */
+    private void placeTreeFallback(ServerLevel level, BlockPos base) {
         int trunk = 4;
         BlockState log = Blocks.OAK_LOG.defaultBlockState();
         BlockState leaves = Blocks.OAK_LEAVES.defaultBlockState()

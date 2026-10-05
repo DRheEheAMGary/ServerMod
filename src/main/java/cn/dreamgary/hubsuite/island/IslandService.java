@@ -276,8 +276,19 @@ public final class IslandService {
             if (!(target instanceof SubServer sub) || !sub.id().equals(server.id())) {
                 return null;
             }
-            SubServer.Entry destination = sub.entryFor(player);
-            Optional<Type> type = typeOf(destination.level());
+            /*
+             * ★ 必须用传进来的 level（PlayerRouter 已经解析好的目标维度），
+             *   绝不能再调一次 sub.entryFor(player)。
+             *
+             * 踩过的坑（用户反馈"海岛传空岛会落到 160,100,160 然后掉出世界"）：
+             * entryFor 的解析器里有 pendingDestination.remove(uuid) ——
+             * 它会**消费掉**"这次要去哪个岛型"的标记。而 PlayerRouter.sendTo
+             * 已经调用过一次 entryFor 拿到了目标维度，这里再调第二次时标记已经没了，
+             * 解析器只好退回"玩家当前所在的维度"——可玩家此刻**还在海岛**，
+             * 于是返回海岛条目：出生点按**海岛的岛坐标**算，传送目标却是**经典维度**，
+             * 结果人被丢进经典维度的虚空里，掉出世界后才被救援送回。
+             */
+            Optional<Type> type = typeOf(level);
             if (type.isEmpty()) {
                 return null;   // 大厅：用维度自己的出生点
             }

@@ -102,6 +102,7 @@ public final class SelfTest {
         step("子服入口绝不会是虚空主维度", this::checkEntryNeverVoid);
         step("菜单不会误吞真实容器的点击", this::checkMenuDoesNotEatRealContainers);
         step("开箱链路没有被事件处理器破坏", this::checkChestInteractionChainIntact);
+        step("岛型之间切换不会落错坐标", this::checkIslandSwitchLandsCorrectly);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -2203,12 +2204,15 @@ public final class SelfTest {
             var topState = level.getBlockState(topPos);
             if (topState.is(net.minecraft.world.level.block.Blocks.GRASS_BLOCK)) {
                 ok("海岛顶面是草方块（Y=" + center.getY()
-                        + (waterTop > 0 ? "，高出水面 " + (center.getY() - waterTop) + " 格" : "") + "）");
+                        + (waterTop > 0
+                            ? "，高出水面 " + (center.getY() - waterTop) + " 格" : "") + "）");
             } else {
                 fail("海岛顶面不是草方块：Y=" + center.getY() + " 处是 " + topState);
             }
-            if (waterTop > 0 && center.getY() - waterTop != 1) {
-                fail("岛顶高出水面 " + (center.getY() - waterTop) + " 格，应该是 1 格");
+            // 岛面高度由 IslandManager.OCEAN_ISLAND_ABOVE_WATER 决定，
+            // 当前配置是 0（与水面齐平）
+            if (waterTop > 0 && center.getY() - waterTop != 0) {
+                fail("岛顶高出水面 " + (center.getY() - waterTop) + " 格，应该是 0 格（与水面齐平）");
             }
 
             // 2) 顶面之上必须是空气（不会被水淹）
@@ -3035,6 +3039,98 @@ public final class SelfTest {
             fail("开箱链路检查异常：" + t);
         } finally {
             try {
+                ocean.manager().delete(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 在经典空岛与海岛之间切换时，必须落在**目标岛型自己的岛**上。
+     *
+     * <p>锁住用户反馈的"海岛传空岛会落到 160,100,160 然后掉出世界"：
+     * 出生点解析器曾经重新调用一次 {@code entryFor()}，而它会消费掉
+     * "这次要去哪个岛型"的标记 —— 第二次调用只好退回"玩家当前所在维度"，
+     * 于是出生点按**海岛的坐标**算、传送目标却是**经典维度**，
+     * 人落在经典维度的虚空里。
+     */
+    private void checkIslandSwitchLandsCorrectly() {
+        var islands = HubSuite.islands();
+        if (islands == null) {
+            fail("空岛服务未初始化");
+            return;
+        }
+        var classic = islands.type("classic").orElse(null);
+        var ocean = islands.type("ocean").orElse(null);
+        if (classic == null || ocean == null) {
+            fail("缺少 classic / ocean 岛型");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_switch",
+                worlds.lobby().orElseThrow().level(), false);
+        if (probe == null) {
+            fail("切换测试用假玩家创建失败");
+            return;
+        }
+        try {
+            // 1) 先建两个岛（一个人可以各有一座）
+            var classicIsland = classic.manager().getOrCreate(
+                    probe.getUUID(), probe.getName().getString(), "classic");
+            var oceanIsland = ocean.manager().getOrCreate(
+                    probe.getUUID(), probe.getName().getString(), "ocean");
+            var classicAnchor = classic.manager().anchorOf(classicIsland);
+            var oceanAnchor = ocean.manager().anchorOf(oceanIsland);
+
+            // 2) 进海岛
+            islands.visit(probe, "ocean");
+            if (!ocean.entry().dimension().equals(probe.level().dimension())) {
+                fail("没能进入海岛维度，当前 " + probe.level().dimension().identifier());
+                return;
+            }
+            double dOcean = Math.hypot(probe.getX() - (oceanAnchor.getX() + 0.5),
+                    probe.getZ() - (oceanAnchor.getZ() + 0.5));
+            if (dOcean > 6) {
+                fail(String.format("进海岛后离自己的岛 %.1f 格（应该 ≤6）", dOcean));
+            } else {
+                ok(String.format("进海岛落在自己的岛上（距岛中心 %.1f 格）", dOcean));
+            }
+
+            // 3) 从海岛切到经典空岛 —— 这是出问题的那条路径
+            islands.visit(probe, "classic");
+            var nowDim = probe.level().dimension();
+            if (!classic.entry().dimension().equals(nowDim)) {
+                fail("从海岛切经典空岛后不在经典维度，当前 " + nowDim.identifier());
+                return;
+            }
+            double dClassic = Math.hypot(probe.getX() - (classicAnchor.getX() + 0.5),
+                    probe.getZ() - (classicAnchor.getZ() + 0.5));
+            if (dClassic > 6) {
+                fail(String.format(
+                        "从海岛切经典空岛后落在 (%.0f, %.0f, %.0f)，离自己的经典岛 %.1f 格 —— "
+                                + "出生点用了另一个岛型的坐标（会掉进虚空）",
+                        probe.getX(), probe.getY(), probe.getZ(), dClassic));
+            } else {
+                ok(String.format("从海岛切经典空岛落在自己的岛上（距岛中心 %.1f 格）", dClassic));
+            }
+
+            // 4) 再切回海岛，同样要落在自己岛上
+            islands.visit(probe, "ocean");
+            double dBack = Math.hypot(probe.getX() - (oceanAnchor.getX() + 0.5),
+                    probe.getZ() - (oceanAnchor.getZ() + 0.5));
+            if (!ocean.entry().dimension().equals(probe.level().dimension()) || dBack > 6) {
+                fail(String.format("从经典切回海岛后落在 %s (%.0f,%.0f,%.0f)，距岛 %.1f 格",
+                        probe.level().dimension().identifier(),
+                        probe.getX(), probe.getY(), probe.getZ(), dBack));
+            } else {
+                ok(String.format("从经典切回海岛落在自己的岛上（距岛中心 %.1f 格）", dBack));
+            }
+        } catch (Throwable t) {
+            fail("岛型切换检查异常：" + t);
+        } finally {
+            try {
+                classic.manager().delete(probe.getUUID());
                 ocean.manager().delete(probe.getUUID());
                 server.getPlayerList().remove(probe);
             } catch (Throwable ignored) {
