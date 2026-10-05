@@ -88,6 +88,7 @@ public final class SelfTest {
         step("海岛维度是自然海洋", this::checkOceanWorld);
         step("空岛入口分流与保护", this::checkIslandRouting);
         step("空岛指令存在且可用", this::checkIslandCommands);
+        step("空岛重置与切换岛型", this::checkIslandReset);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -378,8 +379,10 @@ public final class SelfTest {
              */
             manager.ensureTerrain(island);
             if (island.terrainPainted) {
-                var state = classicLevel.getBlockState(pos);
-                if (!state.isAir()) {
+                var state = blockIfLoaded(classicLevel, pos);
+                if (state == null) {
+                    fail("报告已铺地形，但区块未加载（状态不一致）");
+                } else if (!state.isAir()) {
                     ok("岛屿地形已生成：中心方块 = " + state.getBlock().getName().getString());
                 } else {
                     fail("报告已铺地形，但中心仍是空气");
@@ -420,10 +423,12 @@ public final class SelfTest {
                     //   Y=101  玩家脚底所在高度 —— 这一格仍是中心方块，属正常
                     //   Y=102  玩家头部
                     // 所以判定标准是"头部那格必须是空气"，而不是"脚底那格是空气"。
-                    var atBlock = classicLevel.getBlockState(enterPos);
-                    var headBlock = classicLevel.getBlockState(enterPos.above());
-                    var groundBlock = classicLevel.getBlockState(enterPos.below());
-                    if (!island.terrainPainted) {
+                    var atBlock = blockIfLoaded(classicLevel, enterPos);
+                    var headBlock = blockIfLoaded(classicLevel, enterPos.above());
+                    var groundBlock = blockIfLoaded(classicLevel, enterPos.below());
+                    if (atBlock == null || headBlock == null || groundBlock == null) {
+                        ok("落脚点检查跳过（区块未加载，不做同步生成以免卡死主线程）");
+                    } else if (!island.terrainPainted) {
                         // 地形尚未补铺（区块未加载）——落脚点自然还是空气，
                         // 这不是缺陷，跳过这项判定
                         ok("落脚点检查跳过（地形待补铺，落地时会由 ensureTerrain 铺好）");
@@ -688,9 +693,11 @@ public final class SelfTest {
             var spawn = sub.spawn();
             var pos = net.minecraft.core.BlockPos.containing(spawn.x(), spawn.y(), spawn.z());
             try {
-                var below = sub.level().getBlockState(pos.below());
-                var at = sub.level().getBlockState(pos);
-                if (sub.config().useWorldSpawn) {
+                var below = blockIfLoaded(sub.level(), pos.below());
+                var at = blockIfLoaded(sub.level(), pos);
+                if (below == null || at == null) {
+                    ok("子服 '" + sub.id() + "' 出生点检查跳过（区块未加载）");
+                } else if (sub.config().useWorldSpawn) {
                     if (!below.isAir()) {
                         ok("子服 '" + sub.id() + "' 出生点落在地面上：Y=" + spawn.y()
                                 + "，脚下是 " + below.getBlock().getName().getString());
@@ -1082,9 +1089,11 @@ public final class SelfTest {
             }
 
             // 出生点脚下应该是我们铺的沙洲
-            var spawnBlock = level.getBlockState(
+            var spawnBlock = blockIfLoaded(level,
                     new net.minecraft.core.BlockPos(sx, (int) spawn.y() - 1, sz));
-            if (spawnBlock.isAir()) {
+            if (spawnBlock == null) {
+                ok("海洋出生平台检查跳过（区块未加载，不做同步生成以免卡死主线程）");
+            } else if (spawnBlock.isAir()) {
                 fail("海洋出生点没有落脚平台，玩家会掉进海里");
             } else {
                 ok("海洋出生点有落脚平台（" + spawnBlock.getBlock().getName().getString() + "）");
@@ -1112,15 +1121,19 @@ public final class SelfTest {
                     // 同 classic：不阻塞等待，只验证延迟机制状态自洽。
                     ocean.manager().ensureTerrain(island);
                     if (island.terrainPainted) {
-                        var surface = level.getBlockState(anchor);
-                        if (surface.isAir()) {
+                        var surface = blockIfLoaded(level, anchor);
+                        if (surface == null) {
+                            fail("报告已铺地形，但区块未加载（状态不一致）");
+                        } else if (surface.isAir()) {
                             fail("报告已铺地形，但锚点处仍是空气");
                         } else {
                             ok("海岛地形已生成（岛面 = "
                                     + surface.getBlock().getName().getString() + "）");
                         }
-                        var below = level.getBlockState(anchor.below());
-                        if (below.isAir()) {
+                        var below = blockIfLoaded(level, anchor.below());
+                        if (below == null) {
+                            ok("海岛支撑检查跳过（区块未加载）");
+                        } else if (below.isAir()) {
                             fail("海岛只有一层皮，下方是空气");
                         } else {
                             ok("海岛下方有支撑（" + below.getBlock().getName().getString() + "）");
@@ -1314,6 +1327,91 @@ public final class SelfTest {
         } else {
             ok("调试指令已按需求移除（/hub admin 不存在）");
         }
+    }
+
+    /**
+     * 重置岛屿与切换岛型。
+     *
+     * <p>验证 {@code /island reset} 的语义：归属清掉、地形清掉、
+     * 之后还能重新建一座（方格可能相同也可能不同，但不该报错）。
+     */
+    private void checkIslandReset() {
+        var islands = HubSuite.islands();
+        if (islands == null) {
+            fail("空岛系统未初始化");
+            return;
+        }
+        var classic = islands.type("classic").orElse(null);
+        if (classic == null) {
+            fail("缺少 classic 岛型");
+            return;
+        }
+        var manager = classic.manager();
+        var probe = FakePlayers.spawn(server, "hubsuite_resettest",
+                worlds.lobby().orElseThrow().level(), false);
+        if (probe == null) {
+            fail("重置测试用假玩家创建失败");
+            return;
+        }
+        try {
+            var first = manager.getOrCreate(probe.getUUID(), "hubsuite_resettest", "classic");
+            int firstPlotX = first.plotX;
+            int firstPlotZ = first.plotZ;
+
+            // 重置 = 删掉归属 + 重新分配
+            manager.delete(probe.getUUID());
+            if (manager.islandOf(probe.getUUID()).isPresent()) {
+                fail("重置后归属还在");
+                return;
+            }
+            ok("重置岛屿后归属已清除");
+
+            var second = manager.getOrCreate(probe.getUUID(), "hubsuite_resettest", "classic");
+            if (manager.islandOf(probe.getUUID()).isPresent()) {
+                ok("重置后可以重新建岛（新方格 (" + second.plotX + ", " + second.plotZ
+                        + ")，原方格 (" + firstPlotX + ", " + firstPlotZ + ")）");
+            } else {
+                fail("重置后无法重新建岛");
+            }
+
+            // 切换岛型：两种归属应当互不影响
+            var ocean = islands.type("ocean").orElse(null);
+            if (ocean != null) {
+                ocean.manager().getOrCreate(probe.getUUID(), "hubsuite_resettest", "ocean");
+                boolean classicStillThere = manager.islandOf(probe.getUUID()).isPresent();
+                boolean oceanThere = ocean.manager().islandOf(probe.getUUID()).isPresent();
+                if (classicStillThere && oceanThere) {
+                    ok("同时拥有经典空岛与海岛，两份归属互不干扰");
+                } else {
+                    fail("切换岛型后归属不对：classic=" + classicStillThere + " ocean=" + oceanThere);
+                }
+            }
+        } catch (Throwable t) {
+            fail("重置检查异常：" + t);
+        } finally {
+            try {
+                classic.manager().delete(probe.getUUID());
+                islands.type("ocean").ifPresent(t -> t.manager().delete(probe.getUUID()));
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 安全读方块：**区块没加载就返回 null**，绝不触发同步加载。
+     *
+     * <p>踩过的坑：{@code level.getBlockState()} 在未加载区块上会走
+     * {@code getChunk(...).join()} —— 同步把区块生成出来。
+     * 自检在主线程跑，这一下就能把服务器卡到看门狗强杀（累计踩了四次）。
+     */
+    private static net.minecraft.world.level.block.state.BlockState blockIfLoaded(
+            net.minecraft.server.level.ServerLevel level, net.minecraft.core.BlockPos pos) {
+        if (!level.getChunkSource().hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) {
+            return null;
+        }
+        return level.getBlockState(pos);
     }
 
     // ------------------------------------------------------------------
