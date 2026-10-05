@@ -121,6 +121,10 @@ public final class IslandManager {
      * 之后必须有人重试 —— 否则玩家被传送到一座空岛上方，直接掉进海里/虚空，
      * 而岛**永远不会生成**（实测踩过）。
      */
+    /** 已经放过结构的区块（避免多座岛把结构堆在同一处）。 */
+    private final java.util.Set<Long> placedStructureChunks =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     private final java.util.Set<String> pendingTerrain =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -1016,6 +1020,21 @@ public final class IslandManager {
             pendingTerrain.add(island.player);
             return false;
         }
+        // 地形铺好后，在岛附近补一个海洋结构（沉船 / 海底废墟）。
+        //
+        // 为什么定向补而不是改全局结构密度：结构频率写在原版的 structure_set
+        // 数据里，是**全局注册表** —— 覆盖它会连生存服和创造服一起改掉。
+        // 玩家实际会探索的就是自己岛附近，定向补既能满足"出海能看到东西"，
+        // 又不影响其它维度。
+        if (isOceanPlacement()) {
+            try {
+                cn.dreamgary.hubsuite.world.OceanStructures.placeNear(level, center, island.anchorX * 31L + island.anchorZ,
+                        placedStructureChunks);
+            } catch (Throwable t) {
+                HubSuite.logger().warn("补放海洋结构失败（不影响岛屿）：{}", t.toString());
+            }
+        }
+
         island.terrainPainted = true;
         return true;
     }

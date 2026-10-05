@@ -70,7 +70,7 @@ public final class OceanWorldGenerator {
      * <p>中尺度 + 细尺度两个噪声各占一半，合起来幅度约 ±1，
      * 乘上这个系数就是"格"。
      */
-    private static final double DETAIL_VARIATION = 5.0;
+    private static final double DETAIL_VARIATION = 4.0;
 
     /** 世界最低层（与 NoiseSettings.create(-64, 384, 1, 2) 对应）。 */
     private static final int MIN_Y = -64;
@@ -243,14 +243,22 @@ public final class OceanWorldGenerator {
          * 相当于提高频率。这里叠一个中尺度（波长约 100 格）和一个细尺度
          * （波长约 30 格），做出自然的丘陵感。
          */
+        /*
+         * 频率要**贴近原版**：原版海底的起伏尺度是几百格一级，
+         * 近看很平滑，不会出现密集的小疙瘩。
+         *
+         * 第一版用了 xz×5 与 xz×16（波长约 100 / 30 格），用户反馈
+         * "海床太崎岖了，应该和原版一样的平滑"。这里降到 xz×1.5 与 xz×4
+         * （波长约 340 / 128 格），并把细尺度的权重压到 1/3。
+         */
         DensityFunction medium = DensityFunctions.mul(
-                DensityFunctions.constant(0.5),
+                DensityFunctions.constant(0.67),
                 DensityFunctions.noise(noises.getOrThrow(
-                        net.minecraft.world.level.levelgen.Noises.EROSION), 5.0, 2.0));
+                        net.minecraft.world.level.levelgen.Noises.EROSION), 1.5, 1.0));
         DensityFunction fine = DensityFunctions.mul(
-                DensityFunctions.constant(0.5),
+                DensityFunctions.constant(0.33),
                 DensityFunctions.noise(noises.getOrThrow(
-                        net.minecraft.world.level.levelgen.Noises.SURFACE), 16.0, 8.0));
+                        net.minecraft.world.level.levelgen.Noises.SURFACE), 4.0, 2.0));
         DensityFunction detail = DensityFunctions.add(medium, fine);
 
         DensityFunction finalDensity = seabedDensity(continents, detail);

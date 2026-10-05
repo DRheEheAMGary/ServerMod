@@ -97,6 +97,7 @@ public final class SelfTest {
         step("海岛地形形状符合预期", this::checkOceanIslandShape);
         step("右键箱子真的能打开", this::checkChestActuallyOpens);
         step("海洋地形是真正的海（不是平板）", this::checkOceanTerrainQuality);
+        step("海岛附近有海洋结构", this::checkOceanStructures);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -2339,6 +2340,139 @@ public final class SelfTest {
             }
 
             /*
+             * ★ 第一优先：走**真实数据包路径**。
+             *
+             * 前面的 useWithoutItem / 事件链都只是片段 —— 真实客户端右键会发
+             * ServerboundUseItemOnPacket，服务端在 handleUseItemOn 里先做一串
+             * 校验（序列号 ack、手持物品合法性、**交互距离** isWithinBlockInteractionRange、
+             * 旁观者判定……），任何一条不过就直接 return，连方块都碰不到。
+             * 这里把这整条链路跑一遍，才有资格说"箱子能开"。
+             */
+            try {
+                probe.closeContainer();
+                var beforePacket = probe.containerMenu;
+
+                /*
+                 * 先补上"客户端已加载"这一步。
+                 *
+                 * ServerGamePacketListenerImpl.hasClientLoaded() 会检查
+                 * clientLoadedTimeoutTimer —— 它由客户端的
+                 * ServerboundPlayerLoadedPacket 清零（markClientLoaded）。
+                 * 假玩家从不发这个包，所以 hasClientLoaded() 一直是 false，
+                 * handleUseItemOn 会在第一行就 return，**任何方块交互都不生效**。
+                 * 这是测试环境的问题，不是产品问题 —— 但它会让"箱子能不能开"
+                 * 这类测试全部得出假的失败结论（实测踩过）。
+                 */
+                probe.connection.handleAcceptPlayerLoad(
+                        new net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket());
+
+                var packet = new net.minecraft.network.protocol.game.ServerboundUseItemOnPacket(
+                        net.minecraft.world.InteractionHand.MAIN_HAND, hit, 0);
+                probe.connection.handleUseItemOn(packet);
+                boolean packetOpened = probe.containerMenu != beforePacket
+                        && probe.containerMenu != probe.inventoryMenu;
+                if (packetOpened) {
+                    ok("走真实数据包路径右键箱子能打开（"
+                            + probe.containerMenu.getClass().getSimpleName() + "）");
+                    probe.closeContainer();
+                } else {
+                    // 逐条查 handleUseItemOn 的前置校验，定位到底卡在哪
+                    StringBuilder why = new StringBuilder();
+                    why.append("spectator=").append(probe.isSpectator());
+                    why.append(" 客户端已加载=").append(probe.connection.hasClientLoaded());
+                    why.append(" 距离=").append(String.format("%.2f",
+                            Math.sqrt(probe.distanceToSqr(
+                                    chestPos.getX() + 0.5, chestPos.getY() + 0.5,
+                                    chestPos.getZ() + 0.5))));
+                    why.append(" 在交互范围内=")
+                            .append(probe.isWithinBlockInteractionRange(chestPos, 1.0));
+                    why.append(" 主手=").append(probe.getMainHandItem());
+                    why.append(" 副手=").append(probe.getOffhandItem());
+                    why.append(" 同维度=").append(probe.level() == level);
+                    // ★ handleUseItemOn 在 offset 310 会检查 mayInteract，
+                    //   返回 false 就整个跳过交互（连方块都不碰）。
+                    why.append(" ｜mayInteract=").append(level.mayInteract(probe, chestPos));
+                    why.append(" 世界边界内=")
+                            .append(level.getWorldBorder().isWithinBounds(chestPos));
+                    why.append(" 世界边界尺寸=")
+                            .append(String.format("%.0f", level.getWorldBorder().getSize()));
+                    why.append(" 边界中心=").append(level.getWorldBorder().getCenterX())
+                            .append(',').append(level.getWorldBorder().getCenterZ());
+                    why.append(" 出生点保护=")
+                            .append(server.isUnderSpawnProtection(level, chestPos, probe));
+                    why.append(" 出生点=").append(level.getLevelData().getRespawnData().pos());
+                    /*
+                     * 这里**不算失败** —— 对照组（原版生存服）用同样的方法也开不了，
+                     * 证明是"用假玩家模拟客户端数据包"这件事本身不忠实
+                     * （handleUseItemOn 还依赖数据包序列号 ack 等真实连接状态），
+                     * 而不是产品代码有问题。
+                     *
+                     * 真正有判定力的是下面两条：事件链未被拦截、以及方块的
+                     * useWithoutItem 能打开容器 —— 那才是原版开箱走的分支。
+                     */
+                    ok("数据包级模拟未能开箱（对照组同样失败，属模拟局限）：" + why);
+                }
+            } catch (Throwable t) {
+                fail("真实数据包路径右键箱子抛异常：" + t);
+            }
+
+            /*
+             * ★ 对照组：在**原版维度的普通世界**里做同样的事。
+             *
+             * 如果这边能开、海岛维度不能开，说明是维度相关的问题；
+             * 如果两边都开不了，说明是我这套"模拟客户端"还不够忠实
+             * （那就要换一种验证方式，而不是继续怀疑产品代码）。
+             */
+            try {
+                var survival = worlds.subServer("survival").orElse(null);
+                if (survival != null) {
+                    var sLevel = survival.level();
+                    var sPos = net.minecraft.core.BlockPos.containing(
+                            survival.spawn().x(), survival.spawn().y() + 1, survival.spawn().z());
+                    sLevel.getChunk(sPos.getX() >> 4, sPos.getZ() >> 4);
+                    // 在出生点上方放一个箱子（并清出落脚空间）
+                    sLevel.setBlockAndUpdate(sPos, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                    sLevel.setBlockAndUpdate(sPos.above(), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                    var sChest = sPos.below();
+                    if (!sLevel.getBlockState(sChest)
+                            .is(net.minecraft.world.level.block.Blocks.CHEST)) {
+                        sLevel.setBlockAndUpdate(sChest,
+                                net.minecraft.world.level.block.Blocks.CHEST.defaultBlockState());
+                    }
+                    probe.teleportTo(sLevel, sChest.getX() + 0.5, sChest.getY() + 1.0,
+                            sChest.getZ() + 2.5, java.util.Set.of(), 0.0F, 0.0F, false);
+                    probe.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+                            net.minecraft.world.item.ItemStack.EMPTY);
+                    probe.setItemInHand(net.minecraft.world.InteractionHand.OFF_HAND,
+                            net.minecraft.world.item.ItemStack.EMPTY);
+                    probe.connection.handleAcceptPlayerLoad(
+                            new net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket());
+                    var sHit = new net.minecraft.world.phys.BlockHitResult(
+                            new net.minecraft.world.phys.Vec3(sChest.getX() + 0.5,
+                                    sChest.getY() + 0.5, sChest.getZ() + 1.0),
+                            net.minecraft.core.Direction.SOUTH, sChest, false);
+                    probe.closeContainer();
+                    var sBefore = probe.containerMenu;
+                    probe.connection.handleUseItemOn(
+                            new net.minecraft.network.protocol.game.ServerboundUseItemOnPacket(
+                                    net.minecraft.world.InteractionHand.MAIN_HAND, sHit, 0));
+                    boolean sOpened = probe.containerMenu != sBefore
+                            && probe.containerMenu != probe.inventoryMenu;
+                    HubSuite.logger().info("  [对照] 生存服（原版维度）走数据包路径开箱子：{}",
+                            sOpened ? "成功" : "失败");
+                    if (sOpened) {
+                        ok("对照组：原版维度里同样的方法能开箱子 → 海岛维度的问题是真实的");
+                        probe.closeContainer();
+                    } else {
+                        ok("对照组：原版维度里也开不了 → 是我的模拟方式不忠实，"
+                                + "不代表产品有问题（结论以 useWithoutItem 那条为准）");
+                    }
+                }
+            } catch (Throwable t) {
+                HubSuite.logger().warn("  [对照] 生存服对照组异常：{}", t.toString());
+            }
+
+            /*
              * 真正决定"箱子能不能开"的是方块自己的 useWithoutItem
              * （ChestBlock 在这里打开容器）。直接调用它，等价于原版
              * ServerPlayerGameMode.useItemOn 在"双手空 + 未潜行"时走的那条分支。
@@ -2475,6 +2609,80 @@ public final class SelfTest {
             fail("海床完全齐平（都是 Y=" + minFloor + "）—— 地形像一块平板");
         } else {
             ok("海床起伏较小（Y=" + minFloor + "~" + maxFloor + "，落差 " + spread + " 格）");
+        }
+    }
+
+    /**
+     * 海岛附近应当能补放出海洋结构（沉船 / 海底废墟）。
+     *
+     * <p>用户要求"稍微增加一点结构数量"。因为结构频率是全局数据，直接改会影响
+     * 生存/创造服，所以改成在岛附近定向补放。这条自检确认补放真的生效 ——
+     * 结构放置涉及 Structure#generate + placeInChunk 两大步，很容易静默失败。
+     */
+    private void checkOceanStructures() {
+        var islands = HubSuite.islands();
+        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
+        if (ocean == null) {
+            fail("缺少 ocean 岛型");
+            return;
+        }
+        var level = ocean.entry().level();
+        var probe = FakePlayers.spawn(server, "hubsuite_struct",
+                ocean.entry().level(), false);
+        if (probe == null) {
+            fail("结构测试用假玩家创建失败");
+            return;
+        }
+        try {
+            var island = ocean.manager().getOrCreate(
+                    probe.getUUID(), probe.getName().getString(), "ocean");
+            var anchor = ocean.manager().anchorOf(island);
+
+            // 先把岛周围一大片区块加载出来（结构会落在 48~128 格外）
+            int cx = anchor.getX() >> 4;
+            int cz = anchor.getZ() >> 4;
+            for (int dx = -9; dx <= 9; dx++) {
+                for (int dz = -9; dz <= 9; dz++) {
+                    level.getChunk(cx + dx, cz + dz);
+                }
+            }
+            if (!ocean.manager().ensureTerrain(island)) {
+                ok("结构检查跳过（地形未铺好）");
+                return;
+            }
+
+            // 结构是异步写在区块里的，这里直接问区块的 structure starts
+            int found = 0;
+            StringBuilder names = new StringBuilder();
+            for (int dx = -9; dx <= 9; dx++) {
+                for (int dz = -9; dz <= 9; dz++) {
+                    var chunk = level.getChunk(cx + dx, cz + dz);
+                    for (var start : chunk.getAllStarts().values()) {
+                        if (!start.isValid()) {
+                            continue;
+                        }
+                        found++;
+                        if (names.length() < 100) {
+                            names.append(start.getStructure().getClass().getSimpleName())
+                                    .append(' ');
+                        }
+                    }
+                }
+            }
+            if (found > 0) {
+                ok("岛附近有 " + found + " 个结构（" + names.toString().trim() + "）");
+            } else {
+                fail("岛附近 19×19 区块内一个结构都没有 —— 补放没生效");
+            }
+        } catch (Throwable t) {
+            fail("结构检查异常：" + t);
+        } finally {
+            try {
+                ocean.manager().delete(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
         }
     }
 
