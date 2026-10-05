@@ -103,6 +103,7 @@ public final class SelfTest {
         step("菜单不会误吞真实容器的点击", this::checkMenuDoesNotEatRealContainers);
         step("开箱链路没有被事件处理器破坏", this::checkChestInteractionChainIntact);
         step("岛型之间切换不会落错坐标", this::checkIslandSwitchLandsCorrectly);
+        step("空岛的树完整（树干固定 3 格、树冠无空洞）", this::checkIslandTree);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -3132,6 +3133,115 @@ public final class SelfTest {
             try {
                 classic.manager().delete(probe.getUUID());
                 ocean.manager().delete(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 空岛的树必须**完整**：固定 3 格树干，树冠不能有 3×3 的空气洞。
+     *
+     * <p>锁住用户反馈的"树的接近一半树叶消失，中心 3×3 那块变成空气"：
+     * 建岛流程里在种树**之后**还有一次 {@code clearAbove(spawnPos, 1, 5)} ——
+     * 一个以落脚点为中心、半径 1、高 5 的立方体。而树在 center+(2,0)、
+     * 树冠半径 2，覆盖 center.x+0 .. center.x+4，**与那个 3×3 区域必然重叠**，
+     * 于是树冠被挖掉一大块。
+     *
+     * <p>这条自检逐格验证树干与树冠，任何"被清掉"都会立刻暴露。
+     */
+    private void checkIslandTree() {
+        var islands = HubSuite.islands();
+        var classic = islands == null ? null : islands.type("classic").orElse(null);
+        if (classic == null) {
+            fail("缺少 classic 岛型");
+            return;
+        }
+        var level = classic.entry().level();
+        var probe = FakePlayers.spawn(server, "hubsuite_tree",
+                classic.entry().level(), false);
+        if (probe == null) {
+            fail("树检查用假玩家创建失败");
+            return;
+        }
+        try {
+            var island = classic.manager().getOrCreate(
+                    probe.getUUID(), probe.getName().getString(), "classic");
+            var center = classic.manager().anchorOf(island);
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    level.getChunk(center.getX() / 16 + dx, center.getZ() / 16 + dz);
+                }
+            }
+            if (!classic.manager().ensureTerrain(island)) {
+                ok("树检查跳过（地形未铺好）");
+                return;
+            }
+
+            // 树的位置与 IslandManager 内部约定一致：center + (2, 1, 0)
+            var trunkBase = center.offset(2, 1, 0);
+            var log = net.minecraft.world.level.block.Blocks.OAK_LOG;
+            var leaves = net.minecraft.world.level.block.Blocks.OAK_LEAVES;
+
+            // 1) 树干固定 3 格
+            int trunkFound = 0;
+            for (int i = 0; i < 3; i++) {
+                if (level.getBlockState(trunkBase.offset(0, i, 0)).is(log)) {
+                    trunkFound++;
+                }
+            }
+            if (trunkFound == 3) {
+                ok("树干固定 3 格（" + trunkBase + " 起）");
+            } else {
+                fail("树干只有 " + trunkFound + "/3 格在原木位置 —— 树被挖掉了一部分");
+            }
+
+            /*
+             * 2) 树冠不能有空洞。
+             *
+             * 逐格核对预期形状（两层 5×5 去四角 + 一层 3×3 去四角 + 顶盖）：
+             * 凡是我们应该放树叶的位置，都必须真的是树叶或被树干占据。
+             */
+            int expected = 0;
+            int missing = 0;
+            StringBuilder holes = new StringBuilder();
+            int topY = trunkBase.getY() + 2;
+            for (int layer = 0; layer <= 2; layer++) {
+                int r = layer <= 1 ? 2 : 1;
+                for (int dx = -r; dx <= r; dx++) {
+                    for (int dz = -r; dz <= r; dz++) {
+                        if (Math.abs(dx) == r && Math.abs(dz) == r) {
+                            continue;
+                        }
+                        var pos = new net.minecraft.core.BlockPos(
+                                trunkBase.getX() + dx, topY + layer, trunkBase.getZ() + dz);
+                        var st = level.getBlockState(pos);
+                        if (st.is(log)) {
+                            continue;   // 树干占据的位置不算洞
+                        }
+                        expected++;
+                        if (!st.is(leaves)) {
+                            missing++;
+                            if (holes.length() < 120) {
+                                holes.append('(').append(dx).append(',').append(layer)
+                                        .append(',').append(dz).append(')');
+                            }
+                        }
+                    }
+                }
+            }
+            if (missing == 0) {
+                ok("树冠完整：预期 " + expected + " 格树叶全部在位（没有 3×3 空洞）");
+            } else {
+                fail("树冠缺了 " + missing + "/" + expected + " 格树叶，缺失位置（相对树干）："
+                        + holes);
+            }
+        } catch (Throwable t) {
+            fail("树检查异常：" + t);
+        } finally {
+            try {
+                classic.manager().delete(probe.getUUID());
                 server.getPlayerList().remove(probe);
             } catch (Throwable ignored) {
                 // 忽略

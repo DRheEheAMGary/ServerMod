@@ -967,12 +967,26 @@ public final class IslandManager {
                     GENERATE_BUDGET_MS, island.plotX, island.plotZ);
         }
 
-        // 3c) 兜底：种树/放箱子之后再清一次落脚点，保证玩家一定不会被埋
-        //
-        //     树与箱子都在 +X/+Z 象限，落脚点在 −X/−Z，正常不会重叠；
-        //     这一步是防护性的 —— 万一以后改了树形或加了装饰，
-        //     也不会出现"出生卡在方块里"。
-        clearAbove(level, spawnPos, 1, 5);
+        /*
+         * 3c) 落脚点兜底：**只清落脚点那一根柱子**，绝不扩到 3×3。
+         *
+         * 踩过的坑（用户反馈"树接近一半树叶消失，中心 3×3 变成空气"）：
+         * 这里原来是 clearAbove(spawnPos, 1, 5) —— 一个以落脚点为中心、
+         * 半径 1、高 5 的**立方体**。而树在 center+(2,0)、树冠半径 2，
+         * 覆盖 center.x+0 .. center.x+4，与那个 3×3 区域**必然重叠**，
+         * 于是树冠被挖掉一大块。
+         *
+         * 而且它跑在种树**之后**（925 行那次在种树之前，是对的），
+         * 所以挖掉的正是已经种好的树叶。
+         *
+         * 玩家真正需要空出来的只有**脚下和头顶**这两格
+         * （落脚点 y 与 y+1），所以这里清 1×1×2。
+         *
+         * 为什么高度必须压到 2：树冠最低那层在 y+3、再上一层在 y+4
+         * （树干 3 格 + 树冠），清到 +3 就会把那两格树叶打掉 ——
+         * 自检实测"树冠缺了 2/46 格树叶，位置 (-2,0,0)(-2,1,0)"。
+         */
+        clearAbove(level, spawnPos, 0, 1);
 
         // 4) 校验：中心方块必须已经被写成实体方块，否则说明生成失败
         var state = level.getBlockState(center);
@@ -1243,61 +1257,67 @@ public final class IslandManager {
     }
 
     /**
-     * 在岛上种一棵树。
+     * 在岛上种一棵树：**固定 3 格树干**的原版橡树形状。
      *
-     * <p><b>优先用原版的橡树特征</b>（{@code TreeFeatures.OAK}）——
-     * 手写的那版是"4 格树干 + 5×5×3 的树叶方块"，长出来是个方方正正的团，
-     * 跟原版树完全不像（用户反馈"空岛的树生成有问题"）。
-     * 原版特征会生成有枝干层次、树叶有随机缺损的正常橡树。
+     * <p>为什么不用 {@code TreeFeatures.OAK}：原版橡树的高度是随机的（4~6），
+     * 而空岛需要**确定性** —— 固定 3 格树干，树冠大小也固定，
+     * 这样岛的外观每次重建都一致，也不会因为树太高顶到上方结构。
      *
-     * <p>特征放置失败（例如位置不合法）时才回落到手写版本，保证岛上一定有树。
+     * <p>形状照抄原版小橡树：两层 5×5（去掉四角）+ 一层 3×3 + 顶盖一格，
+     * 所以看起来是有层次的圆冠，而不是一个方块团。
+     *
+     * <p>只覆盖**空气**，不会把树干替换掉。
      */
     private void placeTree(ServerLevel level, BlockPos base) {
-        try {
-            var features = level.registryAccess()
-                    .lookupOrThrow(net.minecraft.core.registries.Registries.CONFIGURED_FEATURE);
-            var oak = features.get(
-                    net.minecraft.data.worldgen.features.TreeFeatures.OAK).orElse(null);
-            if (oak != null) {
-                // 先把落脚点清出来（树苗位置上方要能长）
-                level.setBlockAndUpdate(base, Blocks.AIR.defaultBlockState());
-                if (oak.value().place(level, level.getChunkSource().getGenerator(),
-                        level.getRandom(), base)) {
-                    HubSuite.logger().debug("用原版橡树特征种树成功 @ {}", base);
-                    return;
-                }
-                HubSuite.logger().debug("原版橡树特征没有落地（位置可能不合适），回落到手写版本");
-            }
-        } catch (Throwable t) {
-            HubSuite.logger().debug("调用原版橡树特征失败，回落到手写版本：{}", t.toString());
-        }
-        placeTreeFallback(level, base);
-    }
-
-    /** 手写树（原版特征不可用时的兜底）。 */
-    private void placeTreeFallback(ServerLevel level, BlockPos base) {
-        int trunk = 4;
         BlockState log = Blocks.OAK_LOG.defaultBlockState();
         BlockState leaves = Blocks.OAK_LEAVES.defaultBlockState()
                 .setValue(LeavesBlock.PERSISTENT, true);
-        for (int i = 0; i < trunk; i++) {
+
+        // 树干：固定 3 格（base 是地面之上那一格）
+        for (int i = 0; i < TRUNK_HEIGHT; i++) {
             level.setBlockAndUpdate(base.offset(0, i, 0), log);
         }
-        BlockPos top = base.offset(0, trunk, 0);
-        for (int dx = -2; dx <= 2; dx++) {
-            for (int dz = -2; dz <= 2; dz++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    if (Math.abs(dx) == 2 && Math.abs(dz) == 2 && dy == 1) {
-                        continue;
-                    }
-                    BlockPos pos = top.offset(dx, dy, dz);
-                    if (level.getBlockState(pos).isAir()) {
-                        level.setBlockAndUpdate(pos, leaves);
-                    }
+
+        int topY = base.getY() + TRUNK_HEIGHT - 1;   // 树干最上面一格
+
+        // 树冠（以树干为中心）：
+        //   与树顶同层、以及上面一层 → 5×5 去四角
+        //   再上面一层             → 3×3 去四角
+        //   顶盖                   → 一格
+        leafLayer(level, base.getX(), topY, base.getZ(), 2, leaves);
+        leafLayer(level, base.getX(), topY + 1, base.getZ(), 2, leaves);
+        leafLayer(level, base.getX(), topY + 2, base.getZ(), 1, leaves);
+        setLeafIfAir(level, base.offset(0, TRUNK_HEIGHT + 2, 0), leaves);
+
+        HubSuite.logger().debug("种树完成（固定 {} 格树干）：{}", TRUNK_HEIGHT, base);
+    }
+
+    /** 树干高度（固定值，用户要求 3 格）。 */
+    private static final int TRUNK_HEIGHT = 3;
+
+    /**
+     * 铺一层树冠：边长 {@code 2r+1} 的正方形，**去掉四个角**。
+     *
+     * <p>去角是原版橡树的关键特征 —— 不去角就是个方块团
+     * （用户反馈"树生成有问题"的那版就是这样）。
+     */
+    private void leafLayer(ServerLevel level, int cx, int y, int cz, int r,
+                           BlockState leaves) {
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dz = -r; dz <= r; dz++) {
+                if (Math.abs(dx) == r && Math.abs(dz) == r) {
+                    continue;   // 去掉四角
                 }
+                setLeafIfAir(level, new BlockPos(cx + dx, y, cz + dz), leaves);
             }
         }
-        level.setBlockAndUpdate(top.above(), leaves);
+    }
+
+    /** 只在原本是空气的位置放树叶，避免把树干/箱子覆盖掉。 */
+    private void setLeafIfAir(ServerLevel level, BlockPos pos, BlockState leaves) {
+        if (level.getBlockState(pos).isAir()) {
+            level.setBlockAndUpdate(pos, leaves);
+        }
     }
 
     private List<int[]> parseLayers(IslandConfig.IslandType type) {
