@@ -34,8 +34,8 @@ public final class IslandPresets {
                 "-1:minecraft:dirt",
                 "-2:minecraft:dirt",
                 "-3:minecraft:stone");
-        // 沙滩是"海边"才有的东西，虚空里的网格空岛用不上 → 显式关掉
-        type.beach = "";
+        // 沙滩是"海边"才有的东西，虚空里的网格空岛用不上（留默认值即可，
+        // 换成海洋维度才会生效 —— 这样预设和"老配置升级补上的默认值"完全一致）
         type.tree = true;
         type.chest = true;
         type.loot = List.of(

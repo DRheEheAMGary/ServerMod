@@ -120,8 +120,9 @@ public final class OceanWorldGenerator {
                     vanilla.useLegacyRandomSource());
 
             var biomeSource = oceanBiomeSource(biomes);
-            HubSuite.logger().info("海洋世界生成器已就绪：海洋群系 {} 种，海平面 Y={}，海床 Y≈{}~{}",
-                    OCEAN_BIOMES.size(), SEA_LEVEL,
+            HubSuite.logger().info("海洋世界生成器已就绪：海洋群系 {} 种（4 个温度带 × 深浅两档，"
+                            + "暖水的深海共用 deep_lukewarm_ocean），海平面 Y={}，水面 Y={}，海床 Y≈{}~{}",
+                    OCEAN_BIOME_SET.size(), SEA_LEVEL, waterSurface(),
                     (int) (SEA_LEVEL - BASE_DEPTH - DEPTH_VARIATION - DETAIL_VARIATION),
                     (int) (SEA_LEVEL - BASE_DEPTH + DEPTH_VARIATION + DETAIL_VARIATION));
             return new net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator(
