@@ -126,6 +126,15 @@ public final class WorldsManager {
      */
     private void onServerStopping(MinecraftServer server) {
         saveAll(true);
+        // 任务进度也落盘（它是独立的小 JSON，不随子服存档走）
+        try {
+            var quests = HubSuite.quests();
+            if (quests != null) {
+                quests.save();
+            }
+        } catch (Throwable t) {
+            HubSuite.logger().warn("保存任务进度失败：{}", t.toString());
+        }
         HubSuite.logger().info("多世界引擎：已主动保存全部子服，等待原版收尾。");
     }
 

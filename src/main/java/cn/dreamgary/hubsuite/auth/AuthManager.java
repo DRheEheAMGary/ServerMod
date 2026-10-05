@@ -157,6 +157,8 @@ public final class AuthManager {
         // 菜单状态也要清：不清的话玩家 ESC 关界面/断线后会永久留下
         // 一条 UUID→Open，其中 container 与回调闭包（捕获 ServerLevel）无法回收。
         cn.dreamgary.hubsuite.ui.ChestMenuScreen.forget(player.getUUID());
+        // 任务界面的分页/分类状态同样不该跨会话保留
+        cn.dreamgary.hubsuite.quest.QuestMenu.forget(player.getUUID());
     }
 
     // ------------------------------------------------------------------

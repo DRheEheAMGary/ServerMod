@@ -28,6 +28,10 @@ public final class HubSuiteConfig {
     public List<SubServerConfig> servers = new ArrayList<>();
 
     /** 大厅：玩家登录成功后所在的场所。 */
+    /** 任务系统配置（定义 + 开关）。 */
+    public cn.dreamgary.hubsuite.quest.QuestPresets.QuestConfig quests =
+            cn.dreamgary.hubsuite.quest.QuestPresets.defaults();
+
     public static final class LobbyConfig {
 
         /**
@@ -254,6 +258,13 @@ public final class HubSuiteConfig {
             island = cn.dreamgary.hubsuite.island.IslandPresets.defaults();
         }
         island.normalize();
+        // 任务定义必须 normalize（内部会调用 Quest.compile()，
+        // 把 "break:minecraft:oak_log" 这样的字符串拆成目标类型 + 参数）。
+        // 漏掉的话从磁盘读回来的任务全都是 UNKNOWN 目标，进度永远不动。
+        if (quests == null) {
+            quests = cn.dreamgary.hubsuite.quest.QuestPresets.defaults();
+        }
+        quests.normalize();
         if (servers == null) {
             servers = new ArrayList<>();
         }

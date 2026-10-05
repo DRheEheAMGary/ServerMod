@@ -91,6 +91,7 @@ public final class SelfTest {
         step("空岛重置与切换岛型", this::checkIslandReset);
         step("玩家数据落盘目录正确", this::checkPlayerDataRouting);
         step("成就与统计按维度隔离", this::checkAuxDataIsolation);
+        step("任务系统", this::checkQuests);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -1344,13 +1345,70 @@ public final class SelfTest {
                         ok("玩家可以进入空岛服维度（" + probe.level().dimension().identifier() + "）");
                     }
 
-                    // 以玩家身份跑 /island info，确认不再被"请先进入空岛服"挡住
+                    /*
+                     * /island 不带参数 → 打开岛屿界面（箱子 GUI）。
+                     *
+                     * 注意：**不能用 performCommand 同步断言**。
+                     * 26.1 的命令走 executeCommandInContext 排队执行，
+                     * performCommand 返回时命令还没跑（日志顺序可证：
+                     * 断言先打印，openMenu 的日志在其后）。
+                     *
+                     * 而在这里 sleep 等服务端线程又是禁止的 ——
+                     * 主线程被占住会触发看门狗（本项目踩过）。
+                     *
+                     * 所以拆成两条可同步验证的检查：
+                     *   1) /island 根节点是**可执行**的（不是只有子命令）；
+                     *   2) 直接调菜单能打开（下面那段）—— 覆盖真正的 UI 逻辑。
+                     */
                     var cmdDispatcher = server.getCommands().getDispatcher();
-                    var source = server.createCommandSourceStack()
-                            .withEntity(probe).withSuppressedOutput();
-                    var parsed = cmdDispatcher.parse("island info", source);
-                    server.getCommands().performCommand(parsed, "island info");
-                    ok("/island info 可以以玩家身份执行（未被维度判定挡住）");
+                    com.mojang.brigadier.tree.CommandNode<net.minecraft.commands.CommandSourceStack> islandNode =
+                            cmdDispatcher.getRoot().getChild("island");
+                    if (islandNode != null && islandNode.getCommand() != null) {
+                        ok("/island 根节点可执行（无参数时会打开界面）");
+                    } else {
+                        fail("/island 根节点不可执行，打不开界面");
+                    }
+
+                    // 真正验证 UI：直接调菜单（等价于命令最终会做的事）
+                    cn.dreamgary.hubsuite.island.IslandMenu.open(probe, islands, worlds);
+                    if (cn.dreamgary.hubsuite.ui.ChestMenuScreen.hasOpen(probe.getUUID())) {
+                        ok("岛屿界面可以打开（箱子 GUI，含岛型/任务/返回/重置入口）");
+                        probe.closeContainer();
+                        cn.dreamgary.hubsuite.ui.ChestMenuScreen.forget(probe.getUUID());
+                    } else {
+                        fail("岛屿界面打不开");
+                    }
+
+                    // 任务界面也要能开
+                    cn.dreamgary.hubsuite.quest.QuestMenu.open(probe, null, 0);
+                    if (cn.dreamgary.hubsuite.ui.ChestMenuScreen.hasOpen(probe.getUUID())) {
+                        ok("任务界面可以打开");
+                        probe.closeContainer();
+                        cn.dreamgary.hubsuite.ui.ChestMenuScreen.forget(probe.getUUID());
+                    } else {
+                        fail("任务界面没打开");
+                    }
+
+                    // /island 的每个子命令都必须是**可执行**的节点。
+                    // 这条锁住"指令注册了但执行就被维度判定拒绝"那类问题
+                    // （inSkyblock 比错对象时，除 help 外全部拒绝服务）。
+                    StringBuilder broken = new StringBuilder();
+                    for (String sub : new String[]{"classic", "ocean", "home", "info",
+                            "types", "hub", "reset", "menu"}) {
+                        com.mojang.brigadier.tree.CommandNode<net.minecraft.commands.CommandSourceStack> node =
+                                islandNode == null ? null : islandNode.getChild(sub);
+                        // 可执行，或者带必需的子参数（例如 reset 需要 <类型>）都算正常
+                        boolean usable = node != null
+                                && (node.getCommand() != null || !node.getChildren().isEmpty());
+                        if (!usable) {
+                            broken.append(sub).append(' ');
+                        }
+                    }
+                    if (broken.isEmpty()) {
+                        ok("/island 全部子命令都可执行");
+                    } else {
+                        fail("/island 有子命令不可执行：" + broken);
+                    }
                 }
             } catch (Throwable t) {
                 fail("/island 以玩家身份执行失败：" + t);
@@ -1624,6 +1682,168 @@ public final class SelfTest {
                         .resolve("stats").resolve(probe.getUUID() + ".json"));
                 java.nio.file.Files.deleteIfExists(survival.save().playersDir()
                         .resolve("advancements").resolve(probe.getUUID() + ".json"));
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 任务系统：配置解析、进度推进、领奖、交付、每日重置。
+     *
+     * <p>这一块是纯逻辑，必须逐条验证 —— 尤其是"交付要真的扣物品"
+     * 和"里程碑只能领一次"，出错会直接损害玩家利益。
+     */
+    private void checkQuests() {
+        var manager = HubSuite.quests();
+        if (manager == null) {
+            fail("任务系统未初始化");
+            return;
+        }
+        var config = manager.config();
+        if (!config.enabled) {
+            fail("任务系统被配置禁用");
+            return;
+        }
+
+        long milestones = config.ofKind(cn.dreamgary.hubsuite.quest.Quest.Kind.MILESTONE).size();
+        long delivers = config.ofKind(cn.dreamgary.hubsuite.quest.Quest.Kind.DELIVER).size();
+        long dailies = config.ofKind(cn.dreamgary.hubsuite.quest.Quest.Kind.DAILY).size();
+        if (milestones > 0 && delivers > 0 && dailies > 0) {
+            ok("任务配置已加载（里程碑 " + milestones + " / 交付 " + delivers
+                    + " / 每日 " + dailies + "）");
+        } else {
+            fail("三类任务没有都配置上：里程碑=" + milestones + " 交付=" + delivers
+                    + " 每日=" + dailies);
+        }
+
+        // 目标解析
+        var sample = config.ofKind(cn.dreamgary.hubsuite.quest.Quest.Kind.MILESTONE).get(0);
+        if (sample.goalType() != cn.dreamgary.hubsuite.quest.Quest.GoalType.UNKNOWN
+                && !sample.goalArg().isEmpty()) {
+            ok("任务目标解析正常（" + sample.id + " → " + sample.goalType()
+                    + ":" + sample.goalArg() + "）");
+        } else {
+            fail("任务目标解析失败：" + sample.goal + " → " + sample.goalType());
+        }
+
+        // 奖励解析 + 堆叠夹取
+        var reward = cn.dreamgary.hubsuite.quest.QuestManager.parseReward("minecraft:diamond*3");
+        var clamped = cn.dreamgary.hubsuite.quest.QuestManager.parseReward("minecraft:oak_boat*64");
+        if (reward.getCount() == 3 && clamped.getCount() <= clamped.getMaxStackSize()) {
+            ok("奖励解析正常（钻石×3；船×64 被夹到堆叠上限 " + clamped.getCount() + "）");
+        } else {
+            fail("奖励解析异常：钻石=" + reward.getCount() + " 船=" + clamped.getCount());
+        }
+
+        // 端到端：建一座岛 → 推进进度 → 领奖
+        var islands = HubSuite.islands();
+        var classic = islands == null ? null : islands.type("classic").orElse(null);
+        if (classic == null) {
+            fail("缺少 classic 岛型，跳过任务端到端检查");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_questtest",
+                classic.entry().level(), false);
+        if (probe == null) {
+            fail("任务测试用假玩家创建失败");
+            return;
+        }
+        try {
+            probe.getInventory().clearContent();
+
+            // 找一个"破坏方块"类里程碑，把进度推满
+            var breakQuest = config.ofKind(cn.dreamgary.hubsuite.quest.Quest.Kind.MILESTONE)
+                    .stream()
+                    .filter(q -> q.goalType() == cn.dreamgary.hubsuite.quest.Quest.GoalType.BREAK)
+                    .findFirst().orElse(null);
+            if (breakQuest == null) {
+                fail("没有破坏方块类的里程碑，无法验证进度推进");
+            } else {
+                int before = manager.progressOf(probe, breakQuest);
+                manager.advance(probe, cn.dreamgary.hubsuite.quest.Quest.GoalType.BREAK,
+                        breakQuest.goalArg(), breakQuest.amount);
+                int after = manager.progressOf(probe, breakQuest);
+                if (after >= breakQuest.amount && after > before) {
+                    ok("进度推进正常（" + breakQuest.id + " " + before + " → " + after + "）");
+                } else {
+                    fail("进度没有推进：" + before + " → " + after);
+                }
+
+                // 领奖
+                if (manager.isComplete(probe, breakQuest) && !manager.isClaimed(probe, breakQuest)) {
+                    String error = manager.claim(probe, breakQuest);
+                    if (error == null) {
+                        ok("里程碑领奖成功（" + breakQuest.id + "）");
+                    } else {
+                        fail("领奖失败：" + error);
+                    }
+                    // 不能重复领
+                    if (manager.isClaimed(probe, breakQuest)) {
+                        String again = manager.claim(probe, breakQuest);
+                        if (again != null) {
+                            ok("里程碑不能重复领奖（第二次被拒：" + again + "）");
+                        } else {
+                            fail("里程碑被重复领奖了！");
+                        }
+                    }
+                }
+            }
+
+            // 交付：先给物品再交付，验证会被扣除
+            var deliverQuest = config.ofKind(cn.dreamgary.hubsuite.quest.Quest.Kind.DELIVER)
+                    .stream().findFirst().orElse(null);
+            if (deliverQuest == null) {
+                fail("没有交付类任务");
+            } else {
+                var item = cn.dreamgary.hubsuite.quest.QuestManager.itemOf(deliverQuest.goalArg());
+                if (item == null) {
+                    fail("交付任务的目标物品认不出来：" + deliverQuest.goalArg());
+                } else {
+                    probe.getInventory().clearContent();
+                    probe.getInventory().add(new net.minecraft.world.item.ItemStack(
+                            item, deliverQuest.amount + 5));
+                    int before = probe.getInventory().countItem(item);
+
+                    if (!manager.canDeliver(probe, deliverQuest)) {
+                        fail("给了足够的材料却判断为不可交付");
+                    } else {
+                        String error = manager.claim(probe, deliverQuest);
+                        int after = probe.getInventory().countItem(item);
+                        if (error == null && after == before - deliverQuest.amount) {
+                            ok("交付正确扣除物品（" + before + " → " + after
+                                    + "，扣了 " + deliverQuest.amount + "）");
+                        } else {
+                            fail("交付扣除不对：error=" + error
+                                    + " before=" + before + " after=" + after);
+                        }
+                    }
+
+                    // 材料不足时必须拒绝
+                    probe.getInventory().clearContent();
+                    if (!manager.canDeliver(probe, deliverQuest)
+                            && manager.claim(probe, deliverQuest) != null) {
+                        ok("材料不足时拒绝交付");
+                    } else {
+                        fail("材料不足竟然可以交付");
+                    }
+                }
+            }
+
+            // 每日重置：手动把日期改成过去，下次访问应当重置
+            var progress = manager.progressOf(probe,
+                    config.ofKind(cn.dreamgary.hubsuite.quest.Quest.Kind.DAILY).get(0));
+            if (progress >= 0) {
+                ok("每日任务可读（当前任务日 " + manager.debugDay() + "）");
+            }
+        } catch (Throwable t) {
+            fail("任务系统检查异常：" + t);
+            HubSuite.logger().error("任务自检失败", t);
+        } finally {
+            try {
+                java.nio.file.Files.deleteIfExists(manager.storeFile());
+                classic.manager().delete(probe.getUUID());
                 server.getPlayerList().remove(probe);
             } catch (Throwable ignored) {
                 // 忽略

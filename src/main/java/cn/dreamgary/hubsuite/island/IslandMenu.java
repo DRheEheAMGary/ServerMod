@@ -31,6 +31,16 @@ public final class IslandMenu {
             entries.add(buildEntry(player, service, type));
         }
 
+        // 任务入口
+        entries.add(ChestMenuScreen.Entry.of(
+                new ItemStack(Items.WRITABLE_BOOK),
+                "\u00A7e\u00A7l空岛任务",
+                List.of("\u00A77查看里程碑 / 每日任务 / 物资交付",
+                        "\u00A77完成任务可以领奖励",
+                        "",
+                        "\u00A7e▶ 点击打开任务列表"),
+                p -> cn.dreamgary.hubsuite.quest.QuestMenu.open(p, null, 0)));
+
         // 出口：回主大厅
         entries.add(ChestMenuScreen.Entry.of(
                 new ItemStack(Items.COMPASS),

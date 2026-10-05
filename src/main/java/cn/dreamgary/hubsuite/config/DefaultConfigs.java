@@ -25,6 +25,9 @@ public final class DefaultConfigs {
         config.lobby.spawnX = 0.5;
         config.lobby.spawnY = 100.0;
 
+        // 任务系统：内置一套适合空岛的任务（可在 config.json 里随意增删改）
+        config.quests = cn.dreamgary.hubsuite.quest.QuestPresets.defaults();
+
         // 大厅引导假人：只放一个，点击打开服务器选择界面
         config.lobby.menuNpc = new HubSuiteConfig.NpcConfig();
         config.lobby.menuNpc.enabled = true;

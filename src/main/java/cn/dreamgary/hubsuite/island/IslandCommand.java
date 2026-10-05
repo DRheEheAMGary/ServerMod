@@ -1,5 +1,6 @@
 package cn.dreamgary.hubsuite.island;
 
+import cn.dreamgary.hubsuite.HubSuite;
 import cn.dreamgary.hubsuite.feature.PermissionService;
 import cn.dreamgary.hubsuite.world.PlayerRouter;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -68,10 +69,20 @@ public final class IslandCommand {
     public void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registry, environment) ->
                 dispatcher.register(Commands.literal("island")
-                        .executes(ctx -> ctx.getSource().getPlayer() == null
-                                ? help(ctx.getSource())      // 控制台：直接列帮助
-                                : home(ctx.getSource(), null))   // 玩家：回上次那种岛
+                        // 玩家直接执行 /island → 打开箱子式岛屿界面
+                        // （控制台没有界面，列帮助）
+                        .executes(ctx -> {
+                            var p = ctx.getSource().getPlayer();
+                            return p == null ? help(ctx.getSource()) : openMenu(ctx.getSource(), p);
+                        })
                         .then(Commands.literal("help").executes(ctx -> help(ctx.getSource())))
+                        .then(Commands.literal("menu").executes(ctx -> {
+                            var p = ctx.getSource().getPlayer();
+                            if (p == null) {
+                                return help(ctx.getSource());
+                            }
+                            return openMenu(ctx.getSource(), p);
+                        }))
                         .then(Commands.literal("hub").executes(ctx -> hub(ctx.getSource())))
                         .then(Commands.literal("home").executes(ctx -> home(ctx.getSource(), null)))
                         .then(Commands.literal("classic").executes(ctx -> home(ctx.getSource(), "classic")))
@@ -151,6 +162,22 @@ public final class IslandCommand {
                         type.manager().config().type(island.type).displayName);
         source.sendSuccess(() -> Component.literal(
                 "\u00A7a已进入你的" + typeName + " \u00A77(方格 " + island.plotX + ", " + island.plotZ + ")"), false);
+        return 1;
+    }
+
+    /**
+     * 打开岛屿界面（箱子式）。
+     *
+     * <p>{@code /island} 不带参数时走这里：把各个子命令做成可点的条目，
+     * 不用记指令。
+     */
+    private int openMenu(CommandSourceStack source, ServerPlayer player) {
+        IslandService svc = requireService(source);
+        if (svc == null) {
+            return 0;
+        }
+        var worlds = cn.dreamgary.hubsuite.HubSuite.worlds();
+        cn.dreamgary.hubsuite.island.IslandMenu.open(player, svc, worlds);
         return 1;
     }
 

@@ -99,6 +99,20 @@ public final class HubSuite implements ModInitializer {
         huskHomes = new cn.dreamgary.hubsuite.integration.HuskHomesIntegration(worldsManager);
         placeholders = new cn.dreamgary.hubsuite.integration.PlaceholderService(worldsManager, huskHomes);
 
+        // 任务系统不依赖世界，初始化阶段就能建好
+        try {
+            questManager = new cn.dreamgary.hubsuite.quest.QuestManager(
+                    configManager.config().quests);
+            cn.dreamgary.hubsuite.quest.QuestEvents.register();
+            logger().info("任务系统已就绪：{} 个任务（里程碑 {} / 交付 {} / 每日 {}）",
+                    questManager.config().quests.size(),
+                    questManager.config().ofKind(cn.dreamgary.hubsuite.quest.Quest.Kind.MILESTONE).size(),
+                    questManager.config().ofKind(cn.dreamgary.hubsuite.quest.Quest.Kind.DELIVER).size(),
+                    questManager.config().ofKind(cn.dreamgary.hubsuite.quest.Quest.Kind.DAILY).size());
+        } catch (Throwable t) {
+            logger().error("任务系统初始化失败，任务功能将不可用", t);
+        }
+
         // 服务端启动后再做依赖于世界的初始化（空岛、占位符注册）
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STARTED.register(server -> {
             worldsManager.subServer(skyblockServerId()).ifPresent(sub -> {
@@ -173,6 +187,13 @@ public final class HubSuite implements ModInitializer {
     public static WorldsManager worlds() {
         return instance == null ? null : instance.worldsManager;
     }
+
+    /** 任务系统；未初始化时为 null。 */
+    public static cn.dreamgary.hubsuite.quest.QuestManager quests() {
+        return questManager;
+    }
+
+    private static cn.dreamgary.hubsuite.quest.QuestManager questManager;
 
     public static AuthService auth() {
         return instance == null ? null : instance.authService;
