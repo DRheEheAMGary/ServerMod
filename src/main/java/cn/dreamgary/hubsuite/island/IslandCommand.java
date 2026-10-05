@@ -329,7 +329,7 @@ public final class IslandCommand {
             if (lobby != null) {
                 PlayerRouter.sendTo(player, lobby);
             }
-            source.sendSuccess(() -> Component.literal("\u00A7a你的岛已删除（地形保留，可用 /island create 重新分配）。"), true);
+            source.sendSuccess(() -> Component.literal("\u00A7a你的岛已删除（地形同时清空），可用 /island classic 或 /island ocean 重新建一座。"), true);
         } else {
             source.sendFailure(Component.literal("\u00A7c你没有岛。"));
         }

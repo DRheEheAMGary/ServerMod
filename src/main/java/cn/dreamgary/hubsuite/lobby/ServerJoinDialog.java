@@ -1,5 +1,6 @@
 package cn.dreamgary.hubsuite.lobby;
 
+import cn.dreamgary.hubsuite.HubSuite;
 import cn.dreamgary.hubsuite.auth.AuthManager;
 import cn.dreamgary.hubsuite.npc.HubNpc;
 import cn.dreamgary.hubsuite.npc.NpcManager;
@@ -65,10 +66,33 @@ public final class ServerJoinDialog {
         }
     }
 
-    /** 供 DialogRouter 注册用：从动作 id 解析出子服并进服。 */
+    /**
+     * 供 DialogRouter 与箱子菜单注册用：从动作 id 解析出目标并进服。
+     *
+     * <p><b>大厅要单独处理：</b>大厅不是一个"子服"，它不在 {@code WorldsManager}
+     * 的 {@code subServers} 表里。第一版这里直接查 {@code subServer(serverId)}，
+     * 于是菜单里的"返回大厅"条目走进 {@code orElse} 分支 ——
+     * 玩家点了只看到一行"子服不存在：lobby"，人还留在原来的子服里，
+     * 只能靠 {@code /hub} 才能回去。
+     *
+     * <p><b>必须校验登录状态：</b>NPC 那条路（{@code NpcManager.onUseEntity}）
+     * 是有认证闸门的，但 {@code /menu} 与对话框动作包不经过它 ——
+     * 未登录玩家只要能发出这个动作，就能绕过"未登录只能在等待区"的限制
+     * 直接进子服。这里补上闸门（登录系统关闭时 {@code requiresPermission} 放行）。
+     */
     public static void joinById(ServerPlayer player, String serverId, WorldsManager worlds) {
+        if (cn.dreamgary.hubsuite.world.Lobby.ID.equalsIgnoreCase(serverId)) {
+            worlds.lobby().ifPresentOrElse(
+                    lobby -> PlayerRouter.sendTo(player, lobby),
+                    () -> player.sendSystemMessage(Text.of("\u00A7c大厅尚未加载，无法返回。")));
+            return;
+        }
         worlds.subServer(serverId).ifPresentOrElse(
                 sub -> {
+                    if (!requiresPermission(HubSuite.authManager(), player)) {
+                        player.sendSystemMessage(Text.of("\u00A7c请先完成注册或登录。"));
+                        return;
+                    }
                     if (PlayerRouter.sendTo(player, sub)) {
                         player.sendSystemMessage(Text.of(
                                 "\u00A7a已进入 " + sub.displayName() + "\u00A7a。\u00A77输入 \u00A7f/hub \u00A77可返回大厅。"));
@@ -84,7 +108,7 @@ public final class ServerJoinDialog {
                 .toList();
     }
 
-    /** 未使用的保留签名，便于以后加权限校验。 */
+    /** 权限闸门：登录系统关闭（拿不到 AuthManager）或玩家已认证时放行。 */
     static boolean requiresPermission(AuthManager manager, ServerPlayer player) {
         return manager == null || manager.isAuthenticated(player);
     }

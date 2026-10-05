@@ -1138,6 +1138,22 @@ public final class SelfTest {
             } else {
                 fail("界面已关闭，点击仍被接管 —— 会干扰玩家正常使用箱子");
             }
+
+            /*
+             * 菜单里的"返回大厅"走的是 joinById(Lobby.ID)：
+             * 大厅不在 WorldsManager 的 subServers 表里，必须单独处理 ——
+             * 否则玩家点"返回大厅"只会看到一行"子服不存在：lobby"，
+             * 人还留在原来的子服里（实测过）。
+             */
+            cn.dreamgary.hubsuite.world.PlayerRouter.sendTo(probe, survival);
+            cn.dreamgary.hubsuite.lobby.ServerJoinDialog.joinById(
+                    probe, cn.dreamgary.hubsuite.world.Lobby.ID, worlds);
+            if (probe.level().dimension().equals(lobby.level().dimension())) {
+                ok("菜单里的\"返回大厅\"真的能回大厅（大厅不在子服表里，需单独处理）");
+            } else {
+                fail("点了\"返回大厅\"还留在 " + probe.level().dimension().identifier()
+                        + " —— joinById 没处理大厅这个特例");
+            }
         } catch (Throwable t) {
             fail("菜单检查异常：" + t);
         } finally {

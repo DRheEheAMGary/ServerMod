@@ -40,6 +40,19 @@ public final class MenuCommand {
             source.sendFailure(Component.literal("\u00A7cHubSuite 尚未就绪。"));
             return 0;
         }
+        /*
+         * 未登录玩家不能开这个界面。
+         *
+         * 界面条目是直接调 {@code ServerJoinDialog.joinById} 进子服的
+         * （不像点假人那条路会先过 NpcManager 的认证闸门），所以不在这里拦住的话，
+         * 未登录玩家可以 /menu → 点生存服 → 直接进子服，
+         * 绕过"未登录只能待在等待区"的设计。
+         */
+        var auth = HubSuite.authManager();
+        if (auth != null && !auth.isAuthenticated(player)) {
+            source.sendFailure(Component.literal("\u00A7c请先完成注册或登录。"));
+            return 0;
+        }
         cn.dreamgary.hubsuite.npc.ServerMenu.open(player, worlds);
         return 1;
     }
