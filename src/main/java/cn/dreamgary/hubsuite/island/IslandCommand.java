@@ -51,6 +51,20 @@ public final class IslandCommand {
         return serviceSupplier.get();
     }
 
+    /**
+     * 取服务；未就绪时给玩家一句人话并返回 null（避免 Brigadier 抛 unexpected error）。
+     *
+     * @return 服务实例，或 null（调用方应直接 return 0）
+     */
+    private IslandService requireService(CommandSourceStack source) {
+        IslandService svc = service();
+        if (svc == null) {
+            source.sendFailure(Component.literal(
+                    "\u00A7c空岛系统还没准备好（子服可能加载失败），请稍后再试或联系管理员。"));
+        }
+        return svc;
+    }
+
     public void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registry, environment) ->
                 dispatcher.register(Commands.literal("island")
@@ -87,8 +101,18 @@ public final class IslandCommand {
         return source.getPlayerOrException();
     }
 
+    /**
+     * 玩家是不是在空岛服的任意维度里（大厅 / 经典 / 海岛）。
+     *
+     * <p><b>不能用 {@code server().level().dimension()} 比较</b> ——
+     * {@code SubServer.level()} 恒返回 primary 维度（hubsuite:server_skyblock），
+     * 而玩家实际只会在 skyblock_hub / _classic / _ocean 三个维度里，
+     * 永远不等于 primary。之前这么写导致 {@code /island} 的每个子命令
+     * （除 help）都回"请先进入空岛服"，功能完全不可用。
+     */
     private boolean inSkyblock(ServerPlayer player) {
-        return player.level().dimension().equals(service().server().level().dimension());
+        var svc = service();
+        return svc != null && svc.isSkyblock(player.level());
     }
 
     private int requireSkyblock(CommandSourceStack source, ServerPlayer player) {

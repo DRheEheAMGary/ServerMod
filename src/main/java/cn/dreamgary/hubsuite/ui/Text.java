@@ -119,15 +119,27 @@ public final class Text {
                 || lower == 'n' || lower == 'o' || lower == 'r';
     }
 
+    /**
+     * 应用一个旧版格式码。
+     *
+     * <p><b>k-o 是"格式"不是"颜色"</b>：k=乱码 l=粗体 m=删除线 n=下划线 o=斜体。
+     * 之前把它们也当颜色解析，{@code legacyHex} 落到默认的 FFFFFF，
+     * 于是 {@code §l} 不但不加粗，还会把前面的颜色刷成白色
+     * （默认的假人名 {@code §a§l选择岛屿} 就渲染成了白色非加粗）。
+     */
     private static Style applyCode(Style style, char code) {
-        if (code == 'r') {
-            return Style.EMPTY;
-        }
-        TextColor color = TextColor.parseColor("#" + legacyHex(code)).result().orElse(null);
-        if (color == null) {
-            return style;
-        }
-        return style.withColor(color);
+        return switch (code) {
+            case 'r' -> Style.EMPTY;
+            case 'k' -> style.withObfuscated(true);
+            case 'l' -> style.withBold(true);
+            case 'm' -> style.withStrikethrough(true);
+            case 'n' -> style.withUnderlined(true);
+            case 'o' -> style.withItalic(true);
+            default -> {
+                TextColor color = TextColor.parseColor("#" + legacyHex(code)).result().orElse(null);
+                yield color == null ? style : style.withColor(color);
+            }
+        };
     }
 
     /** 旧版 16 色码 → 十六进制。 */

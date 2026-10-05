@@ -45,6 +45,14 @@ public final class HubNpc {
 
     private ServerPlayer entity;
 
+    /**
+     * 是否已经发起过皮肤补全。
+     *
+     * <p>一次性：防止 {@code respawn() → spawn()} 再次注册回调造成无限重建
+     * （SkinFetcher 缓存命中时回调内联执行，会把该 tick 卡死）。
+     */
+    private boolean skinFetchStarted;
+
     private HubNpc(SubServer target, HubSuiteConfig.NpcConfig config, String npcName, boolean menuNpc) {
         this.target = target;
         this.config = config;
@@ -148,10 +156,28 @@ public final class HubNpc {
         // 注意这里**不阻塞**服务端启动 —— HTTP 请求在后台线程，回调才回主线程。
         if (config.skin != null && !config.skin.isBlank() && !"none".equalsIgnoreCase(config.skin)) {
             String skinName = "auto".equalsIgnoreCase(config.skin) ? npcName : config.skin;
+            /*
+             * 补皮肤必须只做一次。
+             *
+             * respawn() = despawn + spawn，而 spawn 又会走到这里再注册一次回调；
+             * SkinFetcher 缓存命中时返回的是 completedFuture，thenAccept 会在
+             * 调用线程**内联**执行 → execute() → 任务重新入队 →
+             * BlockableEventLoop 的 while(pollTask()) 永远退不出来，该 tick 卡死，
+             * 最终被看门狗以 "single server tick took 60.00 seconds" 强杀。
+             * 即便退化成跨 tick，也是每 tick 无限 despawn+重建实体。
+             *
+             * 触发条件只是 config.skin 能被解析成功（真实账号名，或 "auto"
+             * 且实体名恰好是真实账号）—— 属于"改配置即炸"的定时炸弹。
+             */
+            if (skinFetchStarted) {
+                return true;
+            }
+            skinFetchStarted = true;
+
             SkinFetcher.fetchAsync(skinName).thenAccept(skin -> skin.ifPresent(s -> {
                 MinecraftServer srv = server;
                 srv.execute(() -> {
-                    if (entity != null) {
+                    if (entity != null && !entity.isRemoved()) {
                         SkinFetcher.apply(entity.getGameProfile(), s);
                         respawn(server, lobbyLevel);
                     }

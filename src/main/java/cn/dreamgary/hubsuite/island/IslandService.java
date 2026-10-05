@@ -253,7 +253,15 @@ public final class IslandService {
         // 5) 在大厅放一个"选择岛屿"假人
         spawnHubNpc();
 
-        ServerLifecycleEvents.SERVER_STOPPING.register(s -> saveAll());
+        // 每个 tick 尝试补铺"玩家已在岛上但地形还没铺好"的岛。
+        // 建岛时区块必然未加载，没有这个重试的话玩家会掉进海里/虚空（实测踩过）。
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(
+                server -> types.values().forEach(t -> t.manager().tickPendingTerrain()));
+
+        ServerLifecycleEvents.SERVER_STOPPING.register(s -> {
+            saveAll();
+            types.values().forEach(t -> t.manager().clearPending());
+        });
     }
 
     /**
@@ -305,10 +313,12 @@ public final class IslandService {
         if (type == null) {
             type = primary;
         }
-        IslandManager.Island island = type.manager().getOrCreate(
+        // 注意：这里**不要**调 diagnoseSpawn。
+        // 它会 getBlockState 读岛屿方块，而此时玩家还在旧维度、目标区块必然未加载
+        // → 同步生成整片区块 → 主线程卡死（就是看门狗强杀那条路径，实测踩过两次）。
+        // 诊断只在显式调试时用，不进正常建岛流程。
+        return type.manager().getOrCreate(
                 player.getUUID(), player.getName().getString(), type.id());
-        diagnoseSpawn(player, type, island);
-        return island;
     }
 
     /** 取（必要时创建）玩家的岛，并把玩家送到岛上（岛屿维度里才有效）。 */

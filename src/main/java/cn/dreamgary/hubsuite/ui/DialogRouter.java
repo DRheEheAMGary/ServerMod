@@ -111,11 +111,50 @@ public final class DialogRouter {
      *
      * @return 是否由我们处理了
      */
+    /**
+     * 需要**先通过认证**才能执行的动作前缀。
+     *
+     * <p><b>为什么必须有这道闸门：</b>对话动作走的是客户端自定义点击包，
+     * 玩家完全可以自己构造。原版 {@code handleCustomClickAction} 只打一行
+     * debug 日志、不做任何校验，所以在路由层不查认证的话，
+     * 未登录玩家发一个 {@code hubsuite:lobby/join/survival} 就能直接传送到
+     * 任意子服（并触发建岛、地形生成、JSON 落盘）。
+     */
+    private static final java.util.List<String> AUTH_REQUIRED_PREFIXES =
+            java.util.List.of("lobby/join/", "lobby/confirm/", "island/");
+
+    /** 这个动作路径是否需要认证。 */
+    private static boolean requiresAuth(String path) {
+        for (String prefix : AUTH_REQUIRED_PREFIXES) {
+            if (path.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 玩家当前是否已通过认证。认证系统关闭时视为已认证。 */
+    private static boolean isAuthenticated(ServerPlayer player) {
+        var manager = HubSuite.authManager();
+        return manager == null || manager.isAuthenticated(player);
+    }
+
     public static boolean route(ServerCommonPacketListener listener, ServerboundCustomClickActionPacket packet) {
         String id = packet.id().toString();
         String path = packet.id().getNamespace().equals("hubsuite")
                 ? packet.id().getPath()
                 : id;
+        // 认证闸门：世界变更类动作只对已登录玩家开放。
+        // 认证相关的动作（auth/*）当然要放行，否则没法登录。
+        ServerPlayer actor = listener instanceof ServerGamePacketListenerImpl g ? g.player : null;
+        if (actor != null && requiresAuth(path) && !isAuthenticated(actor)) {
+            HubSuite.logger().warn("拒绝未认证玩家的对话动作：{}（玩家 {}）",
+                    path, actor.getName().getString());
+            actor.sendSystemMessage(cn.dreamgary.hubsuite.ui.Text.of(
+                    "\u00A7c请先完成注册或登录，再使用这个功能。"));
+            return true;   // 已消费：不要落回原版
+        }
+
         Handler handler = HANDLERS.get(path);
         if (handler == null) {
             // 前缀匹配（lobby/join/survival 之类）

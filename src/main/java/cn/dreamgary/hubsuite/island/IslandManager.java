@@ -114,6 +114,17 @@ public final class IslandManager {
     private final Map<String, Island> islands = new LinkedHashMap<>();
 
     /**
+     * 地形还没铺好的岛（等区块加载）。
+     *
+     * <p>为什么需要：建岛发生在"玩家还在旧维度"的时候，目标区块必然未加载，
+     * {@link #generate} 会安全地早退并把这个岛登记进来。
+     * 之后必须有人重试 —— 否则玩家被传送到一座空岛上方，直接掉进海里/虚空，
+     * 而岛**永远不会生成**（实测踩过）。
+     */
+    private final java.util.Set<String> pendingTerrain =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
      * 这个管理器管的是哪个维度入口（例如 {@code classic} / {@code ocean}）。
      *
      * <p>空岛服有多个岛屿维度，每个维度一个管理器、一份归属文件 ——
@@ -454,7 +465,7 @@ public final class IslandManager {
      */
     public Optional<Island> islandAt(double x, double z) {
         if (isOceanPlacement()) {
-            int radius = islandRadius();
+            int radius = protectionRadius();
             Island best = null;
             double bestSq = Double.MAX_VALUE;
             for (Island island : islands.values()) {
@@ -478,6 +489,22 @@ public final class IslandManager {
     /** 岛的地形半径（和 generate 里用的是同一个算法）。 */
     public int islandRadius() {
         return Math.max(2, Math.min(6, config.plotSize / 64));
+    }
+
+    /**
+     * 保护判定用的半径。
+     *
+     * <p><b>必须覆盖到方形的四个角。</b>地形是按 {@code dx,dz ∈ [-r, r]} 铺的
+     * **正方形**，而 {@link #islandAt} 用的是**圆形**判定；直接用 r 的话
+     * 角落方块（距中心 {@code r*sqrt(2)}）落在圈外 ——
+     * 后果有两重：岛主在自己岛的角落不能建造，而**别人可以拆/建那里的方块**。
+     * 默认 plotSize=256（r=4）时，9×9 表层里有 12 格中招。
+     *
+     * <p>所以按外接圆半径判定（{@code ceil(r*sqrt(2))}）。
+     */
+    public int protectionRadius() {
+        int r = islandRadius();
+        return (int) Math.ceil(r * 1.4142135623730951) + 1;   // r * √2
     }
 
     /**
@@ -523,16 +550,27 @@ public final class IslandManager {
             BlockPos center = anchorOf(island);
             int radius = islandRadius() + 4;
 
-            // 不主动 getChunk()：那会同步生成区块（海洋地形极重，会卡死主线程）。
-            // 只清除**当前已加载**的区块里的方块；没加载的部分等地形重新生成时覆盖。
+            /*
+             * 区块没加载就直接放弃清理。
+             *
+             * getBlockState / setBlockAndUpdate 在未加载区块上都会走
+             * getChunk(..., FULL, true) —— 主线程原地等整片区块生成
+             * （海洋地形极重，实测被看门狗强杀过）。hasChunk 只查已加载的
+             * ChunkHolder，不会触发生成。
+             *
+             * 代价是"没加载的部分清不掉"，但那些区块的地形本来也会在
+             * 下次进入时被 generate 覆盖，比搞崩服务器划算。
+             */
             int cx = center.getX() >> 4;
             int cz = center.getZ() >> 4;
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
                     if (!level.getChunkSource().hasChunk(cx + dx, cz + dz)) {
-                        continue;
+                        HubSuite.logger().info(
+                                "方格({}, {}) 的区块未加载，跳过地形清理（避免阻塞主线程）",
+                                island.plotX, island.plotZ);
+                        return;
                     }
-                    // hasChunk 为真说明已经加载，这时读方块是安全的
                 }
             }
 
@@ -724,6 +762,7 @@ public final class IslandManager {
         if (island.terrainPainted) {
             return true;
         }
+        pendingTerrain.add(island.player);
         if (island.anchorY == 0) {
             // 老记录没有锚点字段：按放置方式补算，避免把岛铺到世界原点
             BlockPos computed = "ocean".equals(island.placement)
@@ -735,9 +774,42 @@ public final class IslandManager {
         }
         boolean painted = generate(island);
         if (painted) {
+            pendingTerrain.remove(island.player);
             save();
         }
         return painted;
+    }
+
+    /**
+     * 每个 tick 重试补铺未完成的地形（由 IslandService 注册到 tick 事件）。
+     *
+     * <p>只处理**玩家已经在岛上**的那些岛：这时区块本来就必须加载，
+     * 补铺不会额外制造阻塞；玩家没到的岛继续等，不浪费主线程。
+     */
+    public void tickPendingTerrain() {
+        if (pendingTerrain.isEmpty()) {
+            return;
+        }
+        for (String uuid : new java.util.ArrayList<>(pendingTerrain)) {
+            Island island = islands.get(uuid);
+            if (island == null) {
+                pendingTerrain.remove(uuid);
+                continue;
+            }
+            boolean someoneThere = level.players().stream()
+                    .anyMatch(p -> p.getUUID().toString().equals(uuid));
+            if (!someoneThere) {
+                continue;   // 玩家还没到，等下一轮
+            }
+            if (ensureTerrain(island)) {
+                HubSuite.logger().info("方格({}, {}) 的地形已补铺完成", island.plotX, island.plotZ);
+            }
+        }
+    }
+
+    /** 关服时清空待办（避免持有旧引用）。 */
+    public void clearPending() {
+        pendingTerrain.clear();
     }
 
     /**
@@ -924,6 +996,16 @@ public final class IslandManager {
             HubSuite.logger().info("  落脚点柱：{}", spawnColumn);
         }
 
+        if (overBudget[0]) {
+            // 超时中断了 → 绝不能标记成"已铺"。
+            // 标记了的话 ensureTerrain 之后永远早退，"以后再补"永远不会发生，
+            // 玩家会永久得到一座半成品岛（甚至表层没铺、人直接掉下去）。
+            HubSuite.logger().warn(
+                    "方格({}, {}) 地形未铺完（超出 {} ms 预算），已登记待补铺",
+                    island.plotX, island.plotZ, GENERATE_BUDGET_MS);
+            pendingTerrain.add(island.player);
+            return false;
+        }
         island.terrainPainted = true;
         return true;
     }

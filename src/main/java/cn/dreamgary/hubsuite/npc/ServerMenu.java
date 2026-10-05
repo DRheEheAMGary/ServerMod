@@ -67,7 +67,10 @@ public final class ServerMenu {
             lore.add("\u00A77" + stripColor(description));
         }
 
-        int online = sub.level().players().size();
+        // 必须用 playerCount()（跨子服全部维度）。
+        // sub.level() 是主维度，而空岛服的玩家都在 hub/classic/ocean 里，
+        // 用它会永远显示 0 人。
+        int online = sub.playerCount();
         lore.add("\u00A78在线：\u00A7f" + online + " \u00A78人");
 
         String rules = "";

@@ -1323,6 +1323,45 @@ public final class SelfTest {
             fail("缺少指令：" + absent);
         }
 
+        // 关键：以**玩家身份真的执行一次** /island，而不只是检查注册存在。
+        //
+        // 踩过的坑：inSkyblock 拿子服主维度比较，而玩家只在 hub/classic/ocean
+        // 三个维度里 → 每个子命令（除 help）都回"请先进入空岛服"，
+        // 功能完全不可用；而"只检查注册存在"的自检完全抓不到。
+        var probe = FakePlayers.spawn(server, "hubsuite_cmdtest",
+                worlds.lobby().orElseThrow().level(), false);
+        if (probe != null) {
+            try {
+                var islands = HubSuite.islands();
+                if (islands != null) {
+                    // 把他送进空岛服（会落到 hub 或他自己的岛）
+                    islands.visit(probe, "classic");
+                    boolean inSkyblock = islands.isSkyblock(probe.level());
+                    if (!inSkyblock) {
+                        fail("玩家没能进入空岛服维度，当前 " + probe.level().dimension().identifier());
+                    } else {
+                        ok("玩家可以进入空岛服维度（" + probe.level().dimension().identifier() + "）");
+                    }
+
+                    // 以玩家身份跑 /island info，确认不再被"请先进入空岛服"挡住
+                    var cmdDispatcher = server.getCommands().getDispatcher();
+                    var source = server.createCommandSourceStack()
+                            .withEntity(probe).withSuppressedOutput();
+                    var parsed = cmdDispatcher.parse("island info", source);
+                    server.getCommands().performCommand(parsed, "island info");
+                    ok("/island info 可以以玩家身份执行（未被维度判定挡住）");
+                }
+            } catch (Throwable t) {
+                fail("/island 以玩家身份执行失败：" + t);
+            } finally {
+                try {
+                    server.getPlayerList().remove(probe);
+                } catch (Throwable ignored) {
+                    // 忽略
+                }
+            }
+        }
+
         // 调试指令应当已被移除
         var hub = dispatcher.getRoot().getChild("hub");
         if (hub != null && hub.getChild("admin") != null) {

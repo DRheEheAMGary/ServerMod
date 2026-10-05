@@ -250,12 +250,28 @@ public final class AuthService {
             return Result.of(Status.WEAK_PASSWORD, "密码至少 " + config.minPasswordLength + " 位。");
         }
         String hash = PasswordHasher.hash(newPassword, config.pbkdf2Iterations);
-        return store.updatePassword(username, hash)
-                ? Result.of(Status.OK, "已重置 " + username + " 的密码。")
-                : Result.of(Status.STORAGE_ERROR, "重置失败。");
+        if (!store.updatePassword(username, hash)) {
+            return Result.of(Status.STORAGE_ERROR, "重置失败。");
+        }
+        // 改密后必须作废所有会话。
+        // 不作废的话，攻击者只要在同 IP 的会话有效期内重连就继续免密登录
+        // （默认最长 60 分钟）—— 管理员以为改了密码就封住了，实际没有。
+        invalidateSessionsOf(username);
+        return Result.of(Status.OK, "已重置 " + username + " 的密码（该账号的登录会话已失效）。");
+    }
+
+    /** 作废某个账号的全部会话（改密/删号后必须调用）。 */
+    private void invalidateSessionsOf(String username) {
+        try {
+            store.find(username).ifPresent(account -> store.clearSession(account.uuid()));
+        } catch (Throwable t) {
+            HubSuite.logger().warn("作废 {} 的会话失败（建议手动 /auth kick）", username, t);
+        }
     }
 
     public Result deleteAccount(String username) {
+        // 注意顺序：先取 UUID 作废会话，再删账号（删完就查不到 UUID 了）
+        invalidateSessionsOf(username);
         return store.delete(username)
                 ? Result.of(Status.OK, "已删除账号 " + username + "。")
                 : Result.of(Status.NO_ACCOUNT, "账号不存在。");

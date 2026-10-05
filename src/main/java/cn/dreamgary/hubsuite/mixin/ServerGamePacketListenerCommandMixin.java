@@ -56,7 +56,12 @@ public abstract class ServerGamePacketListenerCommandMixin {
                 return true;
             }
         } catch (Throwable t) {
-            HubSuite.logger().error("命令闸门异常，已放行 /{}", command, t);
+            // fail-closed：闸门自己出错时必须**拒绝**，不能放行。
+            // 放行等于"任何意外异常都让受限指令直接执行"，这是不可接受的降级方向。
+            HubSuite.logger().error("命令闸门异常，已按拒绝处理 /{}", command, t);
+            player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                    "\u00A7c指令校验出错，已阻止执行，请联系管理员查看控制台。"));
+            return true;
         }
         return false;
     }

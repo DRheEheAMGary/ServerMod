@@ -80,14 +80,16 @@ public final class NpcManager {
     private static final java.util.List<PendingMenu> PENDING_SPAWNS =
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
-    private static java.util.function.Consumer<ServerPlayer> actionFor(ServerPlayer player) {
-        String key = player.level().dimension().identifier() + ":";
-        for (var e : EXTRA_MENUS.entrySet()) {
-            if (e.getKey().startsWith(key)) {
-                return e.getValue();
-            }
-        }
-        return null;
+    /**
+     * 取某个假人被点击时要执行的动作。
+     *
+     * <p><b>必须按"维度 + 假人名"精确查</b>，不能只按维度前缀匹配 ——
+     * 同一维度注册两个菜单假人时，前缀匹配会返回任意一个（ConcurrentHashMap
+     * 迭代顺序不确定），点哪个假人都开同一个界面。
+     */
+    private static java.util.function.Consumer<ServerPlayer> actionFor(ServerPlayer player, String npcName) {
+        String key = player.level().dimension().identifier() + ":" + npcName;
+        return EXTRA_MENUS.get(key);
     }
 
     private final List<HubNpc> npcs = new ArrayList<>();
@@ -241,7 +243,7 @@ public final class NpcManager {
             player.sendSystemMessage(Component.literal("\u00A7c请先完成注册或登录。"));
             return InteractionResult.FAIL;
         }
-        var action = actionFor(player);
+        var action = actionFor(player, npc.npcName());
         if (action != null) {
             HubSuite.logger().info("{} 点击了菜单假人 {}", player.getName().getString(), npc.npcName());
             action.accept(player);
@@ -268,7 +270,7 @@ public final class NpcManager {
             player.sendSystemMessage(Component.literal("\u00A7c请先完成注册或登录。"));
             return InteractionResult.FAIL;
         }
-        var action = actionFor(player);
+        var action = actionFor(player, npc.npcName());
         if (action != null) {
             HubSuite.logger().info("{} 左键点击了菜单假人 {}", player.getName().getString(), npc.npcName());
             action.accept(player);

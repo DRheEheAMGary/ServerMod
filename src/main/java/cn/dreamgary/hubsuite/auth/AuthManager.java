@@ -72,6 +72,21 @@ public final class AuthManager {
     // 注册事件
     // ------------------------------------------------------------------
 
+    /**
+     * 未认证玩家禁止聊天。
+     *
+     * <p>代码与文档一直声称未登录"不能聊天"，但实际上没有任何聊天钩子 ——
+     * 任何能连上服务器的人都能向全服广播（钓鱼链接、冒充管理、刷屏）。
+     * 这里补上。
+     */
+    private void onChat(ServerPlayer player, String message) {
+        if (isAuthenticated(player)) {
+            return;
+        }
+        player.sendSystemMessage(Component.literal(
+                "\u00A7c请先完成注册或登录才能聊天。\u00A77（对话框应该已经弹出了）"));
+    }
+
     public void register() {
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> onJoin(handler.getPlayer()));
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> onQuit(handler.getPlayer()));
@@ -86,6 +101,12 @@ public final class AuthManager {
         });
 
         ServerTickEvents.END_SERVER_TICK.register(server -> tick());
+
+        // 未认证禁止聊天。
+        // 代码/文档一直声称未登录"不能聊天"，但此前没有任何聊天钩子 ——
+        // 任何能连上服务器的人都能向全服广播钓鱼链接/冒充管理/刷屏。
+        net.fabricmc.fabric.api.message.v1.ServerMessageEvents.ALLOW_CHAT_MESSAGE.register(
+                (message, sender, bound) -> isAuthenticated(sender));
     }
 
     // ------------------------------------------------------------------
@@ -133,6 +154,9 @@ public final class AuthManager {
         // 连同"下次读档该用哪个存档"的登记一起清掉：
         // 留着的话，下次登录会按上一次会话的目标去读，可能读到别的子服的旧数据。
         cn.dreamgary.hubsuite.world.PlayerDataRouter.forget(player.getUUID());
+        // 菜单状态也要清：不清的话玩家 ESC 关界面/断线后会永久留下
+        // 一条 UUID→Open，其中 container 与回调闭包（捕获 ServerLevel）无法回收。
+        cn.dreamgary.hubsuite.ui.ChestMenuScreen.forget(player.getUUID());
     }
 
     // ------------------------------------------------------------------
@@ -140,6 +164,34 @@ public final class AuthManager {
     // ------------------------------------------------------------------
 
     /** 未登录玩家统一放到大厅（避免在小游戏/子服里挂机）。 */
+    /** 未认证玩家允许偏离大厅出生点的最大距离（方块）。 */
+    private static final double AUTH_ANCHOR_RADIUS = 4.0;
+
+    /**
+     * 把未认证玩家拉回大厅出生点附近。
+     *
+     * <p>只在同一维度内做小幅纠正；跨维度由 {@link #freezeInLobby} 负责，
+     * 避免两者互相打架。
+     */
+    private void pinToLobbyAnchor(ServerPlayer player) {
+        var lobby = worlds.lobby().orElse(null);
+        if (lobby == null || !player.level().dimension().equals(lobby.level().dimension())) {
+            return;
+        }
+        var anchor = lobby.spawn();
+        double dx = player.getX() - anchor.x();
+        double dz = player.getZ() - anchor.z();
+        boolean outOfBounds = dx * dx + dz * dz > AUTH_ANCHOR_RADIUS * AUTH_ANCHOR_RADIUS
+                || Math.abs(player.getY() - anchor.y()) > 8.0;
+        if (!outOfBounds) {
+            return;
+        }
+        player.teleportTo(lobby.level(), anchor.x(), anchor.y(), anchor.z(),
+                java.util.Set.of(), player.getYRot(), player.getXRot(), false);
+        player.setDeltaMovement(0, 0, 0);
+        player.hurtMarked = true;
+    }
+
     private void freezeInLobby(ServerPlayer player) {
         var lobby = worlds.lobby().orElse(null);
         if (lobby == null) {
@@ -187,9 +239,23 @@ public final class AuthManager {
     }
 
     /** 把未登录玩家"按"在原地：清速度、关飞行、保持满血饱食。 */
+    /**
+     * 未认证玩家的"钉住"：清速度 + 拉回大厅锚点。
+     *
+     * <p><b>为什么必须拉回位置：</b>只清速度是拦不住走动的。
+     * 原版 {@code handleMovePlayer} 的 "moved wrongly" 修正只在
+     * 客户端上报位置与服务端每 tick 偏差平方 &gt; 0.0625（≈0.25 格）时触发，
+     * 而正常步行的每 tick 位移远小于这个阈值，会被直接接受；
+     * 对创造/旁观玩家更是完全跳过修正。
+     *
+     * <p>结果是未登录玩家能在等待区自由行动（探路、贴近他人建筑、
+     * 触发区块与实体加载）。所以这里每个 tick 主动比对与锚点的距离，
+     * 偏离就强制拉回去（AuthMe 的做法）。
+     */
     private void hold(ServerPlayer player) {
         player.setDeltaMovement(0, 0, 0);
         player.hurtMarked = true;
+        pinToLobbyAnchor(player);
         if (player.getAbilities().flying) {
             player.getAbilities().flying = false;
             player.onUpdateAbilities();
