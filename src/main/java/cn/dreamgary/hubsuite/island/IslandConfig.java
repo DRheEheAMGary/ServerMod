@@ -106,6 +106,18 @@ public final class IslandConfig {
         public String description = "";
         /** 方块层：{@code y偏移:方块id}，例如 {@code "0:minecraft:grass_block"}。 */
         public List<String> layers = new ArrayList<>();
+        /**
+         * 岸边的沙滩方块（海岛专用）。
+         *
+         * <p>沙滩是**水平方向**的材质变化 —— 同一层里靠岸的一圈是沙、里面是草，
+         * 而 {@link #layers} 只能表达"第几层是什么方块"，表达不了这个，
+         * 所以单独给一个字段。
+         *
+         * <p>用在海岛（{@code placement: ocean}）上：干地最外一圈、以及
+         * 水面以下那几圈水下缓坡都用它。经典空岛（网格）用不上，留空即可。
+         * 写 {@code none} 表示不要沙滩，干地全用层配置的顶面方块。
+         */
+        public String beach = "minecraft:sand";
         /** 生成一棵树。 */
         public boolean tree = true;
         /** 生成一个带初始物资的箱子。 */
@@ -139,6 +151,11 @@ public final class IslandConfig {
             }
             if (type.displayName == null || type.displayName.isBlank()) {
                 type.displayName = type.id;
+            }
+            if (type.beach == null) {
+                // null = 配置里没有这个键（老配置文件）→ 用默认沙滩。
+                // 想关掉沙滩要显式写 "none" 或空串。
+                type.beach = "minecraft:sand";
             }
             byId.putIfAbsent(type.id, type);
         }

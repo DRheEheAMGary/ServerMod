@@ -34,6 +34,8 @@ public final class IslandPresets {
                 "-1:minecraft:dirt",
                 "-2:minecraft:dirt",
                 "-3:minecraft:stone");
+        // 沙滩是"海边"才有的东西，虚空里的网格空岛用不上 → 显式关掉
+        type.beach = "";
         type.tree = true;
         type.chest = true;
         type.loot = List.of(
@@ -58,6 +60,8 @@ public final class IslandPresets {
                 "-1:minecraft:dirt",
                 "-2:minecraft:dirt",
                 "-3:minecraft:dirt");
+        // 海岸线一圈是沙滩，往海里还有几圈水下缓坡 —— 想改成全是草就写 none
+        type.beach = "minecraft:sand";
         type.tree = false;
         type.chest = true;
         type.loot = List.of(

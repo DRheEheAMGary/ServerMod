@@ -121,10 +121,6 @@ public final class IslandManager {
      * 之后必须有人重试 —— 否则玩家被传送到一座空岛上方，直接掉进海里/虚空，
      * 而岛**永远不会生成**（实测踩过）。
      */
-    /** 已经放过结构的区块（避免多座岛把结构堆在同一处）。 */
-    private final java.util.Set<Long> placedStructureChunks =
-            java.util.concurrent.ConcurrentHashMap.newKeySet();
-
     private final java.util.Set<String> pendingTerrain =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -200,18 +196,14 @@ public final class IslandManager {
         /*
          * 岛要放在**海洋**上，不能随便找块地就放。这里有两个坑：
          *
-         *  1. 用 getBlockState 探测会**同步生成整个区块** —— 第一版扫了几百个点，
-         *     直接把服务器卡到看门狗强杀（单 tick 60 秒）。所以只查噪声群系。
-         *  2. 单点噪声群系不够准：某些坐标判成海洋，实际地表却是森林
-         *     （实测把岛建到了 old_growth_birch_forest 上）。所以候选点要求
-         *     **3x3 采样全是海洋**才采纳。
+         *  1. **绝不读方块。** 用 getBlockState 探测会同步生成整个区块
+         *     （第一版扫了几百个点，直接把服务器卡到看门狗强杀，单 tick 60 秒）。
+         *     所以只看噪声群系 —— getNoiseBiome 不碰区块，开销极小。
+         *  2. 单点噪声群系不够准：某些坐标判成海洋，实际地表却是别的地形。
+         *     所以候选点要求 **3x3 采样全是海洋**才采纳。
          *
-         * 另外：绝不回落到原点 —— 那里几乎一定是陆地，正是坑 2 的来源。
+         * 另外：绝不回落到原点 —— 那里未必是海，正是坑 2 的来源。
          */
-        var oceanBiomes = java.util.Set.of("ocean", "deep_ocean", "warm_ocean",
-                "lukewarm_ocean", "cold_ocean", "deep_lukewarm_ocean",
-                "deep_cold_ocean", "deep_warm_ocean");
-
         int attempts = 0;
         for (int ring = 1; ring <= 24 && attempts < 400; ring++) {
             int r = ring * step;
@@ -221,7 +213,7 @@ public final class IslandManager {
                 int z = (int) Math.round(Math.sin(angle) * r);
                 attempts++;
 
-                if (!isOceanPatch(x, z, oceanBiomes)) {
+                if (!isOceanPatch(x, z)) {
                     continue;
                 }
                 boolean ok = true;
@@ -234,11 +226,11 @@ public final class IslandManager {
                     }
                 }
                 if (ok) {
-                    // Y 必须在**选定坐标之后**才算：它要实测那个位置的水面，
-                    // 而不同位置的水面未必一样高（浅海 vs 深海）。
-                    int y = oceanAnchorY(x, z);
-                    HubSuite.logger().info("为海岛选定位置 ({}, {}, {})（尝试 {} 次）",
-                            x, y, z, attempts);
+                    int y = oceanAnchorY();
+                    HubSuite.logger().info("为海岛选定位置 ({}, {}, {})（尝试 {} 次，群系 {}，"
+                                    + "距已有岛最近 {} 格）",
+                            x, y, z, attempts, biomeNameAt(x, z),
+                            taken.isEmpty() ? "无（这是第一座）" : nearestIslandDistance(x, z, taken));
                     return new BlockPos(x, y, z);
                 }
             }
@@ -250,20 +242,49 @@ public final class IslandManager {
         HubSuite.logger().warn(
                 "海里没找到成片海洋（尝试 {} 次，已有 {} 座岛），岛放在 ({}, {}) —— 可能不在海洋上，请检查世界生成",
                 attempts, taken.size(), fx, fz);
-        return new BlockPos(fx, oceanAnchorY(fx, fz), fz);
+        return new BlockPos(fx, oceanAnchorY(), fz);
+    }
+
+    /** 离已有岛最近的距离（只用于日志）。 */
+    private long nearestIslandDistance(int x, int z, List<BlockPos> taken) {
+        long best = -1;
+        for (BlockPos pos : taken) {
+            long dx = pos.getX() - x;
+            long dz = pos.getZ() - z;
+            long d = (long) Math.sqrt((double) (dx * dx + dz * dz));
+            if (best < 0 || d < best) {
+                best = d;
+            }
+        }
+        return best;
+    }
+
+    /** 某个坐标的群系名（只用于日志，失败返回 "?"）。 */
+    private String biomeNameAt(int x, int z) {
+        try {
+            return level.getNoiseBiome(x >> 2, quartYFor(), z >> 2)
+                    .unwrapKey().map(k -> k.identifier().toString()).orElse("?");
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    /** 取群系用的 quart Y：贴着水面往下一点，避开"水面之上"的空气柱。 */
+    private int quartYFor() {
+        return Math.max(0, (oceanAnchorY() - 1) >> 2);
     }
 
     /**
      * 这个坐标周围是不是**成片的**海洋（3x3 噪声采样全是海洋群系）。
      *
      * <p>单点采样不够准：噪声在群系边界会抖动，某些点判成海洋、
-     * 实际地表却是森林。
+     * 实际地表却是别的。采样间距取 48 格，正好覆盖一座岛加上水下缓坡的范围。
      */
-    private boolean isOceanPatch(int x, int z, java.util.Set<String> oceanBiomes) {
+    private boolean isOceanPatch(int x, int z) {
         int span = 48;
         for (int dx = -span; dx <= span; dx += span) {
             for (int dz = -span; dz <= span; dz += span) {
-                if (!isNoiseOcean(x + dx, z + dz, oceanBiomes)) {
+                if (!isOceanNoise(x + dx, z + dz)) {
                     return false;
                 }
             }
@@ -271,37 +292,58 @@ public final class IslandManager {
         return true;
     }
 
-    /** 用噪声群系判断（不生成区块，开销极小）。 */
-    private boolean isNoiseOcean(int x, int z, java.util.Set<String> oceanBiomes) {
+    /**
+     * 用**噪声群系**判断某个坐标是不是海洋。
+     *
+     * <p>只看噪声，**不读方块、不加载区块** —— 选位会扫几百个点，
+     * 任何一个 getBlockState 都会把整片区块同步生成出来（实测被看门狗强杀过）。
+     *
+     * <p>群系名单只有一份，来自生成器本身（见
+     * {@link cn.dreamgary.hubsuite.world.OceanWorldGenerator#oceanBiomeIds()}）。
+     */
+    private boolean isOceanNoise(int x, int z) {
         try {
-            int quartY = Math.max(0, (oceanAnchorY(x, z) - 1) >> 2);
-            var key = level.getNoiseBiome(x >> 2, quartY, z >> 2).unwrapKey().orElse(null);
-            return key != null && oceanBiomes.contains(key.identifier().getPath());
+            var key = level.getNoiseBiome(x >> 2, quartYFor(), z >> 2).unwrapKey().orElse(null);
+            return key != null
+                    && cn.dreamgary.hubsuite.world.OceanWorldGenerator
+                            .isOceanBiome(key.identifier().getPath());
         } catch (Throwable t) {
             return false;
         }
     }
 
     /**
-     * 海岛锚点的高度 = **实测水面 + 1**。
+     * 供自检使用：选位用的"纯噪声"海洋判定。
      *
-     * <p>必须和 {@link #buildOceanIsland} 用**同一个**算法，否则会出现
-     * "地形铺在 Y=63、锚点却记成 Y=64"这种错位 —— 出生点和箱子都会
-     * 悬在岛上方一格（用户实测反馈"岛屿高出海平面 2 格"就是这个）。
-     *
-     * <p>注意不能直接用 {@code level.getSeaLevel()}：那是噪声设置里的
-     * "海平面参考值"，实测这个维度水面在 Y=62 而 seaLevel=63，
-     * 差一格就会让岛看起来高出一格。
+     * <p>自检会拿一个**没加载**的坐标调它，然后断言那个区块仍然没加载 ——
+     * 这是"选位绝不生成区块"的回归防线。
      */
-    private int oceanAnchorY(int x, int z) {
+    public boolean oceanBiomeAt(int x, int z) {
+        return isOceanNoise(x, z);
+    }
+
+    /**
+     * 海岛锚点的高度。
+     *
+     * <p>就是**水面高度 + {@link #OCEAN_ISLAND_ABOVE_WATER}**，
+     * 由生成器给出（{@code waterSurface()}），而不是现扫方块量出来的。
+     *
+     * <p>踩过的坑：这里原来是 {@code findWaterSurface(level, x, z)} —— 读方块。
+     * 而选位阶段那个位置的区块**多半还没加载**，读一格就等于同步生成整片区块：
+     * 一次选位最多 13 个候选 × 9 个采样点 = 一百多次重地形生成挤在同一个 tick 里。
+     * 而且 {@link #buildOceanIsland} 铺地形时又会**重新量一次**水面，
+     * 两个算法一旦不一致，就会出现"地形铺在一层、出生点在另一层"。
+     *
+     * <p>海面高度在这个维度是**全局常量**：含水层已关闭、海底恒在海平面以下，
+     * 所以水方块顶面处处都是 {@code waterSurface()}。铺地形时不再重新量，
+     * 直接用记录里的锚点高度 —— 真源只有一个。
+     */
+    private int oceanAnchorY() {
         if (config.oceanIslandY > 0) {
             return config.oceanIslandY;
         }
-        try {
-            return findWaterSurface(level, x, z) + OCEAN_ISLAND_ABOVE_WATER;
-        } catch (Throwable t) {
-            return 64;
-        }
+        return cn.dreamgary.hubsuite.world.OceanWorldGenerator.waterSurface()
+                + OCEAN_ISLAND_ABOVE_WATER;
     }
 
     /** 方格中心对应的方块坐标。 */
@@ -508,16 +550,24 @@ public final class IslandManager {
     /**
      * 保护判定用的半径。
      *
-     * <p><b>必须覆盖到方形的四个角。</b>地形是按 {@code dx,dz ∈ [-r, r]} 铺的
-     * **正方形**，而 {@link #islandAt} 用的是**圆形**判定；直接用 r 的话
-     * 角落方块（距中心 {@code r*sqrt(2)}）落在圈外 ——
-     * 后果有两重：岛主在自己岛的角落不能建造，而**别人可以拆/建那里的方块**。
-     * 默认 plotSize=256（r=4）时，9×9 表层里有 12 格中招。
+     * <p>两种放置方式的地形形状不同，保护圈也必须跟着不同 ——
+     * 保护圈比地形小，会出现"岛主在自己岛上不能建造、别人却能拆"的怪事。
      *
-     * <p>所以按外接圆半径判定（{@code ceil(r*sqrt(2))}）。
+     * <p>经典空岛：地形是按 {@code dx,dz ∈ [-r, r]} 铺的**正方形**，
+     * 而 {@link #islandAt} 用的是**圆形**判定；直接用 r 的话
+     * 角落方块（距中心 {@code r*sqrt(2)}）落在圈外 ——
+     * 默认 plotSize=256（r=4）时，9×9 表层里有 12 格中招。
+     * 所以按外接圆半径判定（{@code ceil(r*sqrt(2))}）。
+     *
+     * <p>海岛：地形是**不规则圆形海岸线 + 水下缓坡**
+     * （见 {@link #buildOceanIsland}），最远伸到
+     * {@code r + 海岸线抖动(≤1.8) + 缓坡圈数}。按这个算，再加 1 格余量。
      */
     public int protectionRadius() {
         int r = islandRadius();
+        if (isOceanPlacement()) {
+            return (int) Math.ceil(r + OCEAN_SHORE_WOBBLE_MAX + OCEAN_SKIRT_RINGS) + 1;
+        }
         return (int) Math.ceil(r * 1.4142135623730951) + 1;   // r * √2
     }
 
@@ -562,7 +612,9 @@ public final class IslandManager {
         try {
             ServerLevel level = this.level;
             BlockPos center = anchorOf(island);
-            int radius = islandRadius() + 4;
+            // 清理范围必须**盖住整座岛**（含不规则海岸线与水下缓坡），
+            // 否则重新分配时会和上一座岛的残留叠在一起。
+            int radius = protectionRadius() + 1;
 
             /*
              * 区块没加载就直接放弃清理。
@@ -588,15 +640,52 @@ public final class IslandManager {
                 }
             }
 
+            /*
+             * 清理的范围与"清成什么"都要**按放置方式分开算**：
+             *
+             *   · 经典空岛在虚空里，只有中心那点方块，清 ±8 格、清成空气就行；
+             *   · 海岛是"从海底长出来"的，石头一直填到海床（可能往下 30+ 格），
+             *     只清 -8 会在水下留一根石桩；
+             *   · 而且海岛维度**整片都是水**，岛占掉的那块水在重建时不会自己回来 ——
+             *     清成空气等于在海里挖一根 25×25 的空气柱，四周的水立刻灌进去、
+             *     海面塌陷（实测挖出过从 Y=62 直通 Y=12 的大坑）。
+             *
+             * 所以海岛：纵向一直扫到最深可能的海床，**水面以下还原成水**、
+             * 水面以上清成空气。这样海面高度不变、也不会出现空腔。
+             * （代价是岛正下方会留下一段比原来深的水；原始海床高度没有存过，
+             *   做不到逐格还原 —— 重建时填海床又会把它填回去。）
+             */
+            boolean ocean = isOceanPlacement();
+            int fromDy = ocean ? -(MAX_SEABED_SEARCH + 2) : -8;
+            int toDy = 24;
+            int waterY = cn.dreamgary.hubsuite.world.OceanWorldGenerator.waterSurface();
+            BlockState water = Blocks.WATER.defaultBlockState();
+
             int cleared = 0;
-            for (int dy = -8; dy <= 24; dy++) {
+            for (int dy = fromDy; dy <= toDy; dy++) {
+                int y = center.getY() + dy;
+                // 水面以下恢复成水，以上清成空气
+                BlockState target = ocean && y <= waterY
+                        ? water : Blocks.AIR.defaultBlockState();
+                int flags = ocean && dy < -3
+                        ? net.minecraft.world.level.block.Block.UPDATE_CLIENTS
+                        : net.minecraft.world.level.block.Block.UPDATE_ALL;
                 for (int dx = -radius; dx <= radius; dx++) {
                     for (int dz = -radius; dz <= radius; dz++) {
                         var pos = center.offset(dx, dy, dz);
-                        if (!level.getBlockState(pos).isAir()) {
-                            level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
-                            cleared++;
+                        BlockState state = level.getBlockState(pos);
+                        if (state.isAir()) {
+                            continue;
                         }
+                        if (target.is(Blocks.WATER)
+                                && !state.getFluidState().isEmpty()) {
+                            continue;   // 已经是水，别重复写
+                        }
+                        if (!target.is(Blocks.WATER) && state.is(Blocks.AIR)) {
+                            continue;
+                        }
+                        level.setBlock(pos, target, flags);
+                        cleared++;
                     }
                 }
             }
@@ -778,13 +867,24 @@ public final class IslandManager {
         }
         pendingTerrain.add(island.player);
         if (island.anchorY == 0) {
-            // 老记录没有锚点字段：按放置方式补算，避免把岛铺到世界原点
-            BlockPos computed = "ocean".equals(island.placement)
-                    ? plotCenter(island.plotX, island.plotZ)
-                    : plotCenter(island.plotX, island.plotZ);
-            island.anchorX = computed.getX();
-            island.anchorY = computed.getY();
-            island.anchorZ = computed.getZ();
+            /*
+             * 老记录没有锚点字段（配置升级前的存档）。
+             *
+             * 网格模式可以从方格号反推；海岛模式**不能** ——
+             * 海里点上去的岛没有方格，只存了一个展示用的序号，
+             * 反推会把岛铺到世界原点去。它的 X/Z 本来就是对的，
+             * 只补一个高度就够了。
+             */
+            if ("ocean".equals(island.placement)) {
+                island.anchorY = oceanAnchorY();
+                HubSuite.logger().warn("海岛记录缺少高度，已按水面补成 Y={}（X/Z 沿用记录值 {}, {}）",
+                        island.anchorY, island.anchorX, island.anchorZ);
+            } else {
+                BlockPos computed = plotCenter(island.plotX, island.plotZ);
+                island.anchorX = computed.getX();
+                island.anchorY = computed.getY();
+                island.anchorZ = computed.getZ();
+            }
         }
         boolean painted = generate(island);
         if (painted) {
@@ -912,7 +1012,7 @@ public final class IslandManager {
         //    照层配置铺就行。
         List<int[]> layers = parseLayers(type);
         if (isOceanPlacement()) {
-            if (buildOceanIsland(level, center, radius, layers, deadline, overBudget)) {
+            if (buildOceanIsland(level, center, radius, type, layers, deadline, overBudget)) {
                 HubSuite.logger().debug("海岛地形已铺好（中心 {}）", center);
             }
         } else {
@@ -1034,20 +1134,16 @@ public final class IslandManager {
             pendingTerrain.add(island.player);
             return false;
         }
-        // 地形铺好后，在岛附近补一个海洋结构（沉船 / 海底废墟）。
+        // 地形铺好后，岛附近**不需要**手工补放海洋结构。
         //
-        // 为什么定向补而不是改全局结构密度：结构频率写在原版的 structure_set
-        // 数据里，是**全局注册表** —— 覆盖它会连生存服和创造服一起改掉。
-        // 玩家实际会探索的就是自己岛附近，定向补既能满足"出海能看到东西"，
-        // 又不影响其它维度。
-        if (isOceanPlacement()) {
-            try {
-                cn.dreamgary.hubsuite.world.OceanStructures.placeNear(level, center, island.anchorX * 31L + island.anchorZ,
-                        placedStructureChunks);
-            } catch (Throwable t) {
-                HubSuite.logger().warn("补放海洋结构失败（不影响岛屿）：{}", t.toString());
-            }
-        }
+        // 这里原来有一段"定向补放沉船/海底废墟"（OceanStructures）：当时的想法是
+        // 改结构频率要覆盖全局注册表、会连带改掉生存/创造服，所以只在岛附近补几个。
+        // 后来实测发现两件事，于是删掉了：
+        //   1. 这个维度**所有**群系都是海洋群系，原版结构集本来就会密集刷沉船、
+        //      海底废墟、海底神殿 —— /locate structure 实测出生点 66 格内就有沉船；
+        //   2. 那段代码要求目标区块已加载（结构要写方块），而建岛时只有中心
+        //      3×3 区块是加载的，48~128 格外**必然**没加载 → 8 次尝试全部跳过、
+        //      一次都没成功过（日志里从来没有"补放结构"那行）。留着只会误导人。
 
         island.terrainPainted = true;
         return true;
@@ -1079,29 +1175,52 @@ public final class IslandManager {
     /**
      * 铺一座**海里的岛**。
      *
-     * <p>和虚空空岛的区别：
-     * <ul>
-     *   <li>顶面固定在 {@code 海平面 + 1}，而不是配置的绝对高度
-     *       —— 生成器已经保证那里是水面，岛上站人不会被淹；</li>
-     *   <li>底下**一直填到天然海床**，而不是铺固定的几层。
-     *       否则海里会浮着一块 4 格厚的石板，底下是水，非常出戏。</li>
-     * </ul>
+     * <p>从岛心往外分三层（全部由 {@link #islandRadius()} 和几个常量驱动）：
+     * <pre>
+     *   dist ≤ 半径            草地（层配置）—— **保证区**，树和箱子都在这里
+     *   半径 &lt; dist ≤ 海岸线   沙滩环（海岸线 = 半径 + 抖动，所以这一圈宽窄不一）
+     *   海岸线 &lt; dist ≤ +3圈   水下缓坡（每往外一圈低一格，铺沙滩）
+     *   再往外                  天然海床，不动
+     * </pre>
      *
-     * <p>顶部材质仍然来自层配置（默认草方块 + 泥土），所以想改成沙滩只要改配置。
+     * <p><b>为什么不是正方形：</b>第一版就是"dx,dz 在 [-r,r] 全铺一遍"，
+     * 结果海里出现一块 9×9 的**正方形草皮**，四壁是笔直的石头墙 ——
+     * 从存档里导出方块一看就是个方块插在海里，完全不像岛（用户反馈
+     * "看看海岛的生成逻辑"就是这个）。现在海岸线由三个频率的正弦叠加扰动，
+     * 相位取自锚点坐标，所以同一座岛每次重建都长一样，不同岛各不相同。
+     *
+     * <p>顶面高度就是记录里的锚点高度 {@code center.getY()}
+     * （= 水面，见 {@link #oceanAnchorY()}），这里**不再重新量水面** ——
+     * 两个算法各算一次是"地形在一层、出生点在另一层"这类错位的根源。
+     * 铺之前会实测一次水面做**一致性校验**，不一致只告警，不改高度。
      *
      * @return true 表示铺成功（可能因为超预算提前停下）
      */
     private boolean buildOceanIsland(ServerLevel level, BlockPos center, int radius,
-                                     List<int[]> layers, long deadline, boolean[] overBudget) {
+                                     IslandConfig.IslandType type, List<int[]> layers,
+                                     long deadline, boolean[] overBudget) {
+        int topY = center.getY();
+
         /*
-         * 顶面高度 = **实测的水面 + 1**，而不是假设"seaLevel 就是水面"。
+         * 一致性校验：锚点高度应当正好是水面（含水层关闭后水面是全局常量）。
          *
-         * 踩过的坑：一开始写死 seaLevel+1，用户实测"岛屿高出海平面 2 格"。
-         * 因为 NoiseGeneratorSettings 里的 seaLevel 是"水面判定用的参考值"，
-         * 实际最上层的水方块未必正好在那一格。与其猜，不如扫一遍。
+         * 实测有两类正常的不一致，都会打日志但不影响建岛：
+         *   · 这一列水面之上有**冰**（frozen_ocean 的冰山/浮冰）—— 那几格不是流体，
+         *     扫出来的"水面"会偏低；
+         *   · 岛已经建过一次（重试补铺），中心柱现在是草/泥土，窗口里没有流体。
+         * 所以只在**低于**水面时提示，并且措辞明确是"该处水面之上有东西"。
          */
-        int waterTop = findWaterSurface(level, center.getX(), center.getZ());
-        int topY = waterTop + OCEAN_ISLAND_ABOVE_WATER;
+        try {
+            int measured = findWaterSurface(level, center.getX(), center.getZ());
+            if (measured < topY) {
+                HubSuite.logger().info(
+                        "海岛中心柱上方比水面高 {} 格（多半是冰/浮冰或结构），"
+                                + "已按水面 Y={} 铺岛并覆盖这些方块",
+                        topY - measured, topY);
+            }
+        } catch (Throwable ignored) {
+            // 校验失败不影响建岛
+        }
 
         // 层配置里的 dy 是相对"地表基准"的，这里把基准挪到 topY。
         // 例如 0:grass_block → topY；-1:dirt → topY-1。
@@ -1113,54 +1232,153 @@ public final class IslandManager {
             deepestConfigured = Math.min(deepestConfigured, layer[0]);
         }
 
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
+        BlockState filler = net.minecraft.world.level.block.Blocks.STONE.defaultBlockState();
+        BlockState beach = beachState(type);
+        boolean hasBeach = beach != null;
+
+        /*
+         * 海岸线：每条半径方向取一个"抖动值"。用锚点坐标当种子，
+         * 保证同一座岛每次重建形状一致（自检与玩家看到的才会是同一个形状）。
+         */
+        var rng = net.minecraft.util.RandomSource.create(
+                (long) center.getX() * 341873128712L + (long) center.getZ() * 132897987541L);
+        double p1 = rng.nextDouble() * Math.PI * 2;
+        double p2 = rng.nextDouble() * Math.PI * 2;
+        double p3 = rng.nextDouble() * Math.PI * 2;
+
+        int outer = radius + OCEAN_SKIRT_RINGS;
+        int dry = 0;
+        int shelf = 0;
+        long started = System.currentTimeMillis();
+
+        for (int dx = -outer; dx <= outer; dx++) {
+            for (int dz = -outer; dz <= outer; dz++) {
                 if (System.currentTimeMillis() > deadline) {
                     overBudget[0] = true;
                     return false;
                 }
                 int x = center.getX() + dx;
                 int z = center.getZ() + dz;
+                double dist = Math.sqrt((double) dx * dx + (double) dz * dz);
+                double angle = Math.atan2(dz, dx);
 
                 /*
-                 * 用**不同的更新标志**分层放置，这是性能关键。
+                 * 海岸线半径 = 半径 + 抖动。
                  *
-                 * setBlockAndUpdate 等价于 setBlock(..., UPDATE_ALL)，
-                 * 每放一格都会触发邻居更新与光照重算。海岛的填充深度
-                 * 是"一直到底下几十格的海床"，81 根柱子 × 几十格 = 几千次 ——
-                 * 实测直接把 4000ms 的建岛预算撑爆，导致地形"待补铺"却永远补不上。
+                 * 抖动**只往外加、不往里减**（每一项都是 0.5+0.5*sin ≥ 0）：
+                 * 半径以内的方块是**保证的草地**，树和箱子都放在那里
+                 * （箱子在 2.83 格、树在 2.0 格）。如果抖动允许往里缩，
+                 * 就有概率把箱子放到海岸线之外 —— 海里悬空一个箱子。
                  *
-                 * 所以：
-                 *   · 表层（玩家能看到、会走上去的 2 层）用 UPDATE_ALL，保证
-                 *     光照和邻居状态正确；
-                 *   · 深处的填充只在客户端可见性上更新，跳过邻居/光照传播 ——
-                 *     那些方块埋在海底，没人看得见。
+                 * 三个频率（3/5/7）叠出"大湾 + 中湾 + 小凹凸"三级轮廓，
+                 * 幅度之和 = OCEAN_SHORE_WOBBLE_MAX。
                  */
-                for (int[] layer : sorted) {
-                    BlockState state = blockState(layer[1]);
-                    if (state == null) {
+                double wobble = 1.05 * (0.5 + 0.5 * Math.sin(3 * angle + p1))
+                        + 0.70 * (0.5 + 0.5 * Math.sin(5 * angle + p2))
+                        + 0.45 * (0.5 + 0.5 * Math.sin(7 * angle + p3));
+                double shore = radius + wobble;
+
+                if (dist <= radius) {
+                    // ---- 岛心草地（保证区）----
+                    placeLayers(level, x, z, topY, sorted, false, beach, filler, deepestConfigured);
+                    dry++;
+                } else if (dist <= shore) {
+                    // ---- 沙滩环：形状的"不规则"主要来自这里 ----
+                    placeLayers(level, x, z, topY, sorted, true, beach, filler, deepestConfigured);
+                    dry++;
+                } else if (hasBeach) {
+                    // ---- 水下缓坡：每往外一圈低一格，表面铺沙滩 ----
+                    //
+                    // 这一圈的作用是**拆掉垂直石墙**：原本海岸线以外直接就是
+                    // 几十格高的石头断崖，现在先有三圈往下退的浅滩，
+                    // 从水面上看就是"沙滩一直延伸进海里"。
+                    //
+                    // 更缓的坡需要更宽的范围，而建岛只保证 3x3 区块已加载
+                    // （中心点到边界最少 16 格），所以圈数不能无限加。
+                    int ring = (int) Math.ceil(dist - shore);
+                    if (ring > OCEAN_SKIRT_RINGS) {
                         continue;
                     }
-                    int flags = layer[0] >= -1
-                            ? net.minecraft.world.level.block.Block.UPDATE_ALL
-                            : net.minecraft.world.level.block.Block.UPDATE_CLIENTS;
-                    level.setBlock(new BlockPos(x, topY + layer[0], z), state, flags);
-                }
-
-                // 再往下填石头，直到碰到天然海床（或到达配置的最深层）
-                int floorY = findSeabed(level, x, topY + deepestConfigured - 1, z);
-                BlockState filler = net.minecraft.world.level.block.Blocks.STONE.defaultBlockState();
-                for (int y = topY + deepestConfigured - 1; y > floorY; y--) {
-                    var pos = new BlockPos(x, y, z);
-                    if (isSolidGround(level.getBlockState(pos))) {
-                        break;   // 碰到真正的实心（海床），停
+                    int surfaceY = topY - ring;
+                    var surface = new BlockPos(x, surfaceY, z);
+                    if (isSolidGround(level.getBlockState(surface))) {
+                        continue;   // 这里本来就是海床/浅滩，别抬高它
                     }
-                    level.setBlock(pos, filler,
+                    level.setBlock(surface, beach,
+                            net.minecraft.world.level.block.Block.UPDATE_ALL);
+                    level.setBlock(surface.below(), beach,
                             net.minecraft.world.level.block.Block.UPDATE_CLIENTS);
+                    fillDown(level, x, surfaceY - 2, z, filler);
+                    shelf++;
                 }
             }
         }
+
+        HubSuite.logger().info("海岛地形已铺好：中心 {}，草地半径 {} + 沙滩抖动 ≤{}，"
+                        + "干地 {} 格 / 水下缓坡 {} 格，耗时 {} ms",
+                center, radius, OCEAN_SHORE_WOBBLE_MAX, dry, shelf,
+                System.currentTimeMillis() - started);
         return true;
+    }
+
+    /**
+     * 铺一根柱子的"干地"部分：层配置 + 往下填到海床。
+     *
+     * @param sandy true 表示这一列在沙滩环上，最上面两层换成沙滩方块
+     */
+    private void placeLayers(ServerLevel level, int x, int z, int topY, List<int[]> sorted,
+                             boolean sandy, BlockState beach, BlockState filler,
+                             int deepestConfigured) {
+        for (int[] layer : sorted) {
+            BlockState state = sandy && beach != null && layer[0] >= -1
+                    ? beach : blockState(layer[1]);
+            if (state == null) {
+                continue;
+            }
+            int flags = layer[0] >= -1
+                    ? net.minecraft.world.level.block.Block.UPDATE_ALL
+                    : net.minecraft.world.level.block.Block.UPDATE_CLIENTS;
+            level.setBlock(new BlockPos(x, topY + layer[0], z), state, flags);
+        }
+        fillDown(level, x, topY + deepestConfigured - 1, z, filler);
+    }
+
+    /**
+     * 从 {@code fromY} 往下填石头，直到碰到天然海床。
+     *
+     * <p>为什么要填到底：海里凭空浮着一块几格厚的石板非常出戏，
+     * 而且玩家往下挖会直接漏进海里。填到海床之后，岛就是"从海底长出来的"。
+     *
+     * <p>用 {@code UPDATE_CLIENTS} 而不是 {@code setBlockAndUpdate}：
+     * 深处几百上千格方块全部触发邻居更新与光照重算的话，
+     * 会把建岛的时间预算撑爆（见 {@link #GENERATE_BUDGET_MS}）。
+     */
+    private void fillDown(ServerLevel level, int x, int fromY, int z, BlockState filler) {
+        int floorY = findSeabed(level, x, fromY, z);
+        for (int y = fromY; y > floorY; y--) {
+            level.setBlock(new BlockPos(x, y, z), filler,
+                    net.minecraft.world.level.block.Block.UPDATE_CLIENTS);
+        }
+    }
+
+    /**
+     * 岛型配置里的沙滩方块；没配就返回 null（= 不做沙滩，干地全用层配置）。
+     *
+     * <p>沙滩是**水平方向**的材质变化（同一层里岸边是沙、里面是草），
+     * 层配置（{@code y偏移:方块}）表达不了，所以单独给一个字段。
+     */
+    private BlockState beachState(IslandConfig.IslandType type) {
+        if (type == null || type.beach == null || type.beach.isBlank()
+                || "none".equalsIgnoreCase(type.beach.trim())) {
+            return null;
+        }
+        int id = parseBlockId(type.beach.trim());
+        if (id < 0) {
+            HubSuite.logger().warn("岛型 {} 的沙滩方块 '{}' 不存在，已忽略（干地用层配置的顶面方块）",
+                    type.id, type.beach);
+            return null;
+        }
+        return blockState(id);
     }
 
     /**
@@ -1239,6 +1457,25 @@ public final class IslandManager {
      * "地形在一层、出生点在另一层"的错位。
      */
     private static final int OCEAN_ISLAND_ABOVE_WATER = 0;
+
+    /**
+     * 海岸线抖动的**幅度上限**（格）：干地最远伸到 {@code 半径 + 这个值}。
+     *
+     * <p>等于 {@link #buildOceanIsland} 里三个正弦的幅度之和（1.05 + 0.70 + 0.45）。
+     * 两处必须一致 —— {@link #protectionRadius()} 用它算保护圈，
+     * 算小了就会出现"岛主在自己岛的岸边不能建造"。
+     */
+    private static final double OCEAN_SHORE_WOBBLE_MAX = 2.20;
+
+    /**
+     * 水下缓坡的圈数：海岸线以外每往外一圈低一格，一直到这个圈数。
+     *
+     * <p>作用是让岛**从沙洲过渡进海里**，而不是一圈笔直的石头断崖。
+     * 不能调太大：建岛只保证中心周围 3×3 区块已加载，
+     * 中心点到那个范围至少有 16 格，圈数 + 半径超过它就会写到未加载的区块上
+     * （那等于同步生成整片区块，本项目被看门狗强杀过好几次）。
+     */
+    private static final int OCEAN_SKIRT_RINGS = 3;
 
     /** 往下找海床的最大深度（防止在极深的海洋里铺太久）。 */
     private static final int MAX_SEABED_SEARCH = 48;

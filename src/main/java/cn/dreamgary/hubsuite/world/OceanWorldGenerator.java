@@ -141,12 +141,44 @@ public final class OceanWorldGenerator {
      *
      * <p>顺序即"温度带由冷到暖"，与 {@link #TEMPERATURE_BANDS} 一一对应。
      * 深海与浅海各取一个，所以每个温度带都有"靠近海面的浅海"和"深海"两档。
+     *
+     * <p>注意最后一个温度带（暖水）的**深海档也是 {@code deep_lukewarm_ocean}** ——
+     * 这不是复制粘贴错误：原版根本没有 {@code deep_warm_ocean} 这个群系，
+     * 暖水的深海用的就是 {@code deep_lukewarm_ocean}（原版群系预设里就是这么写的）。
      */
     private static final List<String> OCEAN_BIOMES = List.of(
             "deep_frozen_ocean", "frozen_ocean",
             "deep_cold_ocean", "cold_ocean",
             "deep_lukewarm_ocean", "lukewarm_ocean",
             "deep_lukewarm_ocean", "warm_ocean");
+
+    /**
+     * 这个维度**真正会生成**的海洋群系 id（不含 {@code minecraft:} 前缀）。
+     *
+     * <p><b>所有"这里是不是海洋"的判断都必须用这一份集合。</b>
+     * 踩过的坑：海岛选位与海洋出生点各写了一份自己的"海洋群系名单"，
+     * 两份都和这里对不上 ——
+     * <ul>
+     *   <li>名单里有 {@code ocean} / {@code deep_ocean} / {@code deep_warm_ocean}，
+     *       而这三个在原版注册表里要么根本不存在（{@code deep_warm_ocean}），
+     *       要么被我们的群系源排除掉了（前两个），**永远判不到**；</li>
+     *   <li>名单里缺 {@code frozen_ocean} / {@code deep_frozen_ocean}，
+     *       于是岛一旦落在冰冻温度带就被判成"不是海洋"，
+     *       选位器只好一圈圈往外绕（实测 12 个候选点全被否，绕到第二圈才成）。</li>
+     * </ul>
+     * 现在只留这一份，谁要判断海洋就问这里。
+     */
+    public static java.util.Set<String> oceanBiomeIds() {
+        return OCEAN_BIOME_SET;
+    }
+
+    /** 给定群系 id 的 path（不带命名空间）是不是本维度会生成的海洋群系。 */
+    public static boolean isOceanBiome(String path) {
+        return path != null && OCEAN_BIOME_SET.contains(path);
+    }
+
+    private static final java.util.Set<String> OCEAN_BIOME_SET =
+            java.util.Set.copyOf(OCEAN_BIOMES);
 
     /** 温度带边界（与 {@link #OCEAN_BIOMES} 配对：每两格一个温度带）。 */
     private static final float[][] TEMPERATURE_BANDS = {
@@ -165,7 +197,10 @@ public final class OceanWorldGenerator {
      *
      * <p>每个条目是一个"气候区间 → 群系"的映射。这里只让**温度**与
      * **深度（continentalness）**参与区分，其余维度取全区间，
-     * 保证任何坐标都能命中一个海洋群系（最后还兜底一个 ocean）。
+     * 而温度区间与深度区间都是完整覆盖，所以任何坐标都能命中一个海洋群系。
+     *
+     * <p>想知道"这里算不算海洋"请用 {@link #isOceanBiome(String)}，
+     * 不要另外抄一份名单（踩过坑，见那里的说明）。
      */
     private static MultiNoiseBiomeSource oceanBiomeSource(HolderGetter<Biome> biomes) {
         List<Pair<Climate.ParameterPoint, Holder<Biome>>> points = new ArrayList<>();

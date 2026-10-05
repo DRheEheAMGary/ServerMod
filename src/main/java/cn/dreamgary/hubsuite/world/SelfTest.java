@@ -95,9 +95,11 @@ public final class SelfTest {
         step("假玩家与假人名字长度合法", this::checkFakeNameLengths);
         step("空岛服可以正常交互方块", this::checkInteractionAllowed);
         step("海岛地形形状符合预期", this::checkOceanIslandShape);
+        step("海岛选位只看噪声、不生成区块", this::checkOceanPickerIsPure);
+        step("删掉海岛不会在海里留下空气坑", this::checkOceanDeleteRestoresWater);
         step("右键箱子真的能打开", this::checkChestActuallyOpens);
         step("海洋地形是真正的海（不是平板）", this::checkOceanTerrainQuality);
-        step("海岛附近有海洋结构", this::checkOceanStructures);
+        step("海岛附近有原版天然海洋结构", this::checkOceanStructures);
         step("死亡重生不会掉进虚空", this::checkRespawnDimension);
         step("子服入口绝不会是虚空主维度", this::checkEntryNeverVoid);
         step("菜单不会误吞真实容器的点击", this::checkMenuDoesNotEatRealContainers);
@@ -2169,7 +2171,7 @@ public final class SelfTest {
             var oceanLevel = ocean.entry().level();
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
-                    oceanLevel.getChunk(anchor.getX() / 16 + dx, anchor.getZ() / 16 + dz);
+                    oceanLevel.getChunk((anchor.getX() >> 4) + dx, (anchor.getZ() >> 4) + dz);
                 }
             }
 
@@ -2266,6 +2268,8 @@ public final class SelfTest {
             } else {
                 ok("岛外区块未加载，跳过水域抽查");
             }
+
+            checkOceanIslandOutline(level, center, ocean.manager(), island);
         } catch (Throwable t) {
             fail("海岛形状检查异常：" + t);
         } finally {
@@ -2275,6 +2279,342 @@ public final class SelfTest {
             } catch (Throwable ignored) {
                 // 忽略
             }
+        }
+    }
+
+    /**
+     * 海岛**轮廓**检查：不能是正方形、海岸线要有起伏、要有沙滩、要有水下缓坡。
+     *
+     * <p>锁住用户反馈的"看看海岛的生成逻辑"：第一版的岛是
+     * {@code dx,dz ∈ [-r,r]} 全铺，海里出现一块 9×9 的正方形草皮 +
+     * 四壁笔直的石头墙。下面四条分别对应"形状"、"不规则"、"沙滩"、"水下过渡"。
+     */
+    private void checkOceanIslandOutline(ServerLevel level, net.minecraft.core.BlockPos center,
+                                         cn.dreamgary.hubsuite.island.IslandManager manager,
+                                         cn.dreamgary.hubsuite.island.IslandManager.Island island) {
+        var type = manager.config().type(island.type);
+        int r = manager.islandRadius();
+        int outer = r + 4;   // 比缓坡再往外一圈，确认"外面确实是海"
+        int topY = center.getY();
+
+        /*
+         * "是不是岛的方块"只能按**岛用的材质**判断，不能按"不是水"判断。
+         *
+         * 踩过的坑：frozen_ocean 的水面上本来就有浮冰/冰山（冰、浮冰、雪），
+         * 按"非水即陆地"统计会把它们全算成岛的一部分 ——
+         * 实测把 8 格外的冰山当成"岛伸到 8 格"，误报"岛撑满了外接方形"。
+         *
+         * 岛的顶面只可能是层配置里 offset=0 的方块，或者沙滩方块。
+         */
+        java.util.Set<net.minecraft.world.level.block.Block> surfaceBlocks = new java.util.HashSet<>();
+        for (String raw : type.layers) {
+            if (raw == null) {
+                continue;
+            }
+            String[] parts = raw.split(":", 2);
+            if (parts.length != 2 || !"0".equals(parts[0].trim())) {
+                continue;
+            }
+            var reg = server.registryAccess().lookupOrThrow(net.minecraft.core.registries.Registries.BLOCK);
+            reg.get(net.minecraft.resources.ResourceKey.create(
+                            net.minecraft.core.registries.Registries.BLOCK,
+                            net.minecraft.resources.Identifier.parse(parts[1].trim())))
+                    .ifPresent(h -> surfaceBlocks.add(h.value()));
+        }
+
+        net.minecraft.world.level.block.Block beachBlock = null;
+        if (type.beach != null && !type.beach.isBlank() && !"none".equalsIgnoreCase(type.beach)) {
+            var reg = server.registryAccess().lookupOrThrow(net.minecraft.core.registries.Registries.BLOCK);
+            beachBlock = reg.get(net.minecraft.resources.ResourceKey.create(
+                            net.minecraft.core.registries.Registries.BLOCK,
+                            net.minecraft.resources.Identifier.parse(type.beach)))
+                    .map(h -> h.value()).orElse(null);
+            if (beachBlock != null) {
+                surfaceBlocks.add(beachBlock);
+            }
+        }
+        final net.minecraft.world.level.block.Block beach = beachBlock;
+        final java.util.Set<net.minecraft.world.level.block.Block> surfaces = surfaceBlocks;
+
+        int dry = 0;
+        int sand = 0;
+        int shelf = 0;
+        int water = 0;
+        int foreign = 0;      // 冰/浮冰等不属于岛的方块（冻洋会有）
+        StringBuilder outline = new StringBuilder();
+        for (int dx = -outer; dx <= outer; dx++) {
+            for (int dz = -outer; dz <= outer; dz++) {
+                var st = level.getBlockState(center.offset(dx, 0, dz));
+                boolean isWater = !st.getFluidState().isEmpty();
+                char mark;
+                if (isWater) {
+                    water++;
+                    mark = '~';
+                    // 水下缓坡：水面往下一点就是沙滩（说明不是垂直石墙到底）
+                    var below = level.getBlockState(center.offset(dx, -1, dz));
+                    var below2 = level.getBlockState(center.offset(dx, -2, dz));
+                    if (beach != null && (below.is(beach) || below2.is(beach))) {
+                        shelf++;
+                    }
+                } else if (surfaces.contains(st.getBlock())) {
+                    dry++;
+                    mark = beach != null && st.is(beach) ? 'S' : 'G';
+                    if (mark == 'S') {
+                        sand++;
+                    }
+                } else {
+                    foreign++;
+                    mark = '#';   // 浮冰 / 冰山 / 其它天然方块
+                }
+                outline.append(dx == 0 && dz == 0 ? 'C' : mark);
+            }
+            outline.append('\n');
+        }
+
+        /*
+         * 沿 24 个方向量"干地半径"：最大最小值之差就是海岸线的起伏。
+         *
+         * 正方形 / 正圆的起伏都是 0，所以这个差值直接区分
+         * "规则形状"与"不规则海岸线"。同时用最大值判断岛有没有撑满外接方形：
+         * 数值上界是 (r+2)*√2（那个方形的角），远小于它才说明岛是圆的。
+         */
+        double maxRadius = 0;
+        double minRadius = Double.MAX_VALUE;
+        int directions = 24;
+        for (int i = 0; i < directions; i++) {
+            double angle = Math.PI * 2 * i / directions;
+            double lastDry = 0;
+            for (double d = 0.5; d <= outer; d += 0.5) {
+                int px = (int) Math.round(Math.cos(angle) * d);
+                int pz = (int) Math.round(Math.sin(angle) * d);
+                var st = level.getBlockState(center.offset(px, 0, pz));
+                if (surfaces.contains(st.getBlock())) {
+                    lastDry = d;
+                }
+            }
+            maxRadius = Math.max(maxRadius, lastDry);
+            minRadius = Math.min(minRadius, lastDry);
+        }
+        double circleBound = (r + 2) * 1.4142135623730951;
+        double expectedMax = r + 2.2 + 0.5;   // 半径 + 抖动上限（留 0.5 采样余量）
+
+        if (minRadius >= 1 && maxRadius <= expectedMax) {
+            ok("海岛是圆/不规则形状：干地最远 " + String.format("%.1f", maxRadius)
+                    + " 格 ≤ 半径+抖动 " + String.format("%.1f", expectedMax)
+                    + " 格（外接方形对角是 " + String.format("%.1f", circleBound) + " 格）");
+        } else {
+            fail("海岛轮廓超出预期（干地半径 " + String.format("%.1f", minRadius)
+                    + "~" + String.format("%.1f", maxRadius) + "，应在 1~"
+                    + String.format("%.1f", expectedMax) + " 之间）—— 又变回方块了？");
+        }
+        double relief = maxRadius - minRadius;
+        if (relief >= 1.0) {
+            ok("海岸线是不规则的：24 个方向的干地半径 " + String.format("%.1f", minRadius)
+                    + "~" + String.format("%.1f", maxRadius)
+                    + "（起伏 " + String.format("%.1f", relief) + " 格）");
+        } else {
+            fail("海岸线几乎没有起伏（" + String.format("%.2f", relief)
+                    + " 格）—— 形状退化成正圆/方块了");
+        }
+        ok("海岛轮廓（G 草地 / S 沙滩 / ~ 海面 / # 浮冰等非岛方块 / C 岛心）：\n" + outline);
+        if (foreign > 0) {
+            ok("岛周围另有 " + foreign + " 格浮冰/冰山等天然方块（冻洋的正常现象，不计入岛）");
+        }
+
+        if (beachBlock == null) {
+            ok("岛型 " + type.id + " 没有配沙滩方块，跳过沙滩检查");
+        } else if (sand >= 4) {
+            ok("海岸线有沙滩：" + sand + " 格 " + beachBlock.getName().getString());
+        } else {
+            fail("海岸线上没有沙滩（" + type.beach + " 只找到 " + sand + " 格）—— 沙滩环没生效");
+        }
+
+        if (beachBlock == null) {
+            // 没沙滩就没有水下缓坡，这一项无意义
+        } else if (shelf >= 6) {
+            ok("海岸线外侧有水下缓坡：" + shelf + " 格水面下方是 " + beachBlock.getName().getString()
+                    + "（不是垂直石墙）");
+        } else {
+            fail("海岸线外侧没有水下缓坡（只有 " + shelf + " 格）—— 岛还是像一根插在海里的柱子");
+        }
+
+        // 树和箱子的位置必须落在**保证的草地**上，否则会悬空在海面
+        int guarantee = r;
+        var chestSpot = center.offset(2, 0, 2);
+        var treeSpot = center.offset(2, 0, 0);
+        if (Math.hypot(2, 2) <= guarantee && Math.hypot(2, 0) <= guarantee) {
+            var chestState = level.getBlockState(chestSpot);
+            var treeState = level.getBlockState(treeSpot);
+            if (chestState.getFluidState().isEmpty() && treeState.getFluidState().isEmpty()) {
+                ok("树与箱子的位置都在保证草地上（不会被海岸线切到海里）");
+            } else {
+                fail("树/箱子的位置掉到水里了：箱子处 " + chestState + "，树处 " + treeState);
+            }
+        } else {
+            fail("树/箱子的偏移超出了保证草地半径 " + guarantee + "（会随机落进海里）");
+        }
+
+        if (water > 0) {
+            ok("岛外仍被海水包围（范围内水域 " + water + " 格）");
+        } else {
+            fail("岛周围没有水了 —— 地形摊得太开");
+        }
+    }
+
+    /**
+     * 删掉一座海岛之后，它占掉的那块海**必须还是水**，不能变成空气坑。
+     *
+     * <p>锁住实测踩到的坑：岛是"从海底长出来"的，占掉的水在重建时不会自己回来。
+     * 早期版本的清理把方块**一律清成空气**，于是删一座岛就在海里挖出一根
+     * 25×25 的空气柱（实测从 Y=62 直通 Y=12），四周的海水立刻灌下去、
+     * 海面塌陷，而且填海床时还会顺着坑往下填成一根深石桩。
+     *
+     * <p>现在海岛分支会把水面以下清成**水**、只是把岛换成水而已。
+     * 这条检查就是这么验的：建岛 → 删岛 → 原地应该重新是水。
+     */
+    private void checkOceanDeleteRestoresWater() {
+        var islands = HubSuite.islands();
+        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
+        if (ocean == null) {
+            fail("缺少 ocean 岛型");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_delwater",
+                ocean.entry().level(), false);
+        if (probe == null) {
+            fail("删岛检查用假玩家创建失败");
+            return;
+        }
+        var level = ocean.entry().level();
+        try {
+            var island = ocean.manager().getOrCreate(
+                    probe.getUUID(), probe.getName().getString(), "ocean");
+            var center = ocean.manager().anchorOf(island);
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    level.getChunk((center.getX() >> 4) + dx, (center.getZ() >> 4) + dz);
+                }
+            }
+            if (!ocean.manager().ensureTerrain(island)) {
+                ok("删岛检查跳过（地形未铺好）");
+                return;
+            }
+            int waterY = cn.dreamgary.hubsuite.world.OceanWorldGenerator.waterSurface();
+            if (!level.getBlockState(center).is(net.minecraft.world.level.block.Blocks.GRASS_BLOCK)) {
+                ok("删岛检查跳过（岛中心不是草方块，地形可能刚被别的检查动过）");
+                return;
+            }
+
+            ocean.manager().delete(probe.getUUID());
+
+            // 1) 岛顶那一格必须重新是水
+            var top = level.getBlockState(center);
+            if (top.getFluidState().isEmpty()) {
+                fail("删岛后岛顶那一格是 " + top + "，应该是水 —— 清理把海水清成了空气");
+                return;
+            }
+            // 2) 往下 12 格不能有空气（有空气说明挖出了空腔、水会灌下去）
+            int air = -1;
+            for (int y = center.getY(); y > center.getY() - 12; y--) {
+                var st = level.getBlockState(new net.minecraft.core.BlockPos(
+                        center.getX(), y, center.getZ()));
+                if (st.isAir()) {
+                    air = y;
+                    break;
+                }
+            }
+            if (air > 0) {
+                fail("删岛后海面下 Y=" + air + " 出现空气 —— 水被清成空气了，海水会灌下去");
+            } else {
+                ok("删岛后原地恢复成水（水面 Y=" + waterY + " 往下 12 格都是水/实心，没有空气坑）");
+            }
+        } catch (Throwable t) {
+            fail("删岛检查异常：" + t);
+        } finally {
+            try {
+                ocean.manager().delete(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 海岛**选位**不该生成区块，而且"算不算海洋"的名单必须和生成器一致。
+     *
+     * <p>锁住两个真 bug：
+     * <ol>
+     *   <li>选位里调了 {@code findWaterSurface}（读方块）→ 每个采样点都把
+     *       整片海洋区块同步生成出来。一次选位最多 13 个候选 × 9 个采样点，
+     *       全挤在同一个 tick 里（本项目被看门狗强杀过好几次）；</li>
+     *   <li>选位自己抄了一份"海洋群系名单"，里面有 3 个永远判不到的 id
+     *       （{@code ocean}/{@code deep_ocean}/{@code deep_warm_ocean}），
+     *       又漏了 {@code frozen_ocean}/{@code deep_frozen_ocean} ——
+     *       岛一旦落在冰冻温度带就被判成"不是海洋"。</li>
+     * </ol>
+     */
+    private void checkOceanPickerIsPure() {
+        var islands = HubSuite.islands();
+        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
+        if (ocean == null) {
+            fail("缺少 ocean 岛型");
+            return;
+        }
+        var manager = ocean.manager();
+        var level = ocean.entry().level();
+
+        // 1) 名单：生成器说会生成的群系，注册表里都得有；判海洋只能问生成器
+        var ids = cn.dreamgary.hubsuite.world.OceanWorldGenerator.oceanBiomeIds();
+        var biomeRegistry = server.registryAccess()
+                .lookupOrThrow(net.minecraft.core.registries.Registries.BIOME);
+        StringBuilder missing = new StringBuilder();
+        for (String id : ids) {
+            var key = net.minecraft.resources.ResourceKey.create(
+                    net.minecraft.core.registries.Registries.BIOME,
+                    net.minecraft.resources.Identifier.withDefaultNamespace(id));
+            if (biomeRegistry.get(key).isEmpty()) {
+                missing.append(id).append(' ');
+            }
+        }
+        if (missing.length() > 0) {
+            fail("海洋群系名单里有注册表里不存在的群系（永远判不到）：" + missing);
+        } else {
+            ok("海洋群系名单 " + ids.size() + " 个，全部存在于注册表：" + ids);
+        }
+        // frozen_ocean 这类"曾经被漏掉"的群系必须被判成海洋
+        for (String must : List.of("frozen_ocean", "deep_frozen_ocean", "cold_ocean")) {
+            if (!cn.dreamgary.hubsuite.world.OceanWorldGenerator.isOceanBiome(must)) {
+                fail("生成器会生成 " + must + "，但判海洋时被拒 → 岛会被放到很远的别处");
+                return;
+            }
+        }
+        ok("冰冻/寒冷海洋也被认作海洋（不会再被选位器拒绝）");
+
+        // 2) 纯噪声：远处没加载的坐标探测之后，区块必须仍然没加载
+        int farX = 9000;
+        int farZ = -9000;
+        if (level.getChunkSource().hasChunk(farX >> 4, farZ >> 4)) {
+            ok("选位纯噪声检查跳过（测试坐标恰好已加载）");
+            return;
+        }
+        boolean verdict = manager.oceanBiomeAt(farX, farZ);
+        if (level.getChunkSource().hasChunk(farX >> 4, farZ >> 4)) {
+            fail("选位探测把 (" + farX + ", " + farZ + ") 的区块生成出来了！"
+                    + "（读方块 = 同步生成整片区块，选位会一次扫几百个点）");
+        } else {
+            ok("选位只看噪声：探测 (" + farX + ", " + farZ + ") 后区块仍未加载"
+                    + "（判定结果 " + verdict + "）");
+        }
+
+        // 3) 锚点高度 = 生成器给出的水面高度（不靠现扫方块）
+        int anchorY = manager.config().oceanIslandY > 0
+                ? manager.config().oceanIslandY
+                : cn.dreamgary.hubsuite.world.OceanWorldGenerator.waterSurface();
+        if (anchorY < level.getMinY() || anchorY > level.getMaxY()) {
+            fail("海岛锚点高度 " + anchorY + " 超出世界范围");
+        } else {
+            ok("海岛锚点高度 = 水面 Y=" + anchorY + "（与生成器一致，不现扫方块）");
         }
     }
 
@@ -2311,7 +2651,7 @@ public final class SelfTest {
             // 加载岛周边区块（生产代码不允许，但自检是同步的，没有下一 tick 可等）
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
-                    level.getChunk(anchor.getX() / 16 + dx, anchor.getZ() / 16 + dz);
+                    level.getChunk((anchor.getX() >> 4) + dx, (anchor.getZ() >> 4) + dz);
                 }
             }
             if (!ocean.manager().ensureTerrain(island)) {
@@ -2585,12 +2925,18 @@ public final class SelfTest {
      * 海平面以上所有高度的密度都等于同一个常数，只要它大于 0 就是整片实心。
      * 现在改成覆盖整个世界高度的渐变，不会截断。
      *
-     * <p>检查方式：在出生点周围取若干根柱子，逐格往下找第一块实心，
-     * 得到海床高度。要求：
+     * <p>检查方式：用生成器的 {@code getBaseHeight} 在**一大片范围**上抽样，
+     * 得到噪声地形的高度。要求：
      * <ol>
-     *   <li>每根柱子的海床都**低于海平面**（否则就是陆地）；</li>
-     *   <li>海床高度**有变化**（否则就是平板）。</li>
+     *   <li>每个采样点都在**海平面以下**（否则就是天然陆地）；</li>
+     *   <li>高度**有变化**（否则就是平板）。</li>
      * </ol>
+     *
+     * <p><b>为什么不用"读已加载区块的方块"：</b>第一版就是那么做的，结果
+     * 这个检查的结论完全取决于"当时恰好加载了哪片区域"—— 世界刚清空时
+     * 只加载了出生点附近一小块，海床在那儿正好是平的，于是误报
+     * "海床完全齐平"（实测）。{@code getBaseHeight} 直接问生成器，
+     * 既不加载区块，也和"加载了哪里"无关。
      */
     private void checkOceanTerrainQuality() {
         var islands = HubSuite.islands();
@@ -2603,34 +2949,32 @@ public final class SelfTest {
         var spawn = ocean.entry().spawn();
         int sea = cn.dreamgary.hubsuite.world.OceanWorldGenerator.seaLevel();
 
-        int[] xs = {64, 128, 192, 256, -64, -128};
-        int[] zs = {64, 128, 192, 256, -64, -128};
+        var generator = level.getChunkSource().getGenerator();
+        var randomState = level.getChunkSource().randomState();
+
         int sampled = 0;
         int aboveSea = 0;
         int minFloor = Integer.MAX_VALUE;
         int maxFloor = Integer.MIN_VALUE;
         StringBuilder bad = new StringBuilder();
+        int samples = 64;
 
-        for (int i = 0; i < xs.length; i++) {
-            int x = (int) spawn.x() + xs[i];
-            int z = (int) spawn.z() + zs[i];
-            // 只抽查已加载的柱子：未加载就跳过，绝不主动 getChunk
-            if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) {
+        for (int i = 0; i < samples; i++) {
+            // 铺开成 8×8 的网格，覆盖 ±2500 格（跨好几个噪声波长）
+            int x = (int) spawn.x() + (i % 8 - 4) * 700 + 350;
+            int z = (int) spawn.z() + (i / 8 - 4) * 700 + 350;
+            int floor;
+            try {
+                floor = generator.getBaseHeight(x, z,
+                        net.minecraft.world.level.levelgen.Heightmap.Types.OCEAN_FLOOR_WG,
+                        level, randomState);
+            } catch (Throwable t) {
+                continue;
+            }
+            if (floor <= level.getMinY()) {
                 continue;
             }
             sampled++;
-            int floor = Integer.MIN_VALUE;
-            for (int y = sea + 6; y > level.getMinY(); y--) {
-                var st = level.getBlockState(new net.minecraft.core.BlockPos(x, y, z));
-                if (st.isAir() || !st.getFluidState().isEmpty()) {
-                    continue;
-                }
-                floor = y;
-                break;
-            }
-            if (floor == Integer.MIN_VALUE) {
-                continue;
-            }
             if (floor >= sea) {
                 aboveSea++;
                 if (bad.length() < 120) {
@@ -2642,7 +2986,7 @@ public final class SelfTest {
         }
 
         if (sampled == 0) {
-            ok("海洋地形抽查跳过（周围区块未加载）");
+            ok("海洋地形抽查跳过（生成器不支持高度抽样）");
             return;
         }
         if (aboveSea > 0) {
@@ -2661,11 +3005,15 @@ public final class SelfTest {
     }
 
     /**
-     * 海岛附近应当能补放出海洋结构（沉船 / 海底废墟）。
+     * 海里应当有**原版天然**的海洋结构（沉船 / 海底废墟）。
      *
-     * <p>用户要求"稍微增加一点结构数量"。因为结构频率是全局数据，直接改会影响
-     * 生存/创造服，所以改成在岛附近定向补放。这条自检确认补放真的生效 ——
-     * 结构放置涉及 Structure#generate + placeInChunk 两大步，很容易静默失败。
+     * <p>需求是"海岛 = 真海洋群系 + 原版沉船结构"。因为整个维度都是海洋群系，
+     * 原版的结构集本来就会密集地刷这些结构，所以**不需要**任何定向补放
+     * （曾经有过一版 OceanStructures 手工补放，实测一次都没成功过，
+     * 原因是要求目标区块已加载而那时只有中心 3×3 是加载的 —— 已删除）。
+     *
+     * <p>这条自检就是确认"天然生成真的发生了"：既验证群系源让结构能通过
+     * biome 检查，也验证结构集确实挂在这个维度上。
      */
     private void checkOceanStructures() {
         var islands = HubSuite.islands();
@@ -2686,7 +3034,8 @@ public final class SelfTest {
                     probe.getUUID(), probe.getName().getString(), "ocean");
             var anchor = ocean.manager().anchorOf(island);
 
-            // 先把岛周围一大片区块加载出来（结构会落在 48~128 格外）
+            // 先把岛周围一大片区块加载出来：天然结构的间距是几十个区块，
+            // 不铺开一片就看不到（正式游玩时玩家游过去，区块会自然加载）
             int cx = anchor.getX() >> 4;
             int cz = anchor.getZ() >> 4;
             for (int dx = -9; dx <= 9; dx++) {
@@ -2700,7 +3049,10 @@ public final class SelfTest {
             }
 
             // 结构是异步写在区块里的，这里直接问区块的 structure starts
+            var structureRegistry = server.registryAccess()
+                    .lookupOrThrow(net.minecraft.core.registries.Registries.STRUCTURE);
             int found = 0;
+            int shipwreck = 0;
             StringBuilder names = new StringBuilder();
             for (int dx = -9; dx <= 9; dx++) {
                 for (int dz = -9; dz <= 9; dz++) {
@@ -2710,17 +3062,24 @@ public final class SelfTest {
                             continue;
                         }
                         found++;
-                        if (names.length() < 100) {
-                            names.append(start.getStructure().getClass().getSimpleName())
-                                    .append(' ');
+                        // 用注册表 id 而不是类名：原版沉船是 JigsawStructure，
+                        // 按类名数会全部漏掉（第一版就是这么错过的）
+                        var key = structureRegistry.getKey(start.getStructure());
+                        String path = key == null ? "?" : key.getPath();
+                        if (path.contains("shipwreck")) {
+                            shipwreck++;
+                        }
+                        if (names.length() < 120) {
+                            names.append(path).append(' ');
                         }
                     }
                 }
             }
             if (found > 0) {
-                ok("岛附近有 " + found + " 个结构（" + names.toString().trim() + "）");
+                ok("岛附近 19×19 区块内有 " + found + " 个**天然**海洋结构"
+                        + "（沉船 " + shipwreck + " 个）：" + names.toString().trim());
             } else {
-                fail("岛附近 19×19 区块内一个结构都没有 —— 补放没生效");
+                fail("岛附近 19×19 区块内一个结构都没有 —— 海洋群系源没让原版结构通过检查");
             }
         } catch (Throwable t) {
             fail("结构检查异常：" + t);
@@ -2996,7 +3355,7 @@ public final class SelfTest {
             var level = ocean.entry().level();
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
-                    level.getChunk(anchor.getX() / 16 + dx, anchor.getZ() / 16 + dz);
+                    level.getChunk((anchor.getX() >> 4) + dx, (anchor.getZ() >> 4) + dz);
                 }
             }
             if (!ocean.manager().ensureTerrain(island)) {
@@ -3171,7 +3530,7 @@ public final class SelfTest {
             var center = classic.manager().anchorOf(island);
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
-                    level.getChunk(center.getX() / 16 + dx, center.getZ() / 16 + dz);
+                    level.getChunk((center.getX() >> 4) + dx, (center.getZ() >> 4) + dz);
                 }
             }
             if (!classic.manager().ensureTerrain(island)) {

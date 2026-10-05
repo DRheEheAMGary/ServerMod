@@ -89,9 +89,6 @@ public final class WorldFactory {
      * @return 找到的坐标；没找到返回 null
      */
     public static net.minecraft.core.BlockPos findOceanSpot(ServerLevel level, int seaLevel) {
-        var oceanNames = java.util.Set.of("ocean", "deep_ocean", "warm_ocean",
-                "lukewarm_ocean", "cold_ocean", "deep_lukewarm_ocean",
-                "deep_cold_ocean", "deep_warm_ocean");
         try {
             int quartY = Math.max(0, (seaLevel - 1) >> 2);
             // 从小到大绕圈找，命中就返回（近处优先，省得出生点离原点太远）
@@ -102,7 +99,9 @@ public final class WorldFactory {
                     int x = (int) Math.round(Math.cos(angle) * r);
                     int z = (int) Math.round(Math.sin(angle) * r);
                     var key = level.getNoiseBiome(x >> 2, quartY, z >> 2).unwrapKey().orElse(null);
-                    if (key != null && oceanNames.contains(key.identifier().getPath())) {
+                    // 名单只有一份，来自生成器本身：抄第二份必然和生成器对不上
+                    // （踩过坑，见 OceanWorldGenerator#oceanBiomeIds 的说明）
+                    if (key != null && OceanWorldGenerator.isOceanBiome(key.identifier().getPath())) {
                         HubSuite.logger().info("海洋出生点已选定：({}, {}, {})，群系 {}",
                                 x, seaLevel + 1, z, key.identifier());
                         return new net.minecraft.core.BlockPos(x, seaLevel + 1, z);
