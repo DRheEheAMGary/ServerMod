@@ -90,6 +90,7 @@ public final class SelfTest {
         step("空岛指令存在且可用", this::checkIslandCommands);
         step("空岛重置与切换岛型", this::checkIslandReset);
         step("玩家数据落盘目录正确", this::checkPlayerDataRouting);
+        step("成就与统计按维度隔离", this::checkAuxDataIsolation);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -1534,6 +1535,95 @@ public final class SelfTest {
         } finally {
             try {
                 java.nio.file.Files.deleteIfExists(survival.save().playerFile(probe.getUUID()));
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 成就与统计必须按子服维度隔离。
+     *
+     * <p>锁住的问题：{@code PlayerListStorageMixin} 只接管了 {@code playerIo}
+     * （背包/经验），而原版把成就和统计**另存两份文件**，路径来自
+     * {@code server.getWorldPath(PLAYER_STATS_DIR / PLAYER_ADVANCEMENTS_DIR)} ——
+     * 全局主世界，与玩家所在维度无关。结果"只在生存服该拿的成就，
+     * 在大厅/创造服也会解锁并互相污染"。
+     */
+    private void checkAuxDataIsolation() {
+        var survival = worlds.subServer("survival").orElse(null);
+        var lobby = worlds.lobby().orElse(null);
+        if (survival == null || lobby == null) {
+            fail("缺少生存服或大厅");
+            return;
+        }
+
+        // 1) 目录推算：不同维度必须指向不同子服存档
+        var survivalStats = AuxDataRouter.statsDir(survival.level().dimension());
+        var lobbyStats = AuxDataRouter.statsDir(lobby.level().dimension());
+        var survivalAdv = AuxDataRouter.advancementsDir(survival.level().dimension());
+        var lobbyAdv = AuxDataRouter.advancementsDir(lobby.level().dimension());
+
+        if (survivalStats == null || lobbyStats == null) {
+            fail("统计目录没能按维度解析出来（路由未生效）");
+            return;
+        }
+        if (survivalStats.equals(lobbyStats)) {
+            fail("生存服与大厅的统计目录相同：" + survivalStats + " —— 没隔离");
+            return;
+        }
+        ok("统计目录按维度分开（survival=" + survivalStats.getParent().getFileName()
+                + "/stats，lobby=" + lobbyStats.getParent().getFileName() + "/stats）");
+
+        if (survivalAdv != null && lobbyAdv != null && !survivalAdv.equals(lobbyAdv)) {
+            ok("成就目录按维度分开");
+        } else {
+            fail("成就目录没有按维度分开：" + survivalAdv + " vs " + lobbyAdv);
+        }
+
+        // 2) 端到端：让玩家在生存服产生统计并落盘，确认文件写在生存服存档里
+        var probe = FakePlayers.spawn(server, "hubsuite_auxtest", survival.level(), false);
+        if (probe == null) {
+            fail("成就/统计测试用假玩家创建失败");
+            return;
+        }
+        try {
+            PlayerRouter.sendTo(probe, survival);
+            if (!survival.level().dimension().equals(probe.level().dimension())) {
+                fail("无法把测试玩家送进 survival");
+                return;
+            }
+            var counter = server.getPlayerList().getPlayerStats(probe);
+            counter.setValue(probe,
+                    net.minecraft.stats.Stats.CUSTOM.get(net.minecraft.stats.Stats.WALK_ONE_CM), 1234);
+
+            AuxDataRouter.flushAndEvict(probe);
+
+            java.nio.file.Path expected = survival.save().playersDir()
+                    .resolve("stats").resolve(probe.getUUID() + ".json");
+            if (java.nio.file.Files.exists(expected)) {
+                ok("生存服的统计文件落在该子服存档内：" + expected.getFileName());
+            } else {
+                fail("统计文件没有落在 survival 存档：" + expected);
+            }
+
+            // 大厅目录里不该有他的统计
+            java.nio.file.Path inLobby = lobby.save().playersDir()
+                    .resolve("stats").resolve(probe.getUUID() + ".json");
+            if (java.nio.file.Files.exists(inLobby)) {
+                fail("统计文件同时出现在大厅存档（隔离被破坏）：" + inLobby);
+            } else {
+                ok("大厅存档里没有他的统计 —— 隔离正确");
+            }
+        } catch (Throwable t) {
+            fail("成就/统计隔离检查异常：" + t);
+        } finally {
+            try {
+                java.nio.file.Files.deleteIfExists(survival.save().playersDir()
+                        .resolve("stats").resolve(probe.getUUID() + ".json"));
+                java.nio.file.Files.deleteIfExists(survival.save().playersDir()
+                        .resolve("advancements").resolve(probe.getUUID() + ".json"));
                 server.getPlayerList().remove(probe);
             } catch (Throwable ignored) {
                 // 忽略

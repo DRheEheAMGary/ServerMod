@@ -109,6 +109,10 @@ public final class PlayerRouter {
             // 存进主维度的槽位，于是切服时背包对不上（实测自检发现）。
             PlayerStateStash.capture(player, player.level().dimension().identifier().toString());
 
+            // 成就与统计也要按维度隔离：离开前把**旧维度**那份存盘并清掉缓存，
+            // 否则缓存对象里烧死的文件路径会让读写继续落在旧子服。
+            AuxDataRouter.flushAndEvict(player);
+
             for (ExitListener listener : EXIT_LISTENERS) {
                 try {
                     listener.onExit(player, from);

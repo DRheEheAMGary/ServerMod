@@ -62,6 +62,8 @@ public final class PlayerDataRouter {
         }
         BY_SAVE.put(save.saveName(), storage);
         BY_DIMENSION.put(dimension, storage);
+        // 成就/统计也要按维度隔离，登记同一份存档用于推算目录
+        AuxDataRouter.register(dimension, save);
         HubSuite.logger().debug("玩家数据目录绑定：{} -> {}", dimension.identifier(), save.playersDir());
     }
 
@@ -102,6 +104,7 @@ public final class PlayerDataRouter {
         BY_DIMENSION.clear();
         BY_SAVE.clear();
         PENDING_STORAGE.clear();
+        AuxDataRouter.clear();
         // 注意：DEFAULT_FALLBACK 也要清。它是"第一个登记的存档"，
         // 服务端关闭后还留着旧对象的话，下次启动在 bindPlayerStorage 之前
         // 用它去读写，就会落到上一个存档里（而且那个 access 已经 close 了）。

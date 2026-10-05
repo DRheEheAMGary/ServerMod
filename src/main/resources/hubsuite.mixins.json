@@ -10,6 +10,7 @@
 		"MinecraftServerLevelsAccessor",
 		"MinecraftServerStorageAccessor",
 		"PlayerListAccessor",
+		"PlayerListAuxDataMixin",
 		"PlayerListFakePlayerMixin",
 		"PlayerListFieldAccessor",
 		"PlayerInfoListedMixin",
