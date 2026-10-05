@@ -306,7 +306,7 @@ public final class SubServer implements PlayableWorld {
         PlayableWorld.SpawnPoint spawn = resolveSpawn(server, level, config, save);
 
         applySpawn(level, spawn);
-        applyWorldBorder(level, rules, config);
+        applyWorldBorder(level, rules, spawn);
 
         save.register(level);
         save.bindPlayerStorage(dimension);
@@ -395,7 +395,7 @@ public final class SubServer implements PlayableWorld {
         }
 
         applySpawn(level, spawn);
-        applyWorldBorder(level, rules, config);
+        applyWorldBorder(level, rules, spawn);
         save.register(level);
         save.bindPlayerStorage(dimension);
         RulesManager.register(dimension, rules);
@@ -609,12 +609,23 @@ public final class SubServer implements PlayableWorld {
         }
     }
 
-    private static void applyWorldBorder(ServerLevel level, ServerRules rules, HubSuiteConfig.SubServerConfig config) {
+    /**
+     * 按规则设置世界边界。
+     *
+     * <p><b>圆心必须用"算出来的出生点"，不能用配置坐标。</b>
+     * {@code config.spawnX/spawnZ} 只是配置里的**默认/兜底**值 ——
+     * 正常地形世界（{@code useWorldSpawn=true}）的实际出生点是原版
+     * {@code setInitialSpawn} 算出来的，通常不在原点。用配置坐标当圆心，
+     * 就会得到一个"圆心与实际出生点不一致"的边界：半径小的时候
+     * （例如创造服 2000），玩家一出生就可能已经在边界外或贴着边界。
+     */
+    private static void applyWorldBorder(ServerLevel level, ServerRules rules,
+                                         PlayableWorld.SpawnPoint spawn) {
         if (rules.worldBorderRadius() <= 0) {
             return;
         }
         var border = level.getWorldBorder();
-        border.setCenter(config.spawnX, config.spawnZ);
+        border.setCenter(spawn.x(), spawn.z());
         border.setSize(rules.worldBorderRadius() * 2.0);
     }
 

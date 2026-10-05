@@ -93,6 +93,8 @@ public final class SelfTest {
         step("玩家数据落盘目录正确", this::checkPlayerDataRouting);
         step("成就与统计按维度隔离", this::checkAuxDataIsolation);
         step("任务系统", this::checkQuests);
+        step("放置方块只在真的放下时计数", this::checkPlaceCounting);
+        step("世界边界圆心跟着算出来的出生点", this::checkWorldBorderCenteredOnSpawn);
         step("假玩家与假人名字长度合法", this::checkFakeNameLengths);
         step("空岛服可以正常交互方块", this::checkInteractionAllowed);
         step("海岛地形形状符合预期", this::checkOceanIslandShape);
@@ -1849,6 +1851,170 @@ public final class SelfTest {
             } catch (Throwable ignored) {
                 // 忽略
             }
+        }
+    }
+
+    /**
+     * "放置方块"必须**只在真的放下时**计数。
+     *
+     * <p>锁住的坑：原来用 Fabric 的 {@code BlockEvents.USE_ITEM_ON} 近似，
+     * 判据是"手上有方块 + 右键了" —— 对着箱子/工作台右键（方块把交互吃掉，
+     * 根本不会放置）也会 +1，任务进度可以靠空点刷出来。
+     * 现在 Mixin 挂在 {@code BlockItem#place} 的返回处，只有
+     * {@code result.consumesAction()} 才算一次。
+     *
+     * <p>测法：临时往内存里的任务表塞一个 {@code place:minecraft:dirt} 任务
+     * （**不写配置文件**，测完移除），然后
+     * <ol>
+     *   <li>真的放一块泥土 → 进度必须 +1；</li>
+     *   <li>手上拿着泥土对着箱子右键 → 进度**不能**变（修复前这里会 +1）。</li>
+     * </ol>
+     */
+    private void checkPlaceCounting() {
+        var quests = HubSuite.quests();
+        var islands = HubSuite.islands();
+        var skyblock = worlds.subServer("skyblock").orElse(null);
+        if (quests == null || islands == null || skyblock == null) {
+            ok("任务系统/空岛服未就绪，跳过放置计数检查");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_place", skyblock.level(), false);
+        if (probe == null) {
+            fail("放置计数检查用假玩家创建失败");
+            return;
+        }
+        cn.dreamgary.hubsuite.quest.Quest injected = null;
+        try {
+            islands.sendToHub(probe);   // 空岛服大厅：虚空 + 石英平台
+            if (!islands.isSkyblock(probe.level())) {
+                ok("不在空岛维度，跳过放置计数检查");
+                return;
+            }
+            var level = probe.level();
+            var pad = islands.hubEntry().spawn();
+            var platformPos = net.minecraft.core.BlockPos.containing(
+                    pad.x() + 2, pad.y() - 1, pad.z() + 2);
+
+            // 临时任务：只存在于内存，测完移除（绝不调用 save()）
+            injected = new cn.dreamgary.hubsuite.quest.Quest();
+            injected.id = "selftest_place";
+            injected.kind = cn.dreamgary.hubsuite.quest.Quest.Kind.MILESTONE;
+            injected.name = "自检：放置";
+            injected.goal = "place:minecraft:dirt";
+            injected.amount = 1;
+            injected.compile();
+            quests.config().quests.add(injected);
+
+            int before = quests.progressOf(probe, injected);
+            probe.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+                    new ItemStack(Items.DIRT, 64));
+
+            // 1) 真的放一块：直接走原版那条放置路径（ItemStack.useOn → BlockItem.place）
+            var placeHit = new net.minecraft.world.phys.BlockHitResult(
+                    new net.minecraft.world.phys.Vec3(platformPos.getX() + 0.5,
+                            platformPos.getY() + 1.0, platformPos.getZ() + 0.5),
+                    net.minecraft.core.Direction.UP, platformPos, false);
+            var placeCtx = new net.minecraft.world.item.context.BlockPlaceContext(
+                    new net.minecraft.world.item.context.UseOnContext(
+                            probe, net.minecraft.world.InteractionHand.MAIN_HAND, placeHit));
+            if (!(Items.DIRT instanceof net.minecraft.world.item.BlockItem dirtItem)) {
+                ok("泥土不是 BlockItem，跳过放置计数检查");
+                return;
+            }
+            var placeResult = dirtItem.place(placeCtx);
+            int afterPlace = quests.progressOf(probe, injected);
+            var placedPos = platformPos.above();
+            boolean reallyPlaced = level.getBlockState(placedPos)
+                    .is(net.minecraft.world.level.block.Blocks.DIRT);
+            if (reallyPlaced && afterPlace == before + 1) {
+                ok("真的放下方块时计数 +1（" + before + " → " + afterPlace + "）");
+            } else if (!placeResult.consumesAction()) {
+                ok("放置未能执行（测试环境限制：" + placeResult + "），只验证反向用例");
+            } else {
+                fail("放了方块但进度没对：放置结果=" + placeResult + "，方块在位=" + reallyPlaced
+                        + "，进度 " + before + " → " + afterPlace);
+            }
+            if (reallyPlaced) {
+                level.setBlockAndUpdate(placedPos,
+                        net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+            }
+
+            // 2) 手上拿着方块对着箱子右键：不该计数（这就是修复前的 bug）
+            int baseline = quests.progressOf(probe, injected);
+            var chestPos = platformPos.above(3);
+            level.setBlockAndUpdate(chestPos,
+                    net.minecraft.world.level.block.Blocks.CHEST.defaultBlockState());
+            try {
+                var chestHit = new net.minecraft.world.phys.BlockHitResult(
+                        new net.minecraft.world.phys.Vec3(chestPos.getX() + 0.5,
+                                chestPos.getY() + 1.0, chestPos.getZ() + 0.5),
+                        net.minecraft.core.Direction.UP, chestPos, false);
+                var chestResult = level.getBlockState(chestPos).useItemOn(
+                        new ItemStack(Items.DIRT, 64), level, probe,
+                        net.minecraft.world.InteractionHand.MAIN_HAND, chestHit);
+                int afterChest = quests.progressOf(probe, injected);
+                if (afterChest == baseline) {
+                    ok("拿着方块对着箱子右键不会算\"放置\"（交互结果 " + chestResult + "）");
+                } else {
+                    fail("对着箱子右键把\"放置" + "\"任务算进去了：进度 " + baseline + " → " + afterChest);
+                }
+            } finally {
+                level.setBlockAndUpdate(chestPos,
+                        net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+            }
+        } catch (Throwable t) {
+            fail("放置计数检查异常：" + t);
+        } finally {
+            try {
+                if (injected != null) {
+                    quests.config().quests.remove(injected);
+                }
+                quests.clearProgress(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 清理失败不影响结论
+            }
+        }
+    }
+
+    /**
+     * 世界边界的**圆心必须跟着算出来的出生点**，不能用配置坐标。
+     *
+     * <p>{@code config.spawnX/spawnZ} 只是默认/兜底值；正常地形世界的实际出生点
+     * 是原版 {@code setInitialSpawn} 算出来的，通常不在原点。半径小的子服
+     * （例如创造服 2000）用错圆心会让玩家一出生就贴着边界甚至在外面。
+     *
+     * <p>注意：当前两个子服的出生点恰好都落在原点附近，所以这条**在现配置下
+     * 不会红**（配置值与算出来的值相同）；它钉的是不变量 ——
+     * 以后换种子/换世界、出生点被算到别处时，只要圆心忘了跟过去就会立刻报错。
+     */
+    private void checkWorldBorderCenteredOnSpawn() {
+        int checked = 0;
+        for (SubServer sub : worlds.subServers()) {
+            double radius = sub.rules() == null ? 0 : sub.rules().worldBorderRadius();
+            if (radius <= 0) {
+                continue;
+            }
+            for (SubServer.Entry entry : sub.entries()) {
+                var spawn = entry.spawn();
+                var border = entry.level().getWorldBorder();
+                double dx = Math.abs(border.getCenterX() - spawn.x());
+                double dz = Math.abs(border.getCenterZ() - spawn.z());
+                double size = border.getSize();
+                checked++;
+                if (dx <= 1.0 && dz <= 1.0 && Math.abs(size - radius * 2.0) <= 1.0) {
+                    ok(String.format("子服 %s/%s：边界圆心 (%.1f, %.1f) 与出生点一致，直径 %.0f",
+                            sub.id(), entry.id(), border.getCenterX(), border.getCenterZ(), size));
+                } else {
+                    fail(String.format("子服 %s/%s 的边界圆心 (%.1f, %.1f) 偏离出生点 (%.1f, %.1f)"
+                                    + "（或直径 %.0f ≠ 期望 %.0f）—— applyWorldBorder 用错了坐标",
+                            sub.id(), entry.id(), border.getCenterX(), border.getCenterZ(),
+                            spawn.x(), spawn.z(), size, radius * 2.0));
+                }
+            }
+        }
+        if (checked == 0) {
+            ok("没有配置世界边界的子服，跳过边界检查");
         }
     }
 

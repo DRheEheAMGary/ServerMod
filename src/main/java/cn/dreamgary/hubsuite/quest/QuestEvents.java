@@ -51,56 +51,22 @@ public final class QuestEvents {
             }
         });
 
-        // 放置方块（用"手持方块右键"近似）
         /*
-         * 放置方块统计。
+         * 放置方块**不在这里统计**。
          *
-         * ★★★ 这个监听器**必须返回 null**，不能返回 InteractionResult.PASS ★★★
+         * 原来这里挂了一个 BlockEvents.USE_ITEM_ON 监听器，用"手上有方块 + 右键了"
+         * 近似"放了方块"。两个问题：
+         *   1. 判不出有没有真的放下去 —— 对着箱子/工作台右键（方块把交互吃掉了）
+         *      也会 +1，任务进度可以靠空点刷；
+         *   2. Fabric 对这个事件的语义是"返回非 null 就覆盖方块自己的返回值"，
+         *      必须返回 null 才安全 —— 当年返回 PASS 导致**全服箱子打不开**，
+         *      排查了很久（症状：右键毫无反应、无报错、放方块却正常）。
          *
-         * Fabric 的 BlockEvents 语义与其它事件不同：
-         *   - 返回 null   = "我不处理，交回原版"（正确）
-         *   - 返回 PASS   = "我处理了，结果是 PASS"
-         *
-         * 而 Fabric 在 BlockStateBase.useItemOn 上的注入是这样的：
-         *     result = BlockEvents.USE_ITEM_ON.invoker().useItemOn(...);
-         *     if (result != null) cir.setReturnValue(result);   // ← 判的是 null！
-         *
-         * 也就是说返回 PASS 会**覆盖掉方块自己的返回值**。
-         * 箱子靠返回 TRY_WITH_EMPTY_HAND 才能让
-         * ServerPlayerGameMode 继续调用 useWithoutItem（真正开箱的那一步）；
-         * 被覆盖成 PASS 之后这一步永远不会发生 —— **箱子从此打不开**。
-         *
-         * 实测症状极具迷惑性（用户反馈"全服都打不开箱子"）：
-         * 右键毫无反应、没有任何报错、放方块却完全正常
-         * （放方块走的是 stack.useOn 那条分支，不受影响）。
-         * 排查了很久才定位到这里 —— 它跟"任务系统"看起来毫无关系。
-         *
-         * <p><b>已知局限（统计偏多）：</b>这里只判"手上有方块 + 右键了"，
-         * 判不出**有没有真的放下去**——对着箱子/告示牌右键也会 +1。
-         * 精确做法是 Mixin 到 {@code BlockItem.place} 的返回值上
-         * （{@code result.consumesAction()} 才算数），但那要新增一个 Mixin；
-         * 而内置的 20 个任务里没有任何 PLACE 目标，所以暂时不值得。
-         * 若以后要加"放 100 个方块"这类任务，请先把它改成精确统计。
+         * 现在改成 Mixin 挂在 BlockItem#place 的返回处
+         * （见 {@code BlockItemPlaceMixin}）：只有真的放置成功
+         * （{@code result.consumesAction()}）才算一次。
+         * 顺带把上面第 2 条风险从代码里彻底移除。
          */
-        BlockEvents.USE_ITEM_ON.register((stack, state, level, pos, player, hand, hit) -> {
-            if (!(player instanceof ServerPlayer serverPlayer)) {
-                return null;
-            }
-            try {
-                var manager = HubSuite.quests();
-                if (manager == null || !manager.config().enabled
-                        || !inIslandWorld(serverPlayer)) {
-                    return null;
-                }
-                if (stack.getItem() instanceof BlockItem blockItem) {
-                    String id = BuiltInRegistries.BLOCK.getKey(blockItem.getBlock()).toString();
-                    manager.advance(serverPlayer, Quest.GoalType.PLACE, id, 1);
-                }
-            } catch (Throwable t) {
-                HubSuite.logger().error("任务系统：放置方块统计失败", t);
-            }
-            return null;
-        });
 
         // 击杀
         net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents.AFTER_DEATH.register(

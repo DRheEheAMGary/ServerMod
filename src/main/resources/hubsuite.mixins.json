@@ -19,7 +19,8 @@
     "ServerCommonPacketListenerMixin",
     "ServerGamePacketListenerMenuMixin",
     "ServerGamePacketListenerCommandMixin",
-    "ServerLevelGameRulesMixin"
+    "ServerLevelGameRulesMixin",
+    "BlockItemPlaceMixin"
   ],
   "injectors": {
     "defaultRequire": 1
