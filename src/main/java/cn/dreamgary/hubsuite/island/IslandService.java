@@ -125,36 +125,6 @@ public final class IslandService {
         }
     }
 
-    /** 上一次看到的"玩家打开的容器"（用于诊断容器为什么开不了）。 */
-    private static final Map<java.util.UUID, String> LAST_CONTAINER =
-            new java.util.concurrent.ConcurrentHashMap<>();
-
-    private static int containerWatchTicker;
-
-    /**
-     * 诊断：观察每个玩家的 containerMenu 变化。
-     *
-     * <p>这条日志能一次性回答"服务端到底有没有把容器打开"——
-     * 用户反馈"右键箱子毫无反应"，而方块状态、方块实体、保护判定、
-     * 事件链全部正常，所以必须直接看 openMenu 的结果。
-     *
-     * <p>只在**变化时**打印，平时零开销。
-     */
-    private static void watchContainers(net.minecraft.server.MinecraftServer server) {
-        // 每 tick 都查：容器"开了又立刻被关掉"在 5 tick 的间隔里会被漏掉
-        containerWatchTicker++;
-        for (var player : server.getPlayerList().getPlayers()) {
-            String now = player.containerMenu.getClass().getSimpleName()
-                    + "#" + player.containerMenu.containerId;
-            String before = LAST_CONTAINER.put(player.getUUID(), now);
-            if (before != null && !before.equals(now)) {
-                HubSuite.logger().info("容器变化：{} {} -> {}（维度 {}）",
-                        player.getName().getString(), before, now,
-                        player.level().dimension().identifier());
-            }
-        }
-    }
-
     /** 空岛服大厅维度。 */
     public SubServer.Entry hubEntry() {
         return hubEntry;
@@ -313,15 +283,6 @@ public final class IslandService {
         });
 
         UseBlockCallback.EVENT.register((Player player, Level level, InteractionHand hand, BlockHitResult hit) -> {
-            // 诊断：无条件记录（之前那版写在两个提前 return 之后，
-            // 生存服/空手的情况根本记不到，白排查了一轮）
-            if (player instanceof ServerPlayer serverPlayer) {
-                HubSuite.logger().info(
-                        "[交互诊断] IslandService 判定：{} 是否空岛={} 空手={}（维度 {}，目标 {}）",
-                        serverPlayer.getName().getString(), isSkyblock(level),
-                        player.getItemInHand(hand).isEmpty(),
-                        level.dimension().identifier(), hit.getBlockPos());
-            }
             if (!isSkyblock(level) || !(player instanceof ServerPlayer serverPlayer)) {
                 return InteractionResult.PASS;
             }
@@ -462,10 +423,10 @@ public final class IslandService {
         if (type == null) {
             type = primary;
         }
-        // 注意：这里**不要**调 diagnoseSpawn。
-        // 它会 getBlockState 读岛屿方块，而此时玩家还在旧维度、目标区块必然未加载
-        // → 同步生成整片区块 → 主线程卡死（就是看门狗强杀那条路径，实测踩过两次）。
-        // 诊断只在显式调试时用，不进正常建岛流程。
+        // 注意：建岛流程里**绝对不要读目标位置的方块**。
+        // 此刻玩家还在旧维度、目标区块必然未加载，getBlockState 会同步生成
+        // 整片区块 → 主线程卡死（就是看门狗强杀那条路径，实测踩过两次）。
+        // 想诊断落点，请等玩家落地之后再看（自检就是这么做的）。
         return type.manager().getOrCreate(
                 player.getUUID(), player.getName().getString(), type.id());
     }
@@ -542,31 +503,4 @@ public final class IslandService {
         player.sendSystemMessage(Component.literal("\u00A7e你掉进了虚空，已送回你的岛。"));
         return true;
     }
-
-    /**
-     * 诊断：打印"代码认为的岛"与"该位置实际方块"。
-     *
-     * <p>用于排查"卡在树里""箱子说不是我的区域"这类坐标对不上的问题。
-     */
-    public void diagnoseSpawn(ServerPlayer player, Type type, IslandManager.Island island) {
-        try {
-            IslandManager manager = type.manager();
-            var center = manager.plotCenter(island.plotX, island.plotZ);
-            var spawn = manager.spawnOf(island);
-            var spawnBlock = net.minecraft.core.BlockPos.containing(spawn.x, spawn.y, spawn.z);
-            ServerLevel level = type.entry().level();
-
-            HubSuite.logger().info("=== 落脚点诊断：{} 的岛（岛型 {}，方格 {},{}）===",
-                    player.getName().getString(), type.id(), island.plotX, island.plotZ);
-            HubSuite.logger().info("  记录：岛中心 {} / 落脚点 {}", center, spawnBlock);
-            HubSuite.logger().info("  实际方块：中心={} 落脚点={} 下方={} 上方={}",
-                    level.getBlockState(center).getBlock().getName().getString(),
-                    level.getBlockState(spawnBlock).getBlock().getName().getString(),
-                    level.getBlockState(spawnBlock.below()).getBlock().getName().getString(),
-                    level.getBlockState(spawnBlock.above()).getBlock().getName().getString());
-        } catch (Throwable t) {
-            HubSuite.logger().warn("落脚点诊断失败：{}", t.toString());
-        }
-    }
-
 }

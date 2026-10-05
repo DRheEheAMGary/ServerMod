@@ -701,48 +701,6 @@ public final class IslandManager {
     // ------------------------------------------------------------------
 
     /**
-     * 诊断：打印一座岛的当前实际方块状态与保护判定。
-     * 用于排查"卡在树里""箱子位置不对""说不是我的区域"这类问题。
-     */
-    public void diagnose(Island island) {
-        ServerLevel level = this.level;
-        BlockPos center = anchorOf(island);
-        // 注意：这里**不**主动加载区块 —— 诊断是可选操作，
-        // 为了打印几行日志去同步生成海洋区块不值得（会被看门狗强杀）。
-        // 区块没加载时读到的方块状态不可信，所以直接跳过。
-
-        HubSuite.logger().info("=== 空岛诊断：方格({}, {}) 中心 {} ===", island.plotX, island.plotZ, center);
-        for (int dy = 1; dy <= 3; dy++) {
-            StringBuilder row = new StringBuilder();
-            for (int dx = -4; dx <= 4; dx++) {
-                for (int dz = -4; dz <= 4; dz++) {
-                    var pos = center.offset(dx, dy, dz);
-                    var b = level.getBlockState(pos);
-                    if (!b.isAir()) {
-                        row.append(String.format("%n    (%d,%d,%d) = %s", dx, dy, dz,
-                                b.getBlock().getName().getString()));
-                        if (dx == 2 && dz == -2 && dy == 1) {
-                            row.append("   ← 应该是物资箱");
-                        }
-                        if (dx == -2 && dz == -2 && dy == 1) {
-                            row.append("   ← 玩家落脚点");
-                        }
-                    }
-                }
-            }
-            HubSuite.logger().info("  相对中心 dy={} 的非空气方块：{}", dy, row);
-        }
-
-        // 保护判定：检查箱子所在的四个角与中心
-        int[][] probes = {{2, -2}, {3, -2}, {2, -3}, {3, -3}, {0, 0}, {-2, -2}, {4, 0}, {0, 4}};
-        for (int[] pr : probes) {
-            boolean allowed = canBuildFor(island, pr[0], pr[1]);
-            HubSuite.logger().info("  保护判定 相对({}, {}): {}",
-                    pr[0], pr[1], allowed ? "可建造" : "\u00A7c拒绝");
-        }
-    }
-
-    /**
      * 以某个玩家的身份扫描他岛上"可建造"的实际范围。
      *
      * <p>直接回答"为什么岛上的某些方块说不是我的区域" ——

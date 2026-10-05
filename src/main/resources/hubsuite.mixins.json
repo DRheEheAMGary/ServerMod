@@ -19,11 +19,7 @@
     "ServerCommonPacketListenerMixin",
     "ServerGamePacketListenerMenuMixin",
     "ServerGamePacketListenerCommandMixin",
-    "ServerLevelGameRulesMixin",
-    "ServerPlayerOpenMenuMixin",
-    "ChestBlockProbeMixin",
-    "ServerPlayerGameModeProbeMixin",
-    "BlockStateBaseProbeMixin"
+    "ServerLevelGameRulesMixin"
   ],
   "injectors": {
     "defaultRequire": 1

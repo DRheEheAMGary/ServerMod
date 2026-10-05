@@ -48,17 +48,11 @@ public final class LoginLockdown {
 
         // 放方块 / 右键方块
         UseBlockCallback.EVENT.register((Player player, Level level, InteractionHand hand, BlockHitResult hit) -> {
-            // 诊断：这条判定若返回 FAIL，玩家右键会**完全没反应且没有任何报错**，
-            // 因为 FAIL 会在原版逻辑之前直接取消掉整个交互（界面自然也不会开）。
-            if (player instanceof ServerPlayer serverPlayer) {
-                boolean isLocked = locked(serverPlayer);
-                cn.dreamgary.hubsuite.HubSuite.logger().info(
-                        "[交互诊断] LoginLockdown 判定：{} 锁定={}（维度 {}，目标 {}）",
-                        serverPlayer.getName().getString(), isLocked,
-                        level.dimension().identifier(), hit.getBlockPos());
-                return isLocked ? InteractionResult.FAIL : InteractionResult.PASS;
-            }
-            return InteractionResult.PASS;
+            // 注意：这里返回 FAIL 会让玩家右键**完全没反应且没有任何报错** ——
+            // FAIL 在原版逻辑之前就把整个交互取消掉了（界面自然也不会开）。
+            // 所以"未登录时右键没反应"是设计如此，不是 bug；
+            // 排查此类问题时要想到这一层（这正是当年"箱子打不开"排查了很久的原因之一）。
+            return locked(player) ? InteractionResult.FAIL : InteractionResult.PASS;
         });
 
         // 左键方块
