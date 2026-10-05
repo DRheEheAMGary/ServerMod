@@ -204,6 +204,23 @@ public final class PlayerRouter {
         } catch (Exception e) {
             HubSuite.logger().error("传送 {} 到 {} 失败",
                     player.getName().getString(), target.id(), e);
+            /*
+             * 回滚玩家状态。
+             *
+             * 状态是在传送**之前**套用的（见上面 apply），所以走到这里时
+             * 玩家身上已经换成"目标维度"的背包，人却还在原维度 ——
+             * 不处理的话，下一次自动保存就会把目标维度的物品写进原维度的存档，
+             * 两个维度的东西从此串在一起（丢/复制都可能）。
+             *
+             * 此刻 player.level() 还是**原维度**（传送没成功），而原维度的状态
+             * 就在内存暂存/它的玩家数据文件里，直接再 apply 一次即可回到原样。
+             */
+            try {
+                PlayerStateStash.apply(player, player.level().dimension());
+            } catch (Throwable rollbackFailed) {
+                HubSuite.logger().error("传送失败后回滚玩家状态也失败了（{}）",
+                        player.getName().getString(), rollbackFailed);
+            }
             player.sendSystemMessage(Component.literal("\u00A7c传送失败，请联系管理员查看控制台。"));
             return false;
         }

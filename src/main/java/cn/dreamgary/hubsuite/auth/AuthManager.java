@@ -176,6 +176,9 @@ public final class AuthManager {
         cn.dreamgary.hubsuite.ui.ChestMenuScreen.forget(player.getUUID());
         // 任务界面的分页/分类状态同样不该跨会话保留
         cn.dreamgary.hubsuite.quest.QuestMenu.forget(player.getUUID());
+        // 登录表单状态（UUID → 当前是登录还是注册表单）也是按玩家存的，
+        // 不随退出清理就会一直攒着（玩家进进出出只增不减）。
+        cn.dreamgary.hubsuite.auth.AuthGui.forget(player.getUUID());
     }
 
     // ------------------------------------------------------------------
