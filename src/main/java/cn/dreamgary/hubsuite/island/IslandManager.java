@@ -383,9 +383,10 @@ public final class IslandManager {
         }
 
         if (!"ocean".equals(created.placement)) {
-            // 网格模式是虚空世界，铺地形很便宜，直接做掉
-            generate(created);
-            created.terrainPainted = true;
+            // 网格模式是虚空世界，铺地形很便宜，直接尝试做掉。
+            // 注意要用返回值：区块没加载时 generate 会跳过并返回 false，
+            // 这时**不能**标记成已铺（否则以后永远不会补铺，岛会一直是空气）。
+            created.terrainPainted = generate(created);
         }
         islands.put(uuid.toString(), created);
         save();
@@ -719,9 +720,9 @@ public final class IslandManager {
      * <p>延迟到这里就安全了：玩家马上要传送到岛上，**这些区块本来就必须加载**，
      * 加载成本无法避免；而且此时是传送流程的一部分，不再叠加在别的操作上。
      */
-    public void ensureTerrain(Island island) {
+    public boolean ensureTerrain(Island island) {
         if (island.terrainPainted) {
-            return;
+            return true;
         }
         if (island.anchorY == 0) {
             // 老记录没有锚点字段：按放置方式补算，避免把岛铺到世界原点
@@ -732,19 +733,56 @@ public final class IslandManager {
             island.anchorY = computed.getY();
             island.anchorZ = computed.getZ();
         }
-        generate(island);
-        island.terrainPainted = true;
-        save();
+        boolean painted = generate(island);
+        if (painted) {
+            save();
+        }
+        return painted;
     }
 
-    /** 清空并重新生成一座岛。 */
-    public void generate(Island island) {
+    /**
+     * 清空并重新生成一座岛。
+     *
+     * @return true 表示地形真的铺下去了；false 表示区块没加载、本次跳过
+     *         （调用方可以稍后再试，见 {@link #ensureTerrain}）
+     */
+    public boolean generate(Island island) {
         ServerLevel level = this.level;
+        BlockPos center = anchorOf(island);
         long deadline = System.currentTimeMillis() + GENERATE_BUDGET_MS;
         boolean[] overBudget = {false};
+
+        /*
+         * 大前提：**区块必须已经加载**，否则直接放弃本次生成。
+         *
+         * 为什么：level.setBlockAndUpdate() 内部会走 getChunkAt()，
+         * 也就是"往未加载区块写方块 = 强制同步生成整片区块"。
+         * 海洋/正常地形的区块生成很重，实测把主线程卡到看门狗强杀
+         * （A single server tick took 60.00 seconds，踩了三次）。
+         *
+         * 所以这里先检查区块在不在；不在就什么都不做，让 IslandService
+         * 在玩家真正要落地时再调一次 ensureTerrain()——那一刻区块本来就
+         * 必须加载，成本无法避免，也不会叠加在别的操作上。
+         */
+        int cx0 = center.getX() >> 4;
+        int cz0 = center.getZ() >> 4;
+        boolean chunksReady = true;
+        for (int dx = -1; dx <= 1 && chunksReady; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (!level.getChunkSource().hasChunk(cx0 + dx, cz0 + dz)) {
+                    chunksReady = false;
+                    break;
+                }
+            }
+        }
+        if (!chunksReady) {
+            HubSuite.logger().info(
+                    "方格({}, {}) 的区块还没加载，地形稍后补铺（避免阻塞主线程）",
+                    island.plotX, island.plotZ);
+            island.terrainPainted = false;
+            return false;
+        }
         IslandConfig.IslandType type = config.type(island.type);
-        // 用实际锚点：海岛不是网格放置的，plotCenter 算出来的位置是错的
-        BlockPos center = anchorOf(island);
 
         int radius = Math.max(2, Math.min(6, config.plotSize / 64));
         int baseY = center.getY();
@@ -885,6 +923,9 @@ public final class IslandManager {
             }
             HubSuite.logger().info("  落脚点柱：{}", spawnColumn);
         }
+
+        island.terrainPainted = true;
+        return true;
     }
 
     /** 把某个位置上方若干格清成空气（半径 r 的方形范围）。 */

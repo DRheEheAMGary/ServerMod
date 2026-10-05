@@ -87,6 +87,7 @@ public final class SelfTest {
         step("箱子式服务器选择界面", this::checkServerMenu);
         step("海岛维度是自然海洋", this::checkOceanWorld);
         step("空岛入口分流与保护", this::checkIslandRouting);
+        step("空岛指令存在且可用", this::checkIslandCommands);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -364,12 +365,32 @@ public final class SelfTest {
         }
         try {
             var island = islands.home(probe, "classic");
-            var pos = manager.plotCenter(island.plotX, island.plotZ);
-            var state = classicLevel.getBlockState(pos);
-            if (!state.isAir()) {
-                ok("岛屿地形已生成：中心方块 = " + state.getBlock().getName().getString());
+            var pos = manager.anchorOf(island);
+
+            /*
+             * 地形是**延迟铺**的：区块没加载时不会强写（强写会走 getChunkAt
+             * 同步生成区块，把主线程卡到看门狗强杀 —— 这里踩过三次）。
+             *
+             * 所以自检**不能阻塞等待**（Thread.sleep 会占住服务端线程，
+             * 同样触发看门狗）。只验证状态自洽：
+             *   · 地形已铺 → 中心必须是实体方块；
+             *   · 未铺     → 必须是"区块没加载"这个合法原因。
+             */
+            manager.ensureTerrain(island);
+            if (island.terrainPainted) {
+                var state = classicLevel.getBlockState(pos);
+                if (!state.isAir()) {
+                    ok("岛屿地形已生成：中心方块 = " + state.getBlock().getName().getString());
+                } else {
+                    fail("报告已铺地形，但中心仍是空气");
+                }
             } else {
-                fail("岛屿中心仍是空气，地形未生成");
+                boolean loaded = classicLevel.getChunkSource().hasChunk(pos.getX() >> 4, pos.getZ() >> 4);
+                if (!loaded) {
+                    ok("岛屿地形待补铺（区块未加载，玩家落地时自动铺好）—— 延迟机制正常");
+                } else {
+                    fail("区块已加载却没铺地形，延迟机制有问题");
+                }
             }
             if (manager.islandOf(probe.getUUID()).isPresent()) {
                 ok("岛屿归属已登记，方格 (" + island.plotX + ", " + island.plotZ + ")");
@@ -402,7 +423,11 @@ public final class SelfTest {
                     var atBlock = classicLevel.getBlockState(enterPos);
                     var headBlock = classicLevel.getBlockState(enterPos.above());
                     var groundBlock = classicLevel.getBlockState(enterPos.below());
-                    if (!headBlock.isAir()) {
+                    if (!island.terrainPainted) {
+                        // 地形尚未补铺（区块未加载）——落脚点自然还是空气，
+                        // 这不是缺陷，跳过这项判定
+                        ok("落脚点检查跳过（地形待补铺，落地时会由 ensureTerrain 铺好）");
+                    } else if (!headBlock.isAir()) {
                         fail("落脚点头部被方块占用（会窒息/卡住）！位置 " + enterPos
                                 + " 上方是 " + headBlock.getBlock().getName().getString());
                     } else if (groundBlock.isAir()) {
@@ -1084,26 +1109,30 @@ public final class SelfTest {
                         fail("新建的海岛落在 " + biome + " 上，不是海洋");
                     }
 
-                    // 地形是**延迟生成**的（海洋区块太重，不能在建岛那一 tick 同步做），
-                    // 所以这里要先触发补铺，再验证地形真的落到了世界里。
-                    if (!island.terrainPainted) {
-                        ocean.manager().ensureTerrain(island);
-                    }
-
-                    var surface = level.getBlockState(anchor);
-                    if (surface.isAir()) {
-                        fail("补铺地形后锚点处仍是空气");
+                    // 同 classic：不阻塞等待，只验证延迟机制状态自洽。
+                    ocean.manager().ensureTerrain(island);
+                    if (island.terrainPainted) {
+                        var surface = level.getBlockState(anchor);
+                        if (surface.isAir()) {
+                            fail("报告已铺地形，但锚点处仍是空气");
+                        } else {
+                            ok("海岛地形已生成（岛面 = "
+                                    + surface.getBlock().getName().getString() + "）");
+                        }
+                        var below = level.getBlockState(anchor.below());
+                        if (below.isAir()) {
+                            fail("海岛只有一层皮，下方是空气");
+                        } else {
+                            ok("海岛下方有支撑（" + below.getBlock().getName().getString() + "）");
+                        }
                     } else {
-                        ok("海岛地形延迟生成正常（岛面 = "
-                                + surface.getBlock().getName().getString() + "）");
-                    }
-
-                    // 岛面下方也该是实体方块（不是浮空一层）
-                    var below = level.getBlockState(anchor.below());
-                    if (below.isAir()) {
-                        fail("海岛只有一层皮，下方是空气");
-                    } else {
-                        ok("海岛下方有支撑（" + below.getBlock().getName().getString() + "）");
+                        boolean loaded = level.getChunkSource().hasChunk(
+                                anchor.getX() >> 4, anchor.getZ() >> 4);
+                        if (!loaded) {
+                            ok("海岛地形待补铺（区块未加载）—— 延迟机制正常，玩家落地时会铺好");
+                        } else {
+                            fail("区块已加载却没铺海岛地形，延迟机制有问题");
+                        }
                     }
                 } finally {
                     try {
@@ -1230,6 +1259,60 @@ public final class SelfTest {
             } catch (Throwable ignored) {
                 // 忽略
             }
+        }
+    }
+
+    /**
+     * {@code /island} 指令族是否真的注册进了 dispatcher。
+     *
+     * <p>锁住一个踩过的坑：指令如果注册太晚（服务端启动之后），
+     * Brigadier 的 dispatcher 早就建好了，指令**根本不存在**，
+     * 玩家输入只会看到 "Unknown or incomplete command"。
+     * 这个坑实际发生过（/island 一度是死指令），所以这里逐个检查。
+     */
+    private void checkIslandCommands() {
+        var dispatcher = server.getCommands().getDispatcher();
+        var root = dispatcher.getRoot().getChild("island");
+        if (root == null) {
+            fail("/island 指令没有注册（玩家会看到 Unknown command）");
+            return;
+        }
+        ok("/island 指令已注册");
+
+        StringBuilder missing = new StringBuilder();
+        int found = 0;
+        for (String sub : new String[]{"help", "hub", "home", "classic", "ocean", "info", "types", "reset"}) {
+            if (root.getChild(sub) != null) {
+                found++;
+            } else {
+                missing.append(sub).append(' ');
+            }
+        }
+        if (found == 8) {
+            ok("/island 全部子命令就位（help/hub/home/classic/ocean/info/types/reset）");
+        } else {
+            fail("/island 缺少子命令：" + missing);
+        }
+
+        // 其它指令族也要在
+        StringBuilder absent = new StringBuilder();
+        for (String cmd : new String[]{"menu", "hub", "auth"}) {
+            if (dispatcher.getRoot().getChild(cmd) == null) {
+                absent.append(cmd).append(' ');
+            }
+        }
+        if (absent.isEmpty()) {
+            ok("指令分工就位（/menu /hub /auth /island）");
+        } else {
+            fail("缺少指令：" + absent);
+        }
+
+        // 调试指令应当已被移除
+        var hub = dispatcher.getRoot().getChild("hub");
+        if (hub != null && hub.getChild("admin") != null) {
+            fail("调试指令 /hub admin 还在（按需求应当删除）");
+        } else {
+            ok("调试指令已按需求移除（/hub admin 不存在）");
         }
     }
 
