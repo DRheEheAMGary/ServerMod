@@ -100,6 +100,7 @@ public final class SelfTest {
         step("右键箱子真的能打开", this::checkChestActuallyOpens);
         step("海洋地形是真正的海（不是平板）", this::checkOceanTerrainQuality);
         step("海床有原版沉积物覆盖（表层规则生效）", this::checkOceanSeabedSediment);
+        step("海洋群系分布合理（各温度带都有、冰冻不泛滥）", this::checkOceanBiomeMix);
         step("海岛附近有原版天然海洋结构", this::checkOceanStructures);
         step("死亡重生不会掉进虚空", this::checkRespawnDimension);
         step("子服入口绝不会是虚空主维度", this::checkEntryNeverVoid);
@@ -2643,6 +2644,184 @@ public final class SelfTest {
                     + "例子：" + examples);
         }
     }
+
+    /**
+     * 海洋群系在全球尺度上的分布是否合理。
+     *
+     * <p>为什么必须**在全球尺度**上量：温度噪声的波长是 4096 格（firstOctave -10、
+     * xzScale 0.25），而一片生成区通常只有几百格宽 —— 在里面统计出来的
+     * "冰冻洋占 58%" 只是运气不好落在冷区，不代表整个世界。
+     * 第一版就是拿局部数字下结论，差点把温度带调歪。
+     *
+     * <p>统计方式：用固定种子的伪随机点（±30000 格，4096 个点）采样
+     * <b>气候采样器</b>与<b>真实群系</b>，两者都不加载区块。
+     * 温度那一路同时给出直方图，这样调整温度带时可以先算后改。
+     *
+     * <p><b>不要自己去 compute 温度密度函数</b>：原版的 temperature 外面包着
+     * {@code flat_cache}，那个缓存要靠 {@code fillArray} 初始化，直接 {@code compute}
+     * 只会拿到默认值 0 —— 第一版就这么量出"温度范围 0.00~0.00、100% 在温和带"
+     * 的鬼数据（而同一批点的群系分布明明是对的，两路自相矛盾）。
+     * 正确做法是问 {@code RandomState.sampler()}：那正是群系查找用的那套量化值。
+     */
+    private void checkOceanBiomeMix() {
+        var islands = HubSuite.islands();
+        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
+        if (ocean == null) {
+            fail("缺少 ocean 岛型");
+            return;
+        }
+        var level = ocean.entry().level();
+        var sampler = level.getChunkSource().randomState().sampler();
+        float[][] bands = cn.dreamgary.hubsuite.world.OceanWorldGenerator.temperatureBands();
+        String[] bandNames = cn.dreamgary.hubsuite.world.OceanWorldGenerator.TEMPERATURE_BAND_NAMES;
+
+        int samples = 4096;
+        int span = 30000;
+        long seed = 0x5DEECE66DL;
+        java.util.Map<String, Integer> biomeCount = new java.util.TreeMap<>();
+        int[] bandCount = new int[bands.length];
+        int outside = 0;
+        // 温度直方图：[-1, 1] 分 40 格，用来推算"改边界后各带占多少"
+        int[] hist = new int[40];
+        double[] temps = new double[samples];
+        int tempCount = 0;
+        double[] contis = new double[samples];
+        int contiCount = 0;
+        double tMin = 9, tMax = -9;
+        int quartY = Math.max(0, (SEA_LEVEL_FOR_BIOME - 1) >> 2);
+
+        for (int i = 0; i < samples; i++) {
+            seed = seed * 6364136223846793005L + 1442695040888963407L;
+            int x = (int) ((seed >>> 24) % (2L * span)) - span;
+            seed = seed * 6364136223846793005L + 1442695040888963407L;
+            int z = (int) ((seed >>> 24) % (2L * span)) - span;
+
+            float t;
+            try {
+                var point = sampler.sample(x >> 2, quartY, z >> 2);
+                t = point.temperature() / 10000.0F;
+                contis[contiCount++] = point.continentalness() / 10000.0F;
+            } catch (Throwable ignored) {
+                continue;
+            }
+            tMin = Math.min(tMin, t);
+            tMax = Math.max(tMax, t);
+            temps[tempCount++] = t;
+            int bin = (int) Math.floor((t + 1.0) / 2.0 * hist.length);
+            if (bin >= 0 && bin < hist.length) {
+                hist[bin]++;
+            }
+            boolean hit = false;
+            for (int b = 0; b < bands.length; b++) {
+                if (t >= bands[b][0] && t < bands[b][1]) {
+                    bandCount[b]++;
+                    hit = true;
+                    break;
+                }
+            }
+            if (!hit) {
+                outside++;
+            }
+
+            // 同一坐标的真实群系（注意 getNoiseBiome 只读噪声，不会加载区块）
+            var key = level.getNoiseBiome(x >> 2, quartY, z >> 2)
+                    .unwrapKey().orElse(null);
+            String name = key == null ? "?" : key.identifier().getPath();
+            biomeCount.merge(name, 1, Integer::sum);
+        }
+
+        int total = samples - outside;
+        StringBuilder bandTxt = new StringBuilder();
+        for (int b = 0; b < bands.length; b++) {
+            bandTxt.append(String.format("%s[%.2f,%.2f]=%.1f%%  ", bandNames[b], bands[b][0], bands[b][1],
+                    100.0 * bandCount[b] / Math.max(1, total)));
+        }
+        ok("温度带全球占比（4096 点 / ±30000 格）：" + bandTxt);
+        if (outside > 0) {
+            ok("有 " + outside + " 个采样点落在所有温度带之外（温度范围 " + String.format("%.2f", tMin)
+                    + "~" + String.format("%.2f", tMax) + "，边界应该是完整覆盖的）");
+        } else {
+            ok("温度带完整覆盖温度范围 " + String.format("%.2f", tMin) + "~"
+                    + String.format("%.2f", tMax) + "（没有缝隙）");
+        }
+
+        StringBuilder histTxt = new StringBuilder("\n      温度直方图（每格 0.05，t=温度下限+序号×0.05）：\n");
+        for (int i = 0; i < hist.length; i += 4) {
+            StringBuilder row = new StringBuilder();
+            for (int j = i; j < Math.min(hist.length, i + 4); j++) {
+                row.append(String.format("  %+.2f:%4d", -1.0 + j * 0.05, hist[j]));
+            }
+            histTxt.append("     ").append(row).append('\n');
+        }
+        ok("温度分布：" + histTxt);
+
+        /*
+         * 精确百分位：调温度带边界时直接照这个取，不用再试错一轮。
+         * 例如"冰冻带想要 2.5%"，就把冰冻带的上界设成 2.5% 分位那个温度。
+         */
+        double[] sorted = java.util.Arrays.copyOf(temps, tempCount);
+        java.util.Arrays.sort(sorted);
+        StringBuilder pct = new StringBuilder();
+        for (double p : new double[]{0.01, 0.02, 0.025, 0.03, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90}) {
+            int idx = Math.min(sorted.length - 1, (int) Math.round(p * sorted.length) - 1);
+            pct.append(String.format("%.1f%%→%+.3f  ", p * 100, idx < 0 ? sorted[0] : sorted[idx]));
+        }
+        ok("温度分位（照这个改温度带边界）：" + pct);
+
+        /*
+         * 深浅分界：这一条决定"玩家看到的是亮色浅海还是深色深海"。
+         * 深海/浅海只由 continentalness 与 DEEP_THRESHOLD 决定，
+         * 所以用同一批点统计大陆性分位即可推算改分界后的比例。
+         */
+        double[] cont = java.util.Arrays.copyOf(contis, contiCount);
+        java.util.Arrays.sort(cont);
+        int deepCount = 0;
+        for (double c : cont) {
+            if (c < cn.dreamgary.hubsuite.world.OceanWorldGenerator.deepThreshold()) {
+                deepCount++;
+            }
+        }
+        StringBuilder cpct = new StringBuilder();
+        for (double p : new double[]{0.10, 0.25, 0.50, 0.746, 0.80, 0.90}) {
+            int idx = Math.min(cont.length - 1, (int) Math.round(p * cont.length) - 1);
+            cpct.append(String.format("%.1f%%→%+.3f  ", p * 100, idx < 0 ? cont[0] : cont[idx]));
+        }
+        ok(String.format("大陆性分位：%s｜当前深浅分界 %.3f → 深海 %.1f%% / 浅海 %.1f%%",
+                cpct, cn.dreamgary.hubsuite.world.OceanWorldGenerator.deepThreshold(),
+                100.0 * deepCount / cont.length, 100.0 * (cont.length - deepCount) / cont.length));
+
+        int biomeTotal = biomeCount.values().stream().mapToInt(Integer::intValue).sum();
+        StringBuilder mix = new StringBuilder();
+        for (var e : biomeCount.entrySet()) {
+            mix.append(String.format("%s=%.1f%%  ", e.getKey(), 100.0 * e.getValue() / biomeTotal));
+        }
+        ok("全球群系分布（" + biomeTotal + " 点）：" + mix);
+
+        // 断言：多样性 + 冰冻不能泛滥
+        int frozen = 0;
+        for (var e : biomeCount.entrySet()) {
+            if (e.getKey().contains("frozen")) {
+                frozen += e.getValue();
+            }
+        }
+        double frozenPct = 100.0 * frozen / biomeTotal;
+        if (biomeCount.size() < 7) {
+            fail("全球只生成了 " + biomeCount.size() + " 种群系（应该是 7 种）：" + biomeCount.keySet());
+        } else {
+            ok("7 种海洋群系在全球都能生成（含温水/暖水）");
+        }
+        if (frozenPct >= 1.0 && frozenPct <= 6.0) {
+            ok(String.format("冰冻海洋占全球 %.1f%%（目标 2~3%%，允许 1~6%%）", frozenPct));
+        } else {
+            fail(String.format("冰冻海洋占全球 %.1f%%，偏离目标 2~3%% —— "
+                    + "改 OceanWorldGenerator.TEMPERATURE_BANDS 的第 1 段上界"
+                    + "（上面那行给了精确分位）", frozenPct));
+        }
+    }
+
+    /** 取群系用的参考高度（贴着水面）。 */
+    private static final int SEA_LEVEL_FOR_BIOME =
+            cn.dreamgary.hubsuite.world.OceanWorldGenerator.seaLevel();
 
     /**
      * 海岛**选位**不该生成区块，而且"算不算海洋"的名单必须和生成器一致。

@@ -183,15 +183,57 @@ public final class OceanWorldGenerator {
 
     /** 温度带边界（与 {@link #OCEAN_BIOMES} 配对：每两格一个温度带）。 */
     private static final float[][] TEMPERATURE_BANDS = {
-            {-1.00F, -0.45F},   // 冰冻
-            {-0.45F, -0.15F},   // 寒冷
-            {-0.15F, 0.20F},    // 温和
-            {0.20F, 1.00F},     // 温暖
+            /*
+             * 冰冻带的上界是**量出来的**，不是拍的。
+             *
+             * 温度噪声（原版 minecraft:temperature，firstOctave -10、xzScale 0.25，
+             * 波长约 4096 格）在全球尺度上的分位实测值（4096 点 / ±30000 格）：
+             *     1% → -0.887    2% → -0.774   2.5% → -0.730   3% → -0.703
+             *     5% → -0.604   10% → -0.481
+             * 用户要求"冻洋占全世界 2~3%"，所以上界取 2.5% 分位 -0.73。
+             * （原来取的 -0.45 是原版海洋的"冻洋"边界，实测占 11.2% —— 太多。）
+             *
+             * 两端的 ±2.0 是**包住实测范围**（-1.38 ~ +1.19）：Climate.Parameter
+             * 允许超出 [-1,1]，这样每个坐标都确定落在某一段里，不会出现
+             * "落在所有段之外、由 R 树就近猜"的情况。
+             */
+            {-2.00F, -0.73F},   // 冰冻  ≈2.5%
+            {-0.73F, -0.15F},   // 寒冷  ≈30%
+            {-0.15F, 0.20F},    // 温和  ≈35%
+            {0.20F, 2.00F},     // 温暖  ≈33%
     };
+
+    /** 温度带名字（日志与自检报告用，顺序同 {@link #TEMPERATURE_BANDS}）。 */
+    public static final String[] TEMPERATURE_BAND_NAMES = {"冰冻", "寒冷", "温和", "温暖"};
+
+    /** 温度带边界（副本，供自检统计各带占比）。 */
+    public static float[][] temperatureBands() {
+        float[][] copy = new float[TEMPERATURE_BANDS.length][];
+        for (int i = 0; i < TEMPERATURE_BANDS.length; i++) {
+            copy[i] = TEMPERATURE_BANDS[i].clone();
+        }
+        return copy;
+    }
+
+    /**
+     * 本维度用的温度函数（就是原版那条，我们没改）。
+     *
+     * <p>自检用它统计"冰冻温度带占全世界多少" —— 只读噪声，不加载区块。
+     */
+    public static DensityFunction temperatureFunction(MinecraftServer server) {
+        return server.registryAccess().lookupOrThrow(Registries.NOISE_SETTINGS)
+                .getOrThrow(NoiseGeneratorSettings.OVERWORLD).value()
+                .noiseRouter().temperature();
+    }
 
     /** 深海 / 浅海的 continentalness 分界（与原版海洋判定一致）。 */
     private static final float DEEP_THRESHOLD = -0.455F;
     private static final float SHORE_THRESHOLD = -0.11F;
+
+    /** 深海 / 浅海分界值（自检统计深浅占比用）。 */
+    public static float deepThreshold() {
+        return DEEP_THRESHOLD;
+    }
 
     /**
      * 只含海洋群系的 {@link MultiNoiseBiomeSource}。
