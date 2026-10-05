@@ -46,6 +46,9 @@ public final class ChestMenuScreen {
         final List<Entry> entries;
         final String title;
 
+        /** 这个菜单在服务端的容器 id —— 用来判断收到的点击包是不是打给它的。 */
+        int containerId;
+
         Open(SimpleContainer container, List<Entry> entries, String title) {
             this.container = container;
             this.entries = entries;
@@ -93,6 +96,9 @@ public final class ChestMenuScreen {
             @Override
             public ChestMenu createMenu(int syncId, net.minecraft.world.entity.player.Inventory inventory,
                                         net.minecraft.world.entity.player.Player p) {
+                // 记下服务端实际用的容器 id：后面判断"这个点击包是不是打给我们的"
+                // 只能靠它，不能靠 player.containerMenu（那时可能已经是别的容器了）
+                open.containerId = syncId;
                 return new ChestMenu(type, syncId, inventory, container, slots / 9);
             }
         });
@@ -123,7 +129,24 @@ public final class ChestMenuScreen {
         if (open == null) {
             return false;
         }
-        // 容器 id 对不上说明玩家看的不是这个菜单（例如被别的界面顶掉了）
+        /*
+         * ★ 必须比对**我们自己记下的 containerId**，而不是 player.containerMenu。
+         *
+         * 踩过的坑（用户反馈"全服都打不开箱子"）：
+         * 原来写的是
+         *     player.containerMenu.containerId != containerId → return false
+         * 这个判断在"玩家打开真实箱子"时**恰好成立**（当前菜单就是那个箱子，
+         * id 自然等于包里的 id），于是这张残留的 OPEN 记录被误判成"是我们的菜单"：
+         *   · 玩家按住右键 → 箱子刚打开，连点就变成箱子里的点击
+         *   · 命中残留记录 → 执行 closeContainer() → **界面秒关**
+         * 表现就是"箱子怎么点都打不开"。
+         *
+         * 而且因为大厅的引导假人菜单人人都会开一次，这个问题在**所有子服**
+         * 都会出现（用户实测："全服都打不开箱子"）。
+         */
+        if (open.containerId != containerId) {
+            return false;
+        }
         if (player.containerMenu == null || player.containerMenu.containerId != containerId) {
             return false;
         }
@@ -148,6 +171,31 @@ public final class ChestMenuScreen {
     }
 
     /** 玩家关闭界面时清理。 */
+    /**
+     * 每个 tick 清理"已经不在前台"的菜单记录。
+     *
+     * <p>玩家按 ESC 关掉界面时，`OPEN` 里的记录不会被清（`forget` 只在
+     * 成功点击和退出游戏时调用）。残留记录本身不会立刻出事，但一旦玩家
+     * 随后打开**真实容器**，那条记录就可能被误判成"当前是我们的菜单" ——
+     * 见 {@link #handleClick} 里的说明。
+     *
+     * <p>这里不依赖 ESC 事件（数据包不一定可靠），而是直接比对
+     * "玩家现在真正打开的容器 id"：对不上就把记录清掉。
+     */
+    public static void tick(net.minecraft.server.MinecraftServer server) {
+        if (OPEN.isEmpty()) {
+            return;
+        }
+        var players = server.getPlayerList();
+        OPEN.entrySet().removeIf(entry -> {
+            Open open = entry.getValue();
+            var player = players.getPlayer(entry.getKey());
+            return player == null
+                    || player.containerMenu == null
+                    || player.containerMenu.containerId != open.containerId;
+        });
+    }
+
     public static void forget(UUID uuid) {
         OPEN.remove(uuid);
     }

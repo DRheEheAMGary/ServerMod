@@ -89,6 +89,73 @@ public final class IslandService {
     // 访问
     // ------------------------------------------------------------------
 
+    /**
+     * 重建丢失了方块实体的容器。
+     *
+     * <p>做法是把方块先变成空气再变回来 —— 区块的 {@code setBlockState} 会在
+     * 这一步重新创建方块实体。
+     *
+     * <p><b>为什么需要：</b>方块实体是在 setBlock 时由区块创建的。如果那次调用
+     * 赶上区块状态异常的时机（刚铺完地形、区块正从磁盘载入），可能只留下方块本体
+     * 而没有实体。后果非常隐蔽 —— {@code ChestBlock.useWithoutItem} 在没有实体时
+     * **依然返回 SUCCESS**（手会挥、界面不弹），玩家看到的就是"右键毫无反应"，
+     * 而且用"返回值是否成功"根本测不出来。
+     *
+     * @return true 表示修好了（玩家需要再点一次）
+     */
+    private static boolean repairContainerBlockEntity(
+            net.minecraft.server.level.ServerLevel level, net.minecraft.core.BlockPos pos,
+            net.minecraft.world.level.block.state.BlockState state) {
+        try {
+            var block = state.getBlock();
+            if (!(block instanceof net.minecraft.world.level.block.BaseEntityBlock)) {
+                return false;   // 本来就不带方块实体，不用修
+            }
+            HubSuite.logger().warn("容器 {} @ {} 缺少方块实体，正在重建",
+                    block.getName().getString(), pos);
+            level.setBlock(pos, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 3);
+            level.setBlockAndUpdate(pos, state);
+            boolean fixed = level.getBlockEntity(pos) != null;
+            HubSuite.logger().warn("重建{}：{} @ {}",
+                    fixed ? "成功" : "失败", block.getName().getString(), pos);
+            return fixed;
+        } catch (Throwable t) {
+            HubSuite.logger().error("重建容器方块实体失败 @ {}", pos, t);
+            return false;
+        }
+    }
+
+    /** 上一次看到的"玩家打开的容器"（用于诊断容器为什么开不了）。 */
+    private static final Map<java.util.UUID, String> LAST_CONTAINER =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static int containerWatchTicker;
+
+    /**
+     * 诊断：观察每个玩家的 containerMenu 变化。
+     *
+     * <p>这条日志能一次性回答"服务端到底有没有把容器打开"——
+     * 用户反馈"右键箱子毫无反应"，而方块状态、方块实体、保护判定、
+     * 事件链全部正常，所以必须直接看 openMenu 的结果。
+     *
+     * <p>只在**变化时**打印，平时零开销。
+     */
+    private static void watchContainers(net.minecraft.server.MinecraftServer server) {
+        if (++containerWatchTicker % 5 != 0) {
+            return;
+        }
+        for (var player : server.getPlayerList().getPlayers()) {
+            String now = player.containerMenu.getClass().getSimpleName()
+                    + "#" + player.containerMenu.containerId;
+            String before = LAST_CONTAINER.put(player.getUUID(), now);
+            if (before != null && !before.equals(now)) {
+                HubSuite.logger().info("容器变化：{} {} -> {}（维度 {}）",
+                        player.getName().getString(), before, now,
+                        player.level().dimension().identifier());
+            }
+        }
+    }
+
     /** 空岛服大厅维度。 */
     public SubServer.Entry hubEntry() {
         return hubEntry;
@@ -259,14 +326,40 @@ public final class IslandService {
                     || clicked.is(net.minecraft.world.level.block.Blocks.CRAFTING_TABLE)
                     || clicked.is(net.minecraft.world.level.block.Blocks.FURNACE);
             if (container) {
+                /*
+                 * 自愈：容器方块**实体丢了**就现场重建。
+                 *
+                 * 为什么会丢：方块实体是在 setBlock 时由区块创建的，
+                 * 如果那次调用发生在区块状态异常的时机（例如地形刚铺完、
+                 * 区块正在从磁盘载入），可能只留下了方块本体而没有实体。
+                 * 后果很隐蔽：ChestBlock.useWithoutItem 在没有实体时
+                 * **依然返回 SUCCESS**（手会挥、但什么界面都不弹），
+                 * 玩家看到的就是"右键毫无反应"。
+                 *
+                 * 这里在交互时顺手检查并重建一次，老存档也能自动修好。
+                 */
+                if (level instanceof ServerLevel serverLevel
+                        && serverLevel.getBlockEntity(hit.getBlockPos()) == null) {
+                    if (repairContainerBlockEntity(serverLevel, hit.getBlockPos(), clicked)) {
+                        serverPlayer.sendSystemMessage(Component.literal(
+                                "\u00A7e这个容器的数据丢失了，已为你重建，请再点一次。"));
+                        return InteractionResult.SUCCESS;
+                    }
+                }
                 boolean allowed = canBuildHere(serverPlayer, hit.getBlockPos());
                 HubSuite.logger().info(
-                        "右键容器：{} 点 {} {} @ {} 维度 {} 手持 {} → {}",
+                        "右键容器：{} 点 {} @ {} 维度 {}｜手持 {}｜判定 {}｜"
+                                + "上方 {}｜方块实体 {}｜受阻 {}",
                         serverPlayer.getName().getString(),
                         clicked.getBlock().getName().getString(),
-                        hit.getBlockPos(), level.dimension().identifier(),
+                        hit.getBlockPos(),
+                        level.dimension().identifier(),
                         player.getItemInHand(hand).getItem(),
-                        allowed ? "放行" : "被保护拦下");
+                        allowed ? "放行" : "被保护拦下",
+                        level.getBlockState(hit.getBlockPos().above()).getBlock().getName().getString(),
+                        level.getBlockEntity(hit.getBlockPos()),
+                        net.minecraft.world.level.block.ChestBlock.isChestBlockedAt(
+                                level, hit.getBlockPos()));
             }
 
             if (!canBuildHere(serverPlayer, hit.getBlockPos())) {

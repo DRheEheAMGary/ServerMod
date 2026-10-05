@@ -100,6 +100,7 @@ public final class SelfTest {
         step("海岛附近有海洋结构", this::checkOceanStructures);
         step("死亡重生不会掉进虚空", this::checkRespawnDimension);
         step("子服入口绝不会是虚空主维度", this::checkEntryNeverVoid);
+        step("菜单不会误吞真实容器的点击", this::checkMenuDoesNotEatRealContainers);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -2484,12 +2485,42 @@ public final class SelfTest {
              * 且不开容器，给出假的失败结论（第一版就踩了这个坑）。
              */
             var chestState = level.getBlockState(chestPos);
+
+            /*
+             * ★★ 关键前置条件：箱子必须有**方块实体**。
+             *
+             * ChestBlock.useWithoutItem 的逻辑是：
+             *   getBlockEntity(pos) instanceof ChestBlockEntity ?
+             *       有 → 开界面
+             *       没有 → **什么都不做，但仍然返回 SUCCESS**
+             * 所以"返回值是 SUCCESS"根本不能证明箱子能开 ——
+             * 之前那条断言就是这么假通过的（用户实测：右键毫无反应）。
+             * 必须直接检查方块实体在不在。
+             */
+            var be = level.getBlockEntity(chestPos);
+            if (be instanceof net.minecraft.world.level.block.entity.ChestBlockEntity) {
+                ok("箱子有方块实体（ChestBlockEntity 存在，容器才可能打开）");
+            } else {
+                fail("箱子没有方块实体（实际是 " + be + "）—— "
+                        + "useWithoutItem 会返回 SUCCESS 但不会打开任何界面，"
+                        + "玩家右键毫无反应");
+            }
+
+            // 原版的"箱子被挡住就打不开"判定
+            if (net.minecraft.world.level.block.ChestBlock.isChestBlockedAt(level, chestPos)) {
+                fail("箱子被判定为受阻（上方有实心方块）—— 原版不会打开它");
+            } else {
+                ok("箱子未被阻挡（上方是 "
+                        + level.getBlockState(chestPos.above()).getBlock().getName().getString()
+                        + "）");
+            }
+
             probe.closeContainer();
             var before = probe.containerMenu;
             var opened = chestState.useWithoutItem(level, probe, hit);
             boolean didOpen = probe.containerMenu != before
                     && probe.containerMenu != probe.inventoryMenu;
-            if (opened.consumesAction() && didOpen) {
+            if (didOpen) {
                 ok("右键箱子能打开容器（" + probe.containerMenu.getClass().getSimpleName() + "）");
                 probe.closeContainer();
             } else {
@@ -2815,6 +2846,99 @@ public final class SelfTest {
             fail("入口检查异常：" + t);
         } finally {
             try {
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 打开过模组菜单之后，**真实箱子的点击不能被误吞**。
+     *
+     * <p>锁住用户反馈的"全服都打不开箱子"：
+     * {@code ChestMenuScreen.handleClick} 原本用
+     * {@code player.containerMenu.containerId != containerId} 判断
+     * "这个点击包是不是打给我们的菜单"。玩家打开**真实箱子**时，
+     * 当前菜单就是那个箱子、id 自然等于包里的 id —— 判断**恰好成立**，
+     * 于是残留的菜单记录被误判成"是我们的"，第一下点击就
+     * {@code closeContainer()} 把箱子关掉，表现就是"怎么点都打不开"。
+     *
+     * <p>而且因为大厅的引导假人菜单人人都会开一次，
+     * 这个问题会在**所有子服**出现。
+     */
+    private void checkMenuDoesNotEatRealContainers() {
+        var lobby = worlds.lobby().orElse(null);
+        var survival = worlds.subServer("survival").orElse(null);
+        if (lobby == null || survival == null) {
+            fail("缺少大厅或生存服");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_menu",
+                lobby.level(), false);
+        if (probe == null) {
+            fail("菜单测试用假玩家创建失败");
+            return;
+        }
+        try {
+            // 1) 先打开一次模组菜单（模拟玩家点过大厅假人）
+            var entries = new java.util.ArrayList<cn.dreamgary.hubsuite.ui.ChestMenuScreen.Entry>();
+            for (int i = 0; i < 3; i++) {
+                entries.add(cn.dreamgary.hubsuite.ui.ChestMenuScreen.Entry.of(
+                        new net.minecraft.world.item.ItemStack(
+                                net.minecraft.world.item.Items.STONE),
+                        "条目" + i, java.util.List.of(), p -> {
+                        }));
+            }
+            cn.dreamgary.hubsuite.ui.ChestMenuScreen.open(probe, "测试菜单", entries);
+            int menuContainerId = probe.containerMenu.containerId;
+            ok("模组菜单已打开（containerId=" + menuContainerId + "）");
+
+            // 2) 玩家关掉它（模拟按 ESC）——注意**不调用 forget**
+            probe.closeContainer();
+
+            // 3) 打开一个真实箱子（服务端会分配一个新的 containerId）
+            var sLevel = survival.level();
+            var pos = net.minecraft.core.BlockPos.containing(
+                    survival.spawn().x(), survival.spawn().y() + 1, survival.spawn().z());
+            sLevel.getChunk(pos.getX() >> 4, pos.getZ() >> 4);
+            sLevel.setBlockAndUpdate(pos,
+                    net.minecraft.world.level.block.Blocks.CHEST.defaultBlockState());
+            var be = sLevel.getBlockEntity(pos);
+            if (!(be instanceof net.minecraft.world.level.block.entity.ChestBlockEntity)) {
+                fail("测试箱子没有方块实体");
+                return;
+            }
+            probe.openMenu((net.minecraft.world.level.block.entity.ChestBlockEntity) be);
+            int chestContainerId = probe.containerMenu.containerId;
+            if (chestContainerId == menuContainerId) {
+                fail("真实箱子复用了菜单的 containerId，测试无效");
+                return;
+            }
+
+            // 4) 模拟"玩家在箱子里点了一下" —— 绝不能被当成菜单点击吞掉
+            boolean eaten = cn.dreamgary.hubsuite.ui.ChestMenuScreen.handleClick(
+                    probe, chestContainerId, 0);
+            if (eaten) {
+                fail("真实箱子里的点击被模组菜单吞掉了（containerId 判断失效）"
+                        + " —— 表现就是箱子一打开就被强制关闭");
+            } else {
+                ok("真实容器里的点击不会被模组菜单误吞（菜单 id=" + menuContainerId
+                        + "，箱子 id=" + chestContainerId + "）");
+            }
+
+            // 5) tick 清理应当把残留记录清掉
+            cn.dreamgary.hubsuite.ui.ChestMenuScreen.tick(server);
+            if (cn.dreamgary.hubsuite.ui.ChestMenuScreen.hasOpen(probe.getUUID())) {
+                fail("tick 清理没有清掉已关闭菜单的残留记录");
+            } else {
+                ok("已关闭菜单的残留记录会被 tick 自动清理");
+            }
+        } catch (Throwable t) {
+            fail("菜单误吞检查异常：" + t);
+        } finally {
+            try {
+                probe.closeContainer();
                 server.getPlayerList().remove(probe);
             } catch (Throwable ignored) {
                 // 忽略
