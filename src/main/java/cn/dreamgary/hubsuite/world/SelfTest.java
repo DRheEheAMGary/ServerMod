@@ -83,6 +83,7 @@ public final class SelfTest {
         step("规则落盘", this::checkRulesPersistence);
         step("出生点安全与重生点归属", this::checkSpawnSafety);
         step("玩家状态完整保留", this::checkStatePreserved);
+        step("玩家状态能跨会话恢复（重登不丢东西）", this::checkStateSurvivesRestart);
         step("颜色码渲染", this::checkTextColors);
         step("箱子式服务器选择界面", this::checkServerMenu);
         step("海岛维度是自然海洋", this::checkOceanWorld);
@@ -863,6 +864,96 @@ public final class SelfTest {
     }
 
     /**
+     * 玩家状态必须能**跨会话**恢复（不只是同一次登录里切服）。
+     *
+     * <p>锁住的坑：{@code PlayerStateStash} 原来只有内存实现 ——
+     * 类注释写着"服务端关闭时把暂存写回各子服的玩家数据文件"，
+     * 但 {@code WorldsManager} 在关服时只调了 {@code clear()}。
+     * 而原版跨维度传送**不会**重新读玩家数据（这正是这个类存在的理由），
+     * 于是：
+     * <pre>
+     *   在生存服攒了东西 → 关服 → 重新登录 → 进生存服 → 背包是空的
+     * </pre>
+     * 磁盘上的 {@code hubsuite_survival/players/data/&lt;uuid&gt;.dat} 其实还在，
+     * 只是**没有任何代码路径去读它**。而 {@code checkStatePreserved} 测的
+     * 是同一次会话里的往返（走内存暂存），完全测不到这一条。
+     *
+     * <p>测法：用一个假玩家走**真实入服路径**（真的读档、真的落盘），
+     * 放好东西 → 保存 → 清掉内存暂存（等价于登出）→ 同名再 spawn 一次
+     * （同一个 UUID，走真实读档）→ 检查东西还在不在。
+     */
+    private void checkStateSurvivesRestart() {
+        SubServer survival = worlds.subServer("survival").orElse(null);
+        if (survival == null) {
+            fail("缺少 survival 子服，跳过跨会话状态检查");
+            return;
+        }
+        String name = "hubsuite_persist";
+        var first = FakePlayers.spawn(server, name, survival.level(), false);
+        if (first == null) {
+            fail("跨会话状态检查用假玩家创建失败");
+            return;
+        }
+        java.util.UUID uuid = first.getUUID();
+        try {
+            PlayerRouter.sendTo(first, survival);
+            first.getInventory().clearContent();
+            first.getInventory().setItem(0, new ItemStack(Items.DIAMOND, 7));
+            first.getInventory().setItem(1, new ItemStack(Items.GOLDEN_APPLE, 3));
+            first.experienceLevel = 42;
+            // 等价于"正常登出"：先落盘到当前维度，再清掉内存暂存与待读档登记。
+            // 用 PlayerDataStorage 直接写（PlayerList.save 是 protected，
+            // 它内部也就是调这个），效果与登出时原版所做的一样。
+            cn.dreamgary.hubsuite.world.PlayerDataRouter
+                    .storageForDimension(survival.level().dimension())
+                    .save(first);
+            cn.dreamgary.hubsuite.world.PlayerStateStash.forget(uuid);
+            cn.dreamgary.hubsuite.world.PlayerDataRouter.forget(uuid);
+        } catch (Throwable t) {
+            fail("跨会话状态检查（第一次会话）异常：" + t);
+            return;
+        } finally {
+            try {
+                server.getPlayerList().remove(first);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+
+        // ---- 第二次会话：同名 → 同 UUID，走真实读档路径 ----
+        var again = FakePlayers.spawn(server, name, survival.level(), false);
+        if (again == null) {
+            fail("跨会话状态检查：重新登录的假玩家创建失败");
+            return;
+        }
+        try {
+            PlayerRouter.sendTo(again, survival);
+            int diamonds = again.getInventory().countItem(Items.DIAMOND);
+            int apples = again.getInventory().countItem(Items.GOLDEN_APPLE);
+            int xp = again.experienceLevel;
+            if (diamonds == 7 && apples == 3) {
+                ok("重新登录后背包从该子服的存档恢复（钻石 x" + diamonds + "，金苹果 x" + apples + "）");
+            } else {
+                fail("重新登录后物品丢了！钻石 x" + diamonds + "（期望 7），金苹果 x" + apples
+                        + "（期望 3）—— 说明磁盘上的玩家数据没有被读回来");
+            }
+            if (xp == 42) {
+                ok("重新登录后经验等级恢复（" + xp + "）");
+            } else {
+                fail("重新登录后经验不对：" + xp + "（期望 42）");
+            }
+        } catch (Throwable t) {
+            fail("跨会话状态检查（第二次会话）异常：" + t);
+        } finally {
+            try {
+                server.getPlayerList().remove(again);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
      * 颜色码渲染。
      *
      * <p>锁住一个实测踩过的坑：配置里写 {@code &a生存服}（Bukkit 习惯），
@@ -922,7 +1013,8 @@ public final class SelfTest {
         // 1) 删掉假玩家的数据文件
         java.util.List<String> probeNames = java.util.List.of(
                 "hubsuite_selftest", "hubsuite_islandtest", "hubsuite_spawntest",
-                "hubsuite_statetest", "hubsuite_spawnprobe", "hubsuite_menutest");
+                "hubsuite_statetest", "hubsuite_spawnprobe", "hubsuite_menutest",
+                "hubsuite_persist");
         int removedFiles = 0;
         for (String name : probeNames) {
             // 必须用与 FakePlayers.spawn **同一个**规整函数算 UUID。
