@@ -51,12 +51,13 @@ public final class IslandPresets {
         IslandConfig.IslandType type = new IslandConfig.IslandType();
         type.id = "ocean";
         type.displayName = "\u00A7b海岛";
-        type.description = "\u00A77沙石小岛，周围有浅水，物资偏向渔猎与航海。";
+        type.description = "\u00A77海面上的草方块小岛，底下填到海床，物资偏向渔猎与航海。";
         type.layers = List.of(
-                "0:minecraft:sand",
-                "-1:minecraft:sand",
-                "-2:minecraft:sandstone",
-                "-3:minecraft:stone");
+                // 顶面用草方块（与经典空岛一致），下面填到天然海床
+                "0:minecraft:grass_block",
+                "-1:minecraft:dirt",
+                "-2:minecraft:dirt",
+                "-3:minecraft:dirt");
         type.tree = false;
         type.chest = true;
         type.loot = List.of(

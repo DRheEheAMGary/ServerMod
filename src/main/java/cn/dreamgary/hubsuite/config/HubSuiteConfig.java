@@ -1,5 +1,6 @@
 package cn.dreamgary.hubsuite.config;
 
+import cn.dreamgary.hubsuite.HubSuite;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -211,10 +212,16 @@ public final class HubSuiteConfig {
     public static final class NpcConfig {
         /** 是否生成。 */
         public boolean enabled = true;
-        /** 在大厅里的坐标。 */
-        public double x = 0.5;
-        public double y = 100.0;
-        public double z = 0.5;
+        /**
+         * 坐标 —— **相对所在维度出生点的偏移**，不是绝对坐标。
+         *
+         * <p>用偏移是为了让同一个配置在不同维度都对：主大厅地板在 Y=99、
+         * 出生点在 Y=100；空岛服大厅地板在 Y=100、出生点在 Y=101。
+         * 写绝对坐标的话，其中一边必然把假人埋进地板里（实测踩过）。
+         */
+        public double x = 0.0;
+        public double y = 0.0;
+        public double z = 5.0;
         public float yaw = 0.0F;
         public float pitch = 0.0F;
         /** NPC 头顶名字（空 = 用 displayName）。支持 & 颜色代码。 */
@@ -247,6 +254,89 @@ public final class HubSuiteConfig {
     }
 
     /** 把非法值修正回安全值。 */
+    /**
+     * 保证各个"正常世界"子服用**互不相同**的种子。
+     *
+     * <p>为什么需要：默认配置里所有子服的 {@code seed} 都是 0，
+     * 而同种子 + 同算法 = **同一张地图**。结果生存服和创造服长得一模一样，
+     * 玩家还能靠生存服的地形去创造服提前找矿（用户实测反馈）。
+     *
+     * <p>注意：**改种子不会改变已经生成的地形**。存档里的区块已经落盘了，
+     * 只有新探索的区域会按新种子生成 —— 中间会出现明显的地形断层。
+     * 想要干净的新地形必须删掉对应存档目录，这里只负责把配置改对并告警。
+     */
+    private void normalizeSeeds() {
+        if (servers == null) {
+            return;
+        }
+        java.util.Map<Long, java.util.List<SubServerConfig>> bySeed = new java.util.LinkedHashMap<>();
+        for (SubServerConfig sub : servers) {
+            if (sub == null || !"normal".equalsIgnoreCase(sub.worldKind)) {
+                continue;   // 虚空/超平坦用不上种子
+            }
+            bySeed.computeIfAbsent(sub.seed, k -> new java.util.ArrayList<>()).add(sub);
+        }
+        long[] distinct = {20260101L, 20260202L, 20260303L, 20260404L, 20260505L};
+        int next = 0;
+        for (var entry : bySeed.entrySet()) {
+            if (entry.getValue().size() <= 1) {
+                continue;
+            }
+            // 同种子的第一个保留，其余分配新值
+            for (int i = 1; i < entry.getValue().size(); i++) {
+                SubServerConfig sub = entry.getValue().get(i);
+                long candidate = distinct[Math.min(next++, distinct.length - 1)];
+                while (candidate == entry.getKey()) {
+                    candidate++;
+                }
+                HubSuite.logger().warn(
+                        "子服 '{}' 与其它子服共用种子 {}（会同生成同一张地图），已改为 {}。"
+                                + "注意：已生成的区块不会变，想要干净地形请删除存档目录 hubsuite_{}。",
+                        sub.id, entry.getKey(), candidate, sub.id);
+                sub.seed = candidate;
+            }
+        }
+    }
+
+    /**
+     * 把"老式绝对坐标"的假人配置迁移成相对偏移。
+     *
+     * <p>空岛服大厅用的是独立的 {@link cn.dreamgary.hubsuite.island.IslandConfig.HubNpcConfig}，
+     * 所以这里做一个重载 —— 漏掉任何一类配置都会得到
+     * "偏移叠在绝对坐标上"的离谱位置（实测：空岛假人跑到 Y=201）。
+     */
+    private static void migrateNpcOffsets(
+            cn.dreamgary.hubsuite.island.IslandConfig.HubNpcConfig npc) {
+        if (npc == null) {
+            return;
+        }
+        if (Math.abs(npc.y) > 10.0) {
+            npc.y = 0.0;
+        }
+        if (Math.abs(npc.x) > 8.0) {
+            npc.x = 0.0;
+        }
+        if (Math.abs(npc.z) > 12.0) {
+            npc.z = 5.0;
+        }
+    }
+
+    private static void migrateNpcOffsets(NpcConfig npc) {
+        if (npc == null) {
+            return;
+        }
+        if (Math.abs(npc.y) > 10.0) {
+            npc.y = 0.0;          // 原本想表达"站在地面上"
+        }
+        // X/Z 同理：绝对值很大说明是绝对坐标，收敛到"在出生点正前方 5 格"
+        if (Math.abs(npc.x) > 8.0) {
+            npc.x = 0.0;
+        }
+        if (Math.abs(npc.z) > 12.0) {
+            npc.z = 5.0;
+        }
+    }
+
     public void normalize() {
         if (lobby == null) {
             lobby = new LobbyConfig();
@@ -258,6 +348,24 @@ public final class HubSuiteConfig {
             island = cn.dreamgary.hubsuite.island.IslandPresets.defaults();
         }
         island.normalize();
+        // 假人坐标历史上被当成绝对坐标用过（默认 y=100）。
+        // 这里把明显是绝对坐标的值迁移成偏移：Y>10 只可能是绝对高度，
+        // 而它的本意就是"站在地面上"，也就是偏移 0。
+        migrateNpcOffsets(lobby == null ? null : lobby.menuNpc);
+        // 空岛服大厅的选岛假人、以及每个子服自己的 NPC 配置，同样要迁移 ——
+        // 漏掉任何一个都会得到一个"偏移叠在绝对坐标上"的离谱位置
+        // （实测：空岛假人跑到了 Y=201）。
+        if (island != null) {
+            migrateNpcOffsets(island.hubNpc);
+        }
+        if (servers != null) {
+            for (SubServerConfig sub : servers) {
+                if (sub != null) {
+                    migrateNpcOffsets(sub.npc);
+                }
+            }
+        }
+        normalizeSeeds();
         // 任务定义必须 normalize（内部会调用 Quest.compile()，
         // 把 "break:minecraft:oak_log" 这样的字符串拆成目标类型 + 参数）。
         // 漏掉的话从磁盘读回来的任务全都是 UNKNOWN 目标，进度永远不动。

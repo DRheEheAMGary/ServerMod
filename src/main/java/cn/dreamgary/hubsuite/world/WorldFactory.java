@@ -58,29 +58,20 @@ public final class WorldFactory {
      * 用 {@code NoiseGeneratorSettings.OVERWORLD} + 主世界的群系参数预设。
      * 这样拿到的就是"一片正常生成的海洋"，而不是手工铺出来的水。
      */
+    /**
+     * 海岛维度的区块生成器。
+     *
+     * <p>实现在 {@link OceanWorldGenerator}：自己组装"只有海洋群系的群系源"
+     * 与"保证是海"的噪声路由器。
+     *
+     * <p>之前这里直接借用主世界的 {@code NoiseGeneratorSettings.OVERWORLD}
+     * 和 OVERWORLD 群系预设，结果是**完完全全的常规世界**（有大陆、有森林），
+     * 跟"海洋"没关系 —— 实测被用户抓到。
+     *
+     * @return 海洋生成器；失败时返回 null，调用方应回落到虚空世界
+     */
     public static ChunkGenerator oceanGenerator(MinecraftServer server) {
-        try {
-            var biomeRegistry = server.registryAccess().lookupOrThrow(Registries.BIOME);
-            var presetRegistry = server.registryAccess()
-                    .lookupOrThrow(net.minecraft.core.registries.Registries.MULTI_NOISE_BIOME_SOURCE_PARAMETER_LIST);
-            var preset = presetRegistry.getOrThrow(
-                    net.minecraft.world.level.biome.MultiNoiseBiomeSourceParameterLists.OVERWORLD);
-
-            var biomeSource = net.minecraft.world.level.biome.MultiNoiseBiomeSource.createFromPreset(preset);
-
-            var noiseRegistry = server.registryAccess()
-                    .lookupOrThrow(net.minecraft.core.registries.Registries.NOISE_SETTINGS);
-            var noiseSettings = noiseRegistry.getOrThrow(
-                    net.minecraft.world.level.levelgen.NoiseGeneratorSettings.OVERWORLD);
-
-            HubSuite.logger().info("海洋世界生成器已就绪（群系预设 OVERWORLD，{} 个群系可用）",
-                    biomeRegistry.size());
-            return new net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator(
-                    biomeSource, noiseSettings);
-        } catch (Throwable t) {
-            HubSuite.logger().error("构造海洋生成器失败，回落到主世界生成器", t);
-            return server.overworld().getChunkSource().getGenerator();
-        }
+        return OceanWorldGenerator.create(server);
     }
 
     /** 供外部构造 LevelStem 时复用维度类型解析。 */

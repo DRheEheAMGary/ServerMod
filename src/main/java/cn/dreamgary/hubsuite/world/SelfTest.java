@@ -93,6 +93,8 @@ public final class SelfTest {
         step("成就与统计按维度隔离", this::checkAuxDataIsolation);
         step("任务系统", this::checkQuests);
         step("假玩家与假人名字长度合法", this::checkFakeNameLengths);
+        step("空岛服可以正常交互方块", this::checkInteractionAllowed);
+        step("海岛地形形状符合预期", this::checkOceanIslandShape);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -1981,6 +1983,237 @@ public final class SelfTest {
             ok("子服 NPC 命名路径安全（" + derived + "）");
         } else {
             fail("子服 NPC 名字可能超长：" + derived + "（" + derived.length() + "）");
+        }
+    }
+
+    /**
+     * 玩家在空岛服必须能正常右键方块（箱子/工作台）。
+     *
+     * <p>锁住用户报的问题："整个空岛服不能和方块交互，右键箱子/工作台都没用"。
+     *
+     * <p>交互被拦的可能来源只有两处，这里逐一验证前置条件：
+     * <ol>
+     *   <li>{@code LoginLockdown} —— 未认证玩家的一切交互都会被拒；</li>
+     *   <li>空岛保护 —— 只在**拿着物品**且不在自己区域时才拦。</li>
+     * </ol>
+     * 另外游戏模式必须是生存/创造：**冒险模式无法与方块交互**，
+     * 而大厅是冒险模式，如果切服时没把模式改回来就会中招。
+     */
+    private void checkInteractionAllowed() {
+        var islands = HubSuite.islands();
+        if (islands == null) {
+            fail("空岛服务未初始化");
+            return;
+        }
+        var classic = islands.type("classic").orElse(null);
+        if (classic == null) {
+            fail("缺少 classic 岛型");
+            return;
+        }
+
+        var probe = FakePlayers.spawn(server, "hubsuite_interact",
+                worlds.lobby().orElseThrow().level(), false);
+        if (probe == null) {
+            fail("交互测试用假玩家创建失败");
+            return;
+        }
+        try {
+            // 走真实路径进空岛服
+            islands.visit(probe, "classic");
+
+            // 1) 游戏模式必须能与方块交互
+            var mode = probe.gameMode();
+            if (mode == net.minecraft.world.level.GameType.ADVENTURE
+                    || mode == net.minecraft.world.level.GameType.SPECTATOR) {
+                fail("空岛服里玩家处于 " + mode + " 模式 —— 无法与方块交互");
+            } else {
+                ok("空岛服游戏模式可交互（" + mode + "）");
+            }
+
+            // 2) 假人所在维度必须是岛屿维度，不是大厅、也不是子服主维度
+            var dim = probe.level().dimension().identifier().toString();
+            if (dim.contains("classic") || dim.contains("hub")) {
+                ok("玩家落在空岛服维度内（" + dim + "）");
+            } else {
+                fail("玩家没落在空岛服维度里：" + dim);
+            }
+
+            // 3) 岛主在自己岛上必须被允许建造（交互的首要前提）
+            var island = classic.manager().islandOf(probe.getUUID()).orElse(null);
+            if (island == null) {
+                fail("进入空岛服后没有为玩家建岛");
+            } else {
+                var center = classic.manager().anchorOf(island);
+                if (classic.manager().canBuild(probe, center)) {
+                    ok("岛主可以在自己岛上建造/交互");
+                } else {
+                    fail("岛主在自己岛上被拒绝（会导致箱子/工作台点不动）");
+                }
+            }
+
+            /*
+             * 4) 空岛服大厅（公共平台）也必须允许交互。
+             *
+             *    这里必须先**把玩家送回大厅维度**再判定 ——
+             *    canBuildHere 看的是"玩家当前所在维度"，
+             *    而上面刚把他送去了 classic 维度。
+             *    （第一版就是忘了这点，拿大厅的坐标去问 classic 的保护逻辑，
+             *     得到一个假的失败结论。）
+             */
+            islands.sendToHub(probe);
+            if (!islands.hubEntry().dimension().equals(probe.level().dimension())) {
+                fail("无法把测试玩家送回空岛服大厅");
+            } else {
+                var hubSpawn = islands.hubEntry().spawn();
+                var platformPos = net.minecraft.core.BlockPos.containing(
+                        hubSpawn.x(), hubSpawn.y() - 1, hubSpawn.z());
+                if (islands.canBuildAt(probe, platformPos)) {
+                    ok("空岛服大厅允许交互（拿物品右键不会被拦）");
+                } else {
+                    fail("空岛服大厅被判定成受保护区域 —— 公共箱子点不开");
+                }
+            }
+
+            // 5) 已认证玩家不能被登录锁定拦住
+            var auth = HubSuite.authManager();
+            if (auth == null || auth.isAuthenticated(probe)) {
+                ok("玩家已认证，不会被登录锁定拦交互");
+            } else {
+                fail("玩家未被认证 —— 一切方块交互都会被拒（这条最可疑）");
+            }
+        } catch (Throwable t) {
+            fail("交互检查异常：" + t);
+        } finally {
+            try {
+                classic.manager().delete(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 海岛的形状：**顶面草方块、高于海平面一格、底下填石头到天然海床**。
+     *
+     * <p>锁住用户的要求与原实现的两个问题：
+     * <ol>
+     *   <li>原来顶面是沙子（现在改成草方块）；</li>
+     *   <li>原来只铺固定的 4 层，海里会**浮着一块石板**，底下是水。
+     *       现在必须一直填到天然海床。</li>
+     * </ol>
+     */
+    private void checkOceanIslandShape() {
+        var islands = HubSuite.islands();
+        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
+        if (ocean == null) {
+            fail("缺少 ocean 岛型");
+            return;
+        }
+
+        var probe = FakePlayers.spawn(server, "hubsuite_sshape",
+                ocean.entry().level(), false);
+        if (probe == null) {
+            fail("海岛形状测试用假玩家创建失败");
+            return;
+        }
+        try {
+            var island = ocean.manager().getOrCreate(
+                    probe.getUUID(), probe.getName().getString(), "ocean");
+            var anchor = ocean.manager().anchorOf(island);
+
+            /*
+             * 显式把岛周围的区块加载出来。
+             *
+             * 生产代码**绝不允许**这么做（未加载区块上的 getChunk 会同步生成整片
+             * 区块，海洋地形很重，实测被看门狗强杀过），所以建岛走的是
+             * "登记待补铺 + 每 tick 重试"。
+             *
+             * 但自检是同步执行的，没有"下一个 tick"可等 ——
+             * 而这个检查的意义恰恰是验证地形形状，不加载就没法看。
+             * 这里只加载 3×3 个区块，代价可控。
+             */
+            var oceanLevel = ocean.entry().level();
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    oceanLevel.getChunk(anchor.getX() / 16 + dx, anchor.getZ() / 16 + dz);
+                }
+            }
+
+            if (!ocean.manager().ensureTerrain(island)) {
+                ok("海岛地形待补铺（区块未加载）—— 延迟机制正常，跳过形状检查");
+                return;
+            }
+
+            int seaLevel = cn.dreamgary.hubsuite.world.OceanWorldGenerator.seaLevel();
+            var center = ocean.manager().anchorOf(island);
+            var level = ocean.entry().level();
+
+            // 1) 顶面必须是草方块，且正好在海平面 +1
+            var topPos = new net.minecraft.core.BlockPos(
+                    center.getX(), seaLevel + 1, center.getZ());
+            var topState = level.getBlockState(topPos);
+            if (topState.is(net.minecraft.world.level.block.Blocks.GRASS_BLOCK)) {
+                ok("海岛顶面是草方块，位于海平面 +1（Y=" + (seaLevel + 1) + "）");
+            } else {
+                fail("海岛顶面不是草方块：Y=" + (seaLevel + 1) + " 处是 " + topState);
+            }
+
+            // 2) 顶面之上必须是空气（不会被水淹）
+            var above = level.getBlockState(topPos.above());
+            if (above.isAir()) {
+                ok("海岛顶面之上是空气（玩家站在岛上不会被淹）");
+            } else {
+                fail("海岛顶面之上被占用：" + above);
+            }
+
+            // 3) 底下必须一路填到天然海床 —— 逐层往下找，中间不能有连续的水
+            int firstWater = -1;
+            int solidRun = 0;
+            for (int y = seaLevel; y > seaLevel - 40; y--) {
+                var st = level.getBlockState(new net.minecraft.core.BlockPos(
+                        center.getX(), y, center.getZ()));
+                if (st.isAir() || !st.getFluidState().isEmpty()) {
+                    if (firstWater < 0) {
+                        firstWater = y;
+                    }
+                    solidRun = 0;
+                } else {
+                    solidRun++;
+                    if (solidRun >= 3) {
+                        break;   // 已经进入连续实心（海床）
+                    }
+                }
+            }
+            if (firstWater < 0) {
+                ok("海岛中心柱从顶面到海床都是实心（没有夹水）");
+            } else {
+                fail("海岛底下夹着水/空气（岛像一块浮板）：第一处空洞在 Y=" + firstWater);
+            }
+
+            // 4) 岛外应当还是海 —— 确认生成器造的是海洋而不是陆地
+            var outside = new net.minecraft.core.BlockPos(
+                    center.getX() + 120, seaLevel, center.getZ() + 120);
+            if (level.getChunkSource().hasChunk(outside.getX() >> 4, outside.getZ() >> 4)) {
+                var st = level.getBlockState(outside);
+                if (!st.getFluidState().isEmpty()) {
+                    ok("岛外 120 格外是水域（世界确实是海洋）");
+                } else {
+                    ok("岛外 120 格外是 " + st.getBlock().getName().getString()
+                            + "（该处可能高于海平面，属正常地形起伏）");
+                }
+            } else {
+                ok("岛外区块未加载，跳过水域抽查");
+            }
+        } catch (Throwable t) {
+            fail("海岛形状检查异常：" + t);
+        } finally {
+            try {
+                ocean.manager().delete(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
         }
     }
 

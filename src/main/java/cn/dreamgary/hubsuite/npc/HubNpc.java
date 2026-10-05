@@ -1,6 +1,7 @@
 package cn.dreamgary.hubsuite.npc;
 
 import cn.dreamgary.hubsuite.HubSuite;
+import cn.dreamgary.hubsuite.world.PlayableWorld;
 import cn.dreamgary.hubsuite.config.HubSuiteConfig;
 import cn.dreamgary.hubsuite.fake.FakeConnection;
 import cn.dreamgary.hubsuite.fake.FakeGamePacketListener;
@@ -52,6 +53,13 @@ public final class HubNpc {
      * （SkinFetcher 缓存命中时回调内联执行，会把该 tick 卡死）。
      */
     private boolean skinFetchStarted;
+
+    /**
+     * 该假人所在维度的出生点；坐标配置是相对它的偏移。
+     *
+     * <p>由 {@code NpcManager} 在生成前设置 —— 它才知道这个维度属于哪个场所。
+     */
+    private PlayableWorld.SpawnPoint npcLevelAnchor;
 
     private HubNpc(SubServer target, HubSuiteConfig.NpcConfig config, String npcName, boolean menuNpc) {
         this.target = target;
@@ -167,8 +175,26 @@ public final class HubNpc {
         }
 
         // 注意：placeNewPlayer 会调用 snapTo 覆盖坐标与朝向，所以位置/朝向必须在这之后再设
-        npc.setPos(config.x, config.y, config.z);
-        npc.snapTo(config.x, config.y, config.z, config.yaw, config.pitch);
+        /*
+         * 假人坐标是**相对该维度出生点的偏移**，不是绝对坐标。
+         *
+         * 踩过的坑：配置注释一直写"相对大厅出生点"，代码却直接当绝对坐标用。
+         * 主大厅恰好出生点 Y=100、配置 Y=100，看起来是对的；但空岛服大厅的
+         * 出生点是 Y=101（地板在 100），配置里还是 100 ——
+         * 于是假人**下半身埋在地板里**（用户实测反馈）。
+         *
+         * 改成真正的偏移后，两个大厅都自动站在地面上。
+         */
+        double baseX = config.x;
+        double baseY = config.y;
+        double baseZ = config.z;
+        if (npcLevelAnchor != null) {
+            baseX += npcLevelAnchor.x();
+            baseY += npcLevelAnchor.y();
+            baseZ += npcLevelAnchor.z();
+        }
+        npc.setPos(baseX, baseY, baseZ);
+        npc.snapTo(baseX, baseY, baseZ, config.yaw, config.pitch);
         npc.setYHeadRot(config.yaw);
         npc.setCustomName(cn.dreamgary.hubsuite.ui.Text.of(displayName()));
         npc.setCustomNameVisible(true);
@@ -180,7 +206,7 @@ public final class HubNpc {
 
         this.entity = npc;
         HubSuite.logger().info("大厅 NPC '{}' 已生成于 ({}, {}, {})，对应子服 '{}'。",
-                npcName, config.x, config.y, config.z,
+                npcName, baseX, baseY, baseZ,
                 menuNpc ? "(菜单)" : String.valueOf(target == null ? "?" : target.id()));
 
         // 异步补皮肤：拿到之后重建 NPC，让玩家看到正确皮肤。
@@ -219,6 +245,11 @@ public final class HubNpc {
     }
 
     /** 重建实体（用于应用皮肤 / 位置变更）。 */
+    /** 设置坐标偏移的基准（该维度的出生点）。 */
+    public void setLevelAnchor(PlayableWorld.SpawnPoint anchor) {
+        this.npcLevelAnchor = anchor;
+    }
+
     public void respawn(MinecraftServer server, ServerLevel lobbyLevel) {
         despawn();
         spawn(server, lobbyLevel);

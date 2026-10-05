@@ -135,6 +135,7 @@ public final class NpcManager {
         HubSuiteConfig.NpcConfig config = menuNpcConfig();
         if (config.enabled) {
             HubNpc npc = HubNpc.createMenu(config, MENU_NPC_NAME);
+            npc.setLevelAnchor(lobby.spawn());   // 坐标配置是相对出生点的偏移
             if (npc.spawn(server, lobby.level())) {
                 npcs.add(npc);
                 if (npc.entity() != null) {
@@ -162,6 +163,32 @@ public final class NpcManager {
         HubSuite.logger().info("全部引导/菜单假人已就绪：{} 个。", npcs.size());
     }
 
+    /**
+     * 取某个维度所属场所的出生点（作为假人坐标的偏移基准）。
+     *
+     * <p>找不到就退回"维度原点上方 64"这种保守值，而不是 null ——
+     * 至少不会把假人塞到基岩层里。
+     */
+    private static cn.dreamgary.hubsuite.world.PlayableWorld.SpawnPoint spawnOf(
+            net.minecraft.server.level.ServerLevel level) {
+        try {
+            var worlds = HubSuite.worlds();
+            if (worlds != null) {
+                var world = worlds.worldOfDimension(level.dimension());
+                if (world.isPresent()) {
+                    return world.get().spawn();
+                }
+            }
+        } catch (Throwable t) {
+            HubSuite.logger().debug("取维度出生点失败，假人坐标将按绝对坐标处理：{}", t.toString());
+        }
+        // 退回维度自己的出生点（26.1 是 RespawnData）
+        var r = level.getLevelData().getRespawnData();
+        var p = r.pos();
+        return new cn.dreamgary.hubsuite.world.PlayableWorld.SpawnPoint(
+                p.getX() + 0.5, p.getY(), p.getZ() + 0.5, r.yaw(), r.pitch());
+    }
+
     /** 生成运行时注册的额外菜单假人（空岛服大厅的"选择岛屿"）。 */
     private void spawnExtraMenus(MinecraftServer server) {
         if (PENDING_SPAWNS.isEmpty()) {
@@ -170,6 +197,9 @@ public final class NpcManager {
         for (PendingMenu pending : PENDING_SPAWNS) {
             try {
                 HubNpc npc = HubNpc.createMenu(pending.config(), pending.name());
+                // 坐标是相对该维度出生点的偏移 —— 空岛服大厅地板在 Y=100、
+                // 出生点在 Y=101，用绝对坐标会让假人埋进地板里（用户实测反馈）。
+                npc.setLevelAnchor(spawnOf(pending.level()));
                 if (!npc.spawn(server, pending.level())) {
                     HubSuite.logger().warn("菜单假人 '{}' 生成失败。", pending.name());
                     continue;

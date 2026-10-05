@@ -285,6 +285,11 @@ public final class IslandService {
     }
 
     /** 按玩家所在维度判断能不能建造（大厅永远允许）。 */
+    /** 供自检调用：某个位置的交互是否会被放行。 */
+    public boolean canBuildAt(ServerPlayer player, net.minecraft.core.BlockPos pos) {
+        return canBuildHere(player, pos);
+    }
+
     private boolean canBuildHere(ServerPlayer player, net.minecraft.core.BlockPos pos) {
         Optional<Type> type = typeOf(player.level());
         if (type.isEmpty()) {

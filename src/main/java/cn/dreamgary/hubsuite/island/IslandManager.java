@@ -886,25 +886,20 @@ public final class IslandManager {
             HubSuite.logger().debug("建岛前申请区块票据失败：{}", t.toString());
         }
 
-        // 1) 基础地形：按层配置铺一块方形小岛
+        // 1) 基础地形。
+        //
+        //    海岛走**另一条路径**：它的顶面要对齐海平面、底下要一直填到天然海床
+        //    （海里凭空浮着一块 4 格厚的石板很怪）。经典空岛是虚空世界，
+        //    照层配置铺就行。
         List<int[]> layers = parseLayers(type);
-        for (int[] layer : layers) {
-            if (System.currentTimeMillis() > deadline) {
-                overBudget[0] = true;
-                break;
+        if (isOceanPlacement()) {
+            if (buildOceanIsland(level, center, radius, layers, deadline, overBudget)) {
+                HubSuite.logger().debug("海岛地形已铺好（中心 {}）", center);
             }
-            int y = baseY + layer[0];
-            BlockState state = blockState(layer[1]);
-            if (state == null) {
-                continue;
-            }
-            int shrink = layer[0] < -1 ? 1 : 0;   // 更深的层小一圈，看起来像岛
-            for (int dx = -radius + shrink; dx <= radius - shrink; dx++) {
-                for (int dz = -radius + shrink; dz <= radius - shrink; dz++) {
-                    level.setBlockAndUpdate(center.offset(dx, y - baseY, dz), state);
-                }
-            }
+        } else {
+            paintLayers(level, center, baseY, radius, layers, deadline, overBudget);
         }
+
 
         // 2) 清空"玩家落脚点"周围的悬空空间（必须在种树之前，否则会把树干挖掉）
         BlockPos spawnPos = center.offset(0, SPAWN_OFFSET_Y, 0);
@@ -1011,6 +1006,115 @@ public final class IslandManager {
     }
 
     /** 把某个位置上方若干格清成空气（半径 r 的方形范围）。 */
+    /** 按层配置铺一块方形小岛（经典空岛用，虚空世界里没有天然地面可对齐）。 */
+    private void paintLayers(ServerLevel level, BlockPos center, int baseY, int radius,
+                             List<int[]> layers, long deadline, boolean[] overBudget) {
+        for (int[] layer : layers) {
+            if (System.currentTimeMillis() > deadline) {
+                overBudget[0] = true;
+                return;
+            }
+            int y = baseY + layer[0];
+            BlockState state = blockState(layer[1]);
+            if (state == null) {
+                continue;
+            }
+            int shrink = layer[0] < -1 ? 1 : 0;   // 更深的层小一圈，看起来像岛
+            for (int dx = -radius + shrink; dx <= radius - shrink; dx++) {
+                for (int dz = -radius + shrink; dz <= radius - shrink; dz++) {
+                    level.setBlockAndUpdate(center.offset(dx, y - baseY, dz), state);
+                }
+            }
+        }
+    }
+
+    /**
+     * 铺一座**海里的岛**。
+     *
+     * <p>和虚空空岛的区别：
+     * <ul>
+     *   <li>顶面固定在 {@code 海平面 + 1}，而不是配置的绝对高度
+     *       —— 生成器已经保证那里是水面，岛上站人不会被淹；</li>
+     *   <li>底下**一直填到天然海床**，而不是铺固定的几层。
+     *       否则海里会浮着一块 4 格厚的石板，底下是水，非常出戏。</li>
+     * </ul>
+     *
+     * <p>顶部材质仍然来自层配置（默认草方块 + 泥土），所以想改成沙滩只要改配置。
+     *
+     * @return true 表示铺成功（可能因为超预算提前停下）
+     */
+    private boolean buildOceanIsland(ServerLevel level, BlockPos center, int radius,
+                                     List<int[]> layers, long deadline, boolean[] overBudget) {
+        int topY = cn.dreamgary.hubsuite.world.OceanWorldGenerator.seaLevel() + 1;   // 高于海平面一格
+
+        // 层配置里的 dy 是相对"地表基准"的，这里把基准挪到 topY。
+        // 例如 0:grass_block → topY；-1:dirt → topY-1。
+        List<int[]> sorted = new java.util.ArrayList<>(layers);
+        sorted.sort(java.util.Comparator.comparingInt(a -> -a[0]));   // 从浅到深
+
+        int deepestConfigured = 0;
+        for (int[] layer : sorted) {
+            deepestConfigured = Math.min(deepestConfigured, layer[0]);
+        }
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                if (System.currentTimeMillis() > deadline) {
+                    overBudget[0] = true;
+                    return false;
+                }
+                int x = center.getX() + dx;
+                int z = center.getZ() + dz;
+
+                // 1) 按配置铺顶部若干层（草/泥土/沙……）
+                for (int[] layer : sorted) {
+                    BlockState state = blockState(layer[1]);
+                    if (state == null) {
+                        continue;
+                    }
+                    level.setBlockAndUpdate(new BlockPos(x, topY + layer[0], z), state);
+                }
+
+                // 2) 再往下填石头，直到碰到天然海床（或到达配置的最深层）
+                int floorY = findSeabed(level, x, topY + deepestConfigured - 1, z);
+                BlockState filler = net.minecraft.world.level.block.Blocks.STONE.defaultBlockState();
+                if (filler != null) {
+                    for (int y = topY + deepestConfigured - 1; y > floorY; y--) {
+                        var pos = new BlockPos(x, y, z);
+                        if (!level.getBlockState(pos).isAir()) {
+                            break;   // 已经碰到实心（海床），停
+                        }
+                        level.setBlockAndUpdate(pos, filler);
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 找出某根柱子下方第一个天然实心方块的高度（= 海床）。
+     *
+     * <p>往下最多找 {@code MAX_SEABED_SEARCH} 格；找不到就返回世界底部，
+     * 保证不会无限循环。
+     *
+     * <p>注意：调用前区块**必须已加载** —— {@code getBlockState} 在未加载的区块上
+     * 会同步生成整片区块（海洋地形极重，会卡死主线程，实测被看门狗强杀过）。
+     * {@code generate()} 开头已经做过 {@code hasChunk} 检查。
+     */
+    private int findSeabed(ServerLevel level, int x, int fromY, int z) {
+        int limit = Math.max(level.getMinY() + 1, fromY - MAX_SEABED_SEARCH);
+        for (int y = fromY; y > limit; y--) {
+            if (!level.getBlockState(new BlockPos(x, y, z)).isAir()) {
+                return y;
+            }
+        }
+        return limit;
+    }
+
+    /** 往下找海床的最大深度（防止在极深的海洋里铺太久）。 */
+    private static final int MAX_SEABED_SEARCH = 48;
+
     private void clearAbove(ServerLevel level, BlockPos base, int radius, int height) {
         for (int dy = 0; dy <= height; dy++) {
             for (int dx = -radius; dx <= radius; dx++) {

@@ -31,9 +31,10 @@ public final class DefaultConfigs {
         // 大厅引导假人：只放一个，点击打开服务器选择界面
         config.lobby.menuNpc = new HubSuiteConfig.NpcConfig();
         config.lobby.menuNpc.enabled = true;
-        config.lobby.menuNpc.x = 0.5;
-        config.lobby.menuNpc.y = 100.0;
-        config.lobby.menuNpc.z = 5.5;
+        // 相对大厅出生点 (0.5, 100, 0.5) 的偏移 → 落在 (0.5, 100, 5.5)
+        config.lobby.menuNpc.x = 0.0;
+        config.lobby.menuNpc.y = 0.0;
+        config.lobby.menuNpc.z = 5.0;
         config.lobby.menuNpc.yaw = 180.0F;
         config.lobby.menuNpc.name = "\u00A7a\u00A7l点击传送";
         config.lobby.menuNpc.skin = "auto";
@@ -61,6 +62,11 @@ public final class DefaultConfigs {
         s.generateEnd = false;
         // 正常世界交给原版算地表高度，不硬写 Y（硬写会悬空）
         s.useWorldSpawn = true;
+        // 每个子服给**不同**的种子：seed=0 会让生存服和创造服生成
+        // 一模一样的地形（同种子同算法 = 同世界），两个服看起来像复制粘贴，
+        // 而且玩家能靠生存服的地形去创造服提前找矿。
+        // 这里用固定但互不相同的值，保证"删档重开还是同一张图"。
+        s.seed = 20260101L;
         s.gameMode = "survival";
         s.difficulty = "normal";
         s.forceGameMode = true;
@@ -95,6 +101,8 @@ public final class DefaultConfigs {
         s.id = "creative";
         s.displayName = "\u00A7e创造服";
         s.order = 1;
+        // 与生存服不同的种子（见 survival() 的说明）
+        s.seed = 20260202L;
         // 与生存服一样用正常地形：创造模式在平地上没什么可玩的，
         // 有地形才方便试建。出生点交给原版算（它会落到真实地表）。
         s.worldKind = "normal";
@@ -142,6 +150,7 @@ public final class DefaultConfigs {
         s.worldKind = "void";
         // 虚空世界没有地形，玩家由空岛系统送到自己的岛，这里只是兜底坐标。
         // Y=101：岛面（草方块）在 Y=100，站上去就是 101。
+                s.seed = 20260303L;
         s.useWorldSpawn = false;
         s.spawnX = 0.5;
         s.spawnY = 101.0;
