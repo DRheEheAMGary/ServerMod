@@ -175,10 +175,18 @@ public final class SubServer implements PlayableWorld {
         }
 
         // 2) 先看配置里有没有上次算好的结果（最可靠，不依赖 level.dat）
-        if (config.resolvedSpawnX != null && config.resolvedSpawnY != null
+        //
+        //    注意：groundBelowOrNull 返回 null 表示"区块没加载、无法判断"。
+        //    这种情况下**要接受缓存**而不是重算 —— 重算会走原版 setInitialSpawn，
+        //    那是个最多 121 个区块的同步螺旋（主线程），代价极高。
+        //    缓存值是上次区块已加载时算出来的，可信度高于"未知"。
+        boolean seedMatches = config.resolvedSpawnSeed != null
+                && config.resolvedSpawnSeed == config.seed;
+        if (seedMatches
+                && config.resolvedSpawnX != null && config.resolvedSpawnY != null
                 && config.resolvedSpawnZ != null
-                && hasGroundBelow(level, config.resolvedSpawnX, config.resolvedSpawnY,
-                        config.resolvedSpawnZ)) {
+                && !Boolean.FALSE.equals(groundBelowOrNull(level,
+                        config.resolvedSpawnX, config.resolvedSpawnY, config.resolvedSpawnZ))) {
             PlayableWorld.SpawnPoint cached = sanitizeSpawn(level, config.id,
                     new PlayableWorld.SpawnPoint(config.resolvedSpawnX, config.resolvedSpawnY,
                             config.resolvedSpawnZ, config.spawnYaw, config.spawnPitch));
@@ -190,7 +198,8 @@ public final class SubServer implements PlayableWorld {
         // 3) 没有缓存 → 让原版算一个
         PlayableWorld.SpawnPoint vanilla = calculateVanillaSpawn(server, level, config);
 
-        // 4) 候选点必须是"底下真的有地"才可信，然后写回配置长期保存
+        // 4) 候选点必须是"底下真的有地"才可信，然后写回配置长期保存。
+        //    本次刚调过 setInitialSpawn，区块已被它加载，所以这里能拿到确定结果。
         if (vanilla != null && hasGroundBelow(level, vanilla.x(), vanilla.y(), vanilla.z())) {
             PlayableWorld.SpawnPoint finalSpawn = sanitizeSpawn(level, config.id, vanilla);
             rememberSpawn(config, finalSpawn);
@@ -217,6 +226,7 @@ public final class SubServer implements PlayableWorld {
         config.resolvedSpawnX = spawn.x();
         config.resolvedSpawnY = spawn.y();
         config.resolvedSpawnZ = spawn.z();
+        config.resolvedSpawnSeed = config.seed;
         try {
             ConfigManager manager = HubSuite.configManager();
             if (manager != null) {
@@ -239,7 +249,21 @@ public final class SubServer implements PlayableWorld {
                 gameType,
                 difficulty,
                 true);
+        // 从这里往后任何一步失败，都要把 save 关掉：
+        // 调用方是 catch 后 continue，不会替我们清理，泄漏的就是 session.lock。
+        try {
+            return loadWithSave(server, config, gameType, difficulty, save);
+        } catch (Throwable t) {
+            save.close();
+            throw t;
+        }
+    }
 
+    private static SubServer loadWithSave(MinecraftServer server,
+                                         HubSuiteConfig.SubServerConfig config,
+                                         GameType gameType,
+                                         Difficulty difficulty,
+                                         IsolatedSave save) throws IOException {
         ServerRules rules = new ServerRules(config.id, config.behaviour);
         rules.initialize(config.gameRules);
 
@@ -449,8 +473,14 @@ public final class SubServer implements PlayableWorld {
             int z = (int) Math.floor(spawn.z());
             int y = (int) Math.floor(spawn.y());
 
-            // 确保这一列所在区块已加载，否则读到的都是"未加载"
-            level.getChunk(x >> 4, z >> 4);
+            // 区块没加载就别判断 —— getBlockState 会同步生成区块并阻塞主线程。
+            // 缓存/原版给的坐标本来就来自"区块已加载时"的计算，
+            // 这里保守地原样返回，等玩家真落地时区块自然会被加载。
+            if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) {
+                HubSuite.logger().debug(
+                        "子服 '{}' 出生点校验跳过（区块未加载）：({}, {}, {})", id, x, y, z);
+                return spawn;
+            }
 
             if (isStandable(level, x, y, z)) {
                 return spawn;
@@ -486,21 +516,41 @@ public final class SubServer implements PlayableWorld {
      * <p>用于判断"能不能信任这个出生点" —— 虚空世界里这一列全是空气，直接返回 false。
      */
     private static boolean hasGroundBelow(ServerLevel level, double x, double y, double z) {
+        Boolean known = groundBelowOrNull(level, x, y, z);
+        return known != null && known;
+    }
+
+    /**
+     * 某个坐标下方有没有地面。
+     *
+     * @return {@code TRUE}/{@code FALSE}；{@code null} 表示**区块还没加载、
+     *         无法判断**（此时绝不下结论，也绝不主动生成区块）
+     *
+     * <p><b>为什么不能直接 getBlockState：</b>它在未加载区块上会走
+     * {@code getChunk(x, z, FULL, true)}，主线程原地等整片区块生成完
+     * （{@code ServerChunkCache} 里的 {@code managedBlock}）。
+     * 正常地形一个区块就够慢，攒够 60 秒就被看门狗强杀 —— 本项目踩过四次。
+     * {@code hasChunk()} 只查已加载的 ChunkHolder，是安全的探测方式。
+     */
+    private static Boolean groundBelowOrNull(ServerLevel level, double x, double y, double z) {
         try {
             int bx = (int) Math.floor(x);
             int bz = (int) Math.floor(z);
             int by = (int) Math.floor(y);
-            level.getChunk(bx >> 4, bz >> 4);
+            if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+                return null;   // 未知：不加载、不下结论
+            }
             for (int probe = by; probe >= by - 64 && probe >= level.getMinY(); probe--) {
                 var pos = new net.minecraft.core.BlockPos(bx, probe, bz);
                 if (!level.getBlockState(pos).getCollisionShape(level, pos).isEmpty()) {
                     return true;
                 }
             }
+            return false;
         } catch (Throwable t) {
-            HubSuite.logger().debug("检查出生点下方地面失败：{}", t.toString());
+            HubSuite.logger().warn("检查出生点下方地面时出错（按未知处理）", t);
+            return null;
         }
-        return false;
     }
 
     /** 判断某个位置能不能站人：脚下实心、本体与头顶可穿过。 */

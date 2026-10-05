@@ -85,11 +85,28 @@ public final class PlayerDataRouter {
         PENDING_STORAGE.remove(uuid);
     }
 
+    /**
+     * 玩家退出时清掉他的待读档登记。
+     *
+     * <p>不清的话，下次登录会按**上一次会话**记下的目标去读档 ——
+     * 那个目标可能指向别的子服，于是背包对不上。
+     */
+    public static void forget(UUID uuid) {
+        if (uuid != null) {
+            PENDING_STORAGE.remove(uuid);
+        }
+    }
+
     public static void clear() {
         SERVER = null;
         BY_DIMENSION.clear();
         BY_SAVE.clear();
         PENDING_STORAGE.clear();
+        // 注意：DEFAULT_FALLBACK 也要清。它是"第一个登记的存档"，
+        // 服务端关闭后还留着旧对象的话，下次启动在 bindPlayerStorage 之前
+        // 用它去读写，就会落到上一个存档里（而且那个 access 已经 close 了）。
+        DEFAULT_FALLBACK = null;
+        currentLoadStorage.remove();
         CURRENT.remove();
     }
 
@@ -136,6 +153,15 @@ public final class PlayerDataRouter {
         PlayerDataStorage pending = PENDING_STORAGE.get(uuid);
         if (pending != null) {
             currentLoadStorage.set(pending);
+            return;
+        }
+        // 既不在线、也没有登记过目标 → 用兜底存档。
+        //
+        // 不设置的话会退回原版的全局 playerIo（也就是**主世界**的 players/data），
+        // 而玩家在别处登出时数据是写到对应子服的 —— 两边路径不一致，
+        // 跨会话就会出现"背包对不上"。兜底至少保证读和写落在同一个地方。
+        if (DEFAULT_FALLBACK != null) {
+            currentLoadStorage.set(DEFAULT_FALLBACK);
         }
     }
 

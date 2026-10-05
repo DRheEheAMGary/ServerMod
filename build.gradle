@@ -60,6 +60,8 @@ java {
 	targetCompatibility = JavaVersion.VERSION_25
 }
 
+// 许可证：MIT（见 LICENSE 文件）
+// jar 里会带上 LICENSE，方便使用者随包获取授权条款
 jar {
 	from('LICENSE') {
 		rename { "${it}_${project.base.archivesName.get()}" }

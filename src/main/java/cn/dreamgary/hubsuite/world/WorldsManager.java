@@ -26,7 +26,14 @@ public final class WorldsManager {
     private final ConfigManager configManager;
     private final Map<String, SubServer> subServers = new LinkedHashMap<>();
     private Lobby lobby;
-    private MinecraftServer server;
+    /**
+     * 服务端引用。
+     *
+     * <p>必须是 volatile：认证服务的异步回调（非主线程）会通过
+     * {@link #server()} 读它，用来把结果 execute 回主线程。
+     * 不保证可见性的话可能读到 null 或陈旧值。
+     */
+    private volatile MinecraftServer server;
 
     public WorldsManager(ConfigManager configManager) {
         this.configManager = configManager;
@@ -34,7 +41,19 @@ public final class WorldsManager {
 
     public void register() {
         ServerLifecycleEvents.SERVER_STARTED.register(this::onServerStarted);
+        // 关服分两阶段，顺序很关键：
+        //   STOPPING = 原版 stopServer() 的**开头**，此时只是我们主动落盘；
+        //   STOPPED  = 原版 stopServer() **跑完之后**，这时才能拆路由/关存档。
+        //
+        // 踩过的坑：原来把清理全放在 STOPPING，结果原版随后的
+        // playerList.saveAll() 因为路由已被清空，把每个在线玩家的最终状态
+        // 写进了主世界存档（world/players/data），而各子服的数据停留在
+        // 上一次登出时的内容 —— 玩家最后一段游戏成果永久丢失。
+        // 同理，提前从 MinecraftServer.levels 摘掉维度，会让原版的
+        // "等待区块排空 → saveAllChunks → level.close()" 完全看不到这些维度，
+        // 区块句柄一直开到 JVM 退出。
         ServerLifecycleEvents.SERVER_STOPPING.register(this::onServerStopping);
+        ServerLifecycleEvents.SERVER_STOPPED.register(this::onServerStopped);
         // 持续刷新"玩家 → 目标存档"的映射，保证任何时刻保存都落到正确的子服
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(
                 PlayerDataRouter::refreshPending);
@@ -97,16 +116,34 @@ public final class WorldsManager {
                 subServers.size(), System.currentTimeMillis() - start);
     }
 
+    /**
+     * 关服第一阶段：**只落盘，不拆任何东西**。
+     *
+     * <p>原版 {@code stopServer()} 在这之后还要执行
+     * {@code playerList.saveAll()}、{@code saveAllChunks(...)} 与
+     * {@code level.close()}。我们必须让路由表、维度映射、存档句柄
+     * 在那之前保持有效，否则那些收尾动作会写到错误的地方。
+     */
     private void onServerStopping(MinecraftServer server) {
         saveAll(true);
+        HubSuite.logger().info("多世界引擎：已主动保存全部子服，等待原版收尾。");
+    }
+
+    /**
+     * 关服第二阶段：原版收尾完成后，才关闭存档、拆掉路由。
+     */
+    private void onServerStopped(MinecraftServer server) {
         subServers.values().forEach(SubServer::close);
         subServers.clear();
         if (lobby != null) {
             lobby.close();
             lobby = null;
         }
+        // 暂存的内存状态（背包等）也要清 —— 不然同一 JVM 内重启会残留上一局的数据
+        cn.dreamgary.hubsuite.world.PlayerStateStash.clear();
         RulesManager.clear();
         PlayerDataRouter.clear();
+        this.server = null;
         HubSuite.logger().info("多世界引擎已关闭，全部子服已保存。");
     }
 
@@ -156,12 +193,24 @@ public final class WorldsManager {
 
     /** 玩家当前所在的场所（按维度反查）。 */
     public Optional<PlayableWorld> worldOf(ServerPlayer player) {
-        var dimension = player.level().dimension();
+        return worldOfDimension(player.level().dimension());
+    }
+
+    /**
+     * 某个维度属于哪个场所。
+     *
+     * <p><b>必须遍历子服的全部维度，而不只是主维度。</b>
+     * 空岛服有大厅/经典/海岛三个维度，玩家在海岛维度时如果只比对
+     * {@code sub.level()}（恒为 primary），会判定成"不在任何场所"——
+     * 后果是 {@code PlayerRouter} 认为无需暂存状态，玩家**切服时直接丢背包**
+     * （实测自检发现的）。
+     */
+    public Optional<PlayableWorld> worldOfDimension(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
         if (lobby != null && lobby.level().dimension().equals(dimension)) {
             return Optional.of(lobby);
         }
         for (SubServer sub : subServers.values()) {
-            if (sub.level().dimension().equals(dimension)) {
+            if (sub.owns(dimension)) {
                 return Optional.of(sub);
             }
         }

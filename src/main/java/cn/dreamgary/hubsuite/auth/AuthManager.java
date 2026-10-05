@@ -130,6 +130,9 @@ public final class AuthManager {
         // 玩家在某个子服的当前状态会随玩家数据落盘到那个子服的存档里，
         // 所以内存暂存可以清掉（下次进入会重新建立）。
         cn.dreamgary.hubsuite.world.PlayerStateStash.forget(player.getUUID());
+        // 连同"下次读档该用哪个存档"的登记一起清掉：
+        // 留着的话，下次登录会按上一次会话的目标去读，可能读到别的子服的旧数据。
+        cn.dreamgary.hubsuite.world.PlayerDataRouter.forget(player.getUUID());
     }
 
     // ------------------------------------------------------------------

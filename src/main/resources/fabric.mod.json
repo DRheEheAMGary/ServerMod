@@ -11,7 +11,7 @@
 		"homepage": "https://dreamgary.cn/",
 		"sources": "https://dreamgary.cn/"
 	},
-	"license": "ARR",
+	"license": "MIT",
 	"icon": "assets/hubsuite/icon.png",
 	"environment": "*",
 	"entrypoints": {

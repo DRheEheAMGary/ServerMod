@@ -89,6 +89,7 @@ public final class SelfTest {
         step("空岛入口分流与保护", this::checkIslandRouting);
         step("空岛指令存在且可用", this::checkIslandCommands);
         step("空岛重置与切换岛型", this::checkIslandReset);
+        step("玩家数据落盘目录正确", this::checkPlayerDataRouting);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -1414,6 +1415,91 @@ public final class SelfTest {
             return null;
         }
         return level.getBlockState(pos);
+    }
+
+    /**
+     * 玩家数据必须落到**当前所在维度**对应的存档目录里。
+     *
+     * <p>这是"独立背包"的根基：{@code PlayerList.playerIo} 是全局唯一的，
+     * 原版所有玩家数据都会写到主世界存档。我们用 Mixin 在读写的瞬间替换存储对象，
+     * 所以必须验证"替换真的生效了"，而不只是"写到了某个目录"。
+     *
+     * <p>同时验证反方向：**非当前维度**的存档目录里不该出现这个玩家。
+     */
+    private void checkPlayerDataRouting() {
+        var survival = worlds.subServer("survival").orElse(null);
+        var lobby = worlds.lobby().orElse(null);
+        if (survival == null || lobby == null) {
+            fail("缺少生存服或大厅");
+            return;
+        }
+
+        var probe = FakePlayers.spawn(server, "hubsuite_datatest", survival.level(), false);
+        if (probe == null) {
+            fail("数据落盘测试用假玩家创建失败");
+            return;
+        }
+        try {
+            // 注意：假玩家 spawn 时 AuthManager.onJoin 会把他送进大厅，
+            // 所以必须**显式**把他送进生存服，否则测的是大厅的落盘路径。
+            PlayerRouter.sendTo(probe, survival);
+            if (!survival.level().dimension().equals(probe.level().dimension())) {
+                fail("无法把测试玩家送进 survival（当前 "
+                        + probe.level().dimension().identifier() + "）");
+                return;
+            }
+
+            // 给他一点东西，然后强制保存
+            probe.getInventory().setItem(0, new net.minecraft.world.item.ItemStack(
+                    net.minecraft.world.item.Items.DIAMOND, 7));
+            PlayerListAccess.save(server.getPlayerList(), probe);
+
+            java.nio.file.Path inSurvival = survival.save().playerFile(probe.getUUID());
+            java.nio.file.Path inCreative = worlds.subServer("creative")
+                    .map(w -> w.save().playerFile(probe.getUUID())).orElse(null);
+
+            boolean survivalHas = java.nio.file.Files.exists(inSurvival);
+            boolean creativeHas = inCreative != null && java.nio.file.Files.exists(inCreative);
+
+            HubSuite.logger().info("  落盘检查：survival={} creative={}", survivalHas, creativeHas);
+
+            /*
+             * 判定标准说明：
+             * 玩家**待过的每个维度**都留一份自己的数据，这是原版行为
+             * （换维度时会保存当前维度），也正是"每个子服独立背包"的基础。
+             * 所以不能要求"只有 survival 有文件"—— 假玩家 spawn 时先落在大厅，
+             * 大厅当然会留一份。
+             *
+             * 真正要验证的是：**当前所在维度必须有他的数据**，
+             * 而且**没去过的维度不该有**。
+             */
+            if (!survivalHas) {
+                fail("玩家数据没落到当前维度（survival）的存档 —— 落盘路由失效");
+            } else if (creativeHas) {
+                fail("没去过的创造服竟然有他的数据 —— 隔离被破坏");
+            } else {
+                ok("玩家数据落在当前维度（survival）存档，没去过的维度没有 —— 隔离正确");
+            }
+
+            // 主世界存档绝不该有托管玩家的数据
+            var overworldProbe = server.overworld().getServer().getWorldPath(
+                    net.minecraft.world.level.storage.LevelResource.PLAYER_DATA_DIR)
+                    .resolve(probe.getUUID() + ".dat");
+            if (java.nio.file.Files.exists(overworldProbe)) {
+                fail("玩家数据被写进了主世界存档：" + overworldProbe);
+            } else {
+                ok("主世界存档没有被写脏");
+            }
+        } catch (Throwable t) {
+            fail("数据落盘检查异常：" + t);
+        } finally {
+            try {
+                java.nio.file.Files.deleteIfExists(survival.save().playerFile(probe.getUUID()));
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
     }
 
     // ------------------------------------------------------------------

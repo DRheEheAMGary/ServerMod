@@ -84,19 +84,35 @@ public final class IsolatedSave {
                                     boolean allowCommands) throws IOException {
         LevelStorageSource base = ServerInternals.storageSource(server).parent();
         LevelStorageSource.LevelStorageAccess access = base.createAccess(saveName);
-        Path levelDat = access.getLevelPath(LevelResource.LEVEL_DATA_FILE);
-        boolean fresh = !Files.exists(levelDat);
+        // createAccess 已经拿到 session.lock 了。后面任何一步抛异常都必须
+        // 把 access 关掉，否则锁和句柄泄漏 —— 调用方（WorldsManager）是
+        // catch 后 continue，不会有人替我们清理，下次启动就会"存档被锁"。
+        boolean handedOver = false;
+        try {
+            Path levelDat = access.getLevelPath(LevelResource.LEVEL_DATA_FILE);
+            boolean fresh = !Files.exists(levelDat);
 
-        WorldData worldData;
-        if (fresh) {
-            HubSuite.logger().info("新建独立存档 '{}'（{}）", saveName, name);
-            worldData = createWorldData(server, name, gameType, difficulty, allowCommands);
-            writeLevelData(access, worldData);
-        } else {
-            worldData = readWorldData(access);
-            HubSuite.logger().info("载入已有独立存档 '{}'（{}）", saveName, name);
+            WorldData worldData;
+            if (fresh) {
+                HubSuite.logger().info("新建独立存档 '{}'（{}）", saveName, name);
+                worldData = createWorldData(server, name, gameType, difficulty, allowCommands);
+                writeLevelData(access, worldData);
+            } else {
+                worldData = readWorldData(access);
+                HubSuite.logger().info("载入已有独立存档 '{}'（{}）", saveName, name);
+            }
+            IsolatedSave result = new IsolatedSave(server, saveName, access, worldData, fresh);
+            handedOver = true;
+            return result;
+        } finally {
+            if (!handedOver) {
+                try {
+                    access.close();
+                } catch (Throwable t) {
+                    HubSuite.logger().warn("打开存档 '{}' 失败后释放句柄时又出错", saveName, t);
+                }
+            }
         }
-        return new IsolatedSave(server, saveName, access, worldData, fresh);
     }
 
     private static WorldData createWorldData(MinecraftServer server,
@@ -242,13 +258,26 @@ public final class IsolatedSave {
         }
     }
 
+    /**
+     * 关闭存档句柄（释放 session.lock）。
+     *
+     * <p>要能重复调用：关服时原版会先 close 一遍所有维度，
+     * 我们随后再收尾时会再调一次。重复关闭不该报错刷屏。
+     */
     public void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
         try {
             access.close();
-        } catch (IOException e) {
-            HubSuite.logger().warn("关闭存档 '{}' 时出错", saveName, e);
+        } catch (Throwable t) {
+            // 已经关过 / 句柄已失效都算正常，降到 debug
+            HubSuite.logger().debug("关闭存档 '{}'：{}", saveName, t.toString());
         }
     }
+
+    private volatile boolean closed;
 
     /** 拼一个 hubsuite 命名空间的维度 key。 */
     public static net.minecraft.resources.ResourceKey<Level> key(String path) {

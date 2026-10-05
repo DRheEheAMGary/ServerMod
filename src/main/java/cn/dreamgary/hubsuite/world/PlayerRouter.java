@@ -93,13 +93,21 @@ public final class PlayerRouter {
         // 注意不能用原版的离开事件：那只在**断开服务器**时触发，切服不触发 ——
         // 这正是原来"生存服不保留位置"的原因。
         PlayableWorld from = worlds().worldOf(player).orElse(null);
-        if (from != null && !from.id().equals(target.id())) {
+        // 判断标准是**维度是否变化**，不是场所 id 是否变化。
+        // 空岛服是一个"多维度子服"：hub → classic 的场所 id 都是 "skyblock"，
+        // 用 id 比较会跳过暂存，玩家在大厅里捡的东西一到岛上就没了（实测）。
+        boolean dimensionChanged = !player.level().dimension().equals(level.dimension());
+        if (from != null && dimensionChanged) {
             // 把当前状态（背包/经验/血量）按"离开的场所"暂存起来。
             // 不做这一步的话，玩家会背着自己的东西跨服 —— 实测表现为
             // "生存服攒的物品被带到大厅来了"。
             // 按**维度**暂存，而不是按场所：空岛服有大厅/经典/海岛三个维度，
             // 背包必须各自独立。
-            PlayerStateStash.capture(player, from.level().dimension().identifier().toString());
+            //
+            // 注意必须用 player.level()（玩家**真实所在**维度），不能用 from.level()
+            // —— 后者对 SubServer 恒返回 primary 维度，玩家在海岛维度时会把背包
+            // 存进主维度的槽位，于是切服时背包对不上（实测自检发现）。
+            PlayerStateStash.capture(player, player.level().dimension().identifier().toString());
 
             for (ExitListener listener : EXIT_LISTENERS) {
                 try {

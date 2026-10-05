@@ -132,6 +132,13 @@ public final class HubSuiteConfig {
         public Double resolvedSpawnY = null;
         public Double resolvedSpawnZ = null;
 
+        /**
+         * 上面那份出生点缓存是在哪个种子下算出来的。
+         *
+         * <p>换了种子地形就完全不同，旧坐标会落在海里/山里 —— 必须失效重算。
+         */
+        public Long resolvedSpawnSeed = null;
+
         public double spawnX = 0.5;
         public double spawnY = 64.0;
         public double spawnZ = 0.5;
