@@ -317,9 +317,15 @@ public final class SubServer implements PlayableWorld {
             if (oceanSpot != null) {
                 spawn = new PlayableWorld.SpawnPoint(
                         oceanSpot.getX() + 0.5, oceanSpot.getY(), oceanSpot.getZ() + 0.5, 0.0F, 0.0F);
-                // 海上没有落脚点，铺一块小沙洲；玩家一进来就面朝大海
-                int blocks = SpawnPlatform.build(level, spawn, 4, net.minecraft.world.level.block.Blocks.SAND);
-                HubSuite.logger().info("海洋维度 '{}' 的海上出生平台已生成：{} 个方块", entryId, blocks);
+                // 海上没有落脚点，铺一块小沙洲；玩家一进来就面朝大海。
+                //
+                // 注意：此刻区块**大概率还没加载**，而 setBlockAndUpdate 会静默失败
+                // （往未加载区块写方块要么无效、要么阻塞主线程）。所以这里先试一次，
+                // 没铺成的话登记到"待铺"列表，由 WorldsManager 的 tick 重试。
+                if (!buildOceanPlatform(level, spawn, entryId)) {
+                    pendingPlatforms.add(new PendingPlatform(level, spawn, entryId));
+                    HubSuite.logger().info("海洋维度 '{}' 的出生平台等区块加载后补铺", entryId);
+                }
             } else {
                 spawn = new PlayableWorld.SpawnPoint(config.spawnX, config.spawnY, config.spawnZ,
                         config.spawnYaw, config.spawnPitch);
@@ -346,6 +352,46 @@ public final class SubServer implements PlayableWorld {
         HubSuite.logger().info("子服 '{}' 新增维度 '{}'：{}（存档 {}）",
                 config.id, entryId, dimension.identifier(), saveName);
         return entry;
+    }
+
+    /** 还没铺成的出生平台（等区块加载）。 */
+    private record PendingPlatform(ServerLevel level, PlayableWorld.SpawnPoint spawn, String label) {
+    }
+
+    private static final java.util.List<PendingPlatform> pendingPlatforms =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /**
+     * 给"海上出生点"铺一小块沙洲。
+     *
+     * @return true 表示铺成功；false 表示区块没加载，需要稍后重试
+     */
+    private static boolean buildOceanPlatform(ServerLevel level, PlayableWorld.SpawnPoint spawn,
+                                              String label) {
+        int cx = ((int) Math.floor(spawn.x())) >> 4;
+        int cz = ((int) Math.floor(spawn.z())) >> 4;
+        if (!level.getChunkSource().hasChunk(cx, cz)) {
+            return false;
+        }
+        int blocks = SpawnPlatform.build(level, spawn, 4, net.minecraft.world.level.block.Blocks.SAND);
+        HubSuite.logger().info("海洋维度 '{}' 的海上出生平台已生成：{} 个方块", label, blocks);
+        return true;
+    }
+
+    /**
+     * 由 WorldsManager 每个 tick 调用：把还没铺成的出生平台补上。
+     *
+     * <p>区块加载是异步的，所以启动时铺不成很正常，这里等它就绪。
+     */
+    public static void tickPendingPlatforms() {
+        if (pendingPlatforms.isEmpty()) {
+            return;
+        }
+        for (PendingPlatform pending : new java.util.ArrayList<>(pendingPlatforms)) {
+            if (buildOceanPlatform(pending.level(), pending.spawn(), pending.label())) {
+                pendingPlatforms.remove(pending);
+            }
+        }
     }
 
     /**

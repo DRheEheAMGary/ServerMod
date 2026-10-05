@@ -331,67 +331,63 @@ MinecraftSeverMod/
 
 ---
 
-## 未完成事项（2026-10-04 交接）
+## 空岛服三维度改造 · 已完成（2026-10-05）
 
-### 正在做：海岛维度的地形生成
+需求：空岛服 = 1 个大厅 + 经典空岛 + 海岛（两个岛屿维度），
+上次在哪个岛就回哪个岛；一个人可以同时拥有两种岛。
 
-**已完成**
-- 海岛维度用**自然海洋生成器**（`WorldFactory.oceanGenerator`）：
-  借用主世界的 `NoiseGeneratorSettings.OVERWORLD` + `OVERWORLD` 群系预设，
-  所以海洋/暖海/深海/寒冷海洋群系、沉船、海底废墟、珊瑚礁都会照常生成。
-- 海洋出生点：`WorldFactory.findOceanSpot` 用**噪声群系查询**找一片开阔海域，
-  在那儿铺一小块沙洲（`SpawnPlatform.build(..., Blocks.SAND)`，无护栏）。
-  实测选到 `(364, 64, -122)`，群系 `minecraft:ocean`。
-- 海岛**不用网格**：`IslandManager.findFreeOceanSpot` 按距离摆开，
-  要求与已有岛间距 ≥ `oceanSpacing`（默认 320），并且候选点
-  **3x3 噪声采样全是海洋**才采纳。
-- 经典空岛仍然用网格（`placement = "grid"`），两者共用一个管理器类，
-  靠 `placement` 字段区分。
+### 最终结构
 
-**未验证 / 待办**
+```
+hubsuite:skyblock_hub      公共大厅（出生平台 + "选择岛屿"假人）
+hubsuite:skyblock_classic  经典空岛（网格方格，每人格子一座）
+hubsuite:skyblock_ocean    海岛（自然海洋世界，岛按距离摆放）
+```
 
-1. **延迟生成地形还没跑通验证。**
-   海洋区块生成极重，原来的 `generate()` 在玩家建岛那一 tick 同步
-   `level.getChunk()` 加载 3x3 区块，直接把主线程卡到看门狗强杀
-   （`A single server tick took 60.00 seconds`，实测两次）。
-   已改成：
-   - `getOrCreate` 对海岛**只登记归属与锚点，不铺地形**（`terrainPainted=false`）；
-   - 新增 `ensureTerrain()`，在**玩家真要上岛时**（`IslandService.visit` /
-     `PlayerRouter` 入场监听器）才补铺 —— 那时区块本来就必须加载；
-   - `generate()` 加了 4 秒时间预算（`GENERATE_BUDGET_MS`），超预算就停下告警；
-   - `clearTerrain()` 与 `diagnose()` 不再主动 `getChunk()`，只处理已加载区块。
+三个维度各有**独立存档**（`hubsuite_skyblock_{hub,classic,ocean}`）——
+`PlayerDataStorage` 是按存档分目录的，共用一份会让三个维度的背包/经验互相覆盖。
 
-   **需要复测**：起服 → `/hub selftest` → 确认不再触发看门狗，
-  且这几项自检转绿：
-   - 海岛维度的出生点在海洋群系里
-   - 海洋出生点有落脚平台
-   - 新建的海岛落在海洋群系上
-   - 海岛地形已生成
+### 完成的验证（`/hub selftest` 共 94 项，全绿；看门狗 0 次）
 
-2. **海岛地形生成后仍可能触发看门狗。**
-   如果 `ensureTerrain` 在传送流程里还是卡太久，下一步方案：
-   把铺地形放到**下一 tick**（用 `server.execute(...)` 排队），
-   或者干脆依赖"玩家落地时区块自然加载"，只把树/箱子等装饰延后补。
+- 三维度就绪、岛型配置正确（classic + ocean）
+- **入口分流**：没岛 → 大厅；有经典岛 → 回该岛；两岛型归属互不影响；
+  两座岛分属不同维度
+- **保护**：别人不能在我的岛上建造、岛主可以、海岛之外的海面是公共区域
+- **重置**：归属清除后可重新建岛；同时拥有两种岛互不干扰
+- **经典岛地形**：中心方块 = Grass Block，落脚点干净（站在草地上，脚底 Y=101）
+- **海岛维度是自然海洋**：出生点群系 `ocean` / `deep_ocean`；
+  **沉船结构确认可用**（查 `Structure.biomes()`，纯注册表读取）
+- **出生点落地**：survival / creative 都在地表（Y=73 附近，脚下草地）
+- **指令注册**：`/island` 八个子命令 + `/menu` `/hub` `/auth` 都在 dispatcher 里
+- **调试指令**已按需求全部移除
 
-3. **海岛还没有沉船/珊瑚等内容的验证。**
-   生成器是原版海洋预设，理论上会生成沉船与海底废墟，
-   但**没有实测确认**（没在存活的海洋区块里找过 structure）。
-   验证方式：`/island ocean` 进海岛后飞一圈找沉船，
-   或写一个自检扫描 `level.structureManager()`。
+### 踩过的坑（都在代码注释里）
 
-4. **海岛的保护范围还需实测。**
-   `canBuild` 对海洋模式按"离我的岛够不够近"判定（`islandAt` 用距离），
-   且岛之外的海面算公共区域。逻辑写了但**没在游戏里验证过**
-   （比如"能不能在别人岛旁边圈海"）。
+1. **`setBlockAndUpdate` / `getBlockState` 都会同步加载区块**
+   —— 往未加载区块写方块 = 强制生成整片区块。海洋地形极重，
+   这一下就把主线程卡到看门狗强杀（`A single server tick took 60.00 seconds`）。
+   **累计踩了四次**。最终解法：
+   - 建岛前检查 3x3 区块是否已加载，没加载就跳过（`generate` 返回 false）；
+   - `ensureTerrain()` 在玩家真正要落地时才补铺；
+   - 自检一律用 `blockIfLoaded()`（区块没加载返回 null），绝不阻塞；
+   - 出生平台也走"延迟补铺 + tick 重试"。
 
-5. **`/island reset` 未实测。**
-   实现是"送回大厅 → 删岛 → 重建"，但 `manager.delete()` 现在只清
-   已加载区块的地形，重置后旧地形可能残留。
+2. **群系判定必须用 `level.getNoiseBiome()`**
+   —— 用 `getBlockState` 大范围采样会生成区块，直接把服务器卡死。
 
-### 已知的环境限制
+3. **指令必须注册在模组初始化阶段**
+   —— `CommandRegistrationCallback` 在服务端启动前就触发完了；
+   放在 `SERVER_STARTED` 里注册的指令根本进不了 dispatcher
+   （`/island` 一度是死指令，输入只报 Unknown command）。
 
-- **SSH 推 GitHub 不通**（`Connection closed by 198.18.0.125 port 22`），
-  只能用 HTTPS。凭证走环境里已有的，`git push` 直接可用。
-- **海洋群系采样必须用 `level.getNoiseBiome(...)`**，
-  绝不能用 `getBlockState` 大范围扫描 —— 后者会同步生成区块，
-  直接把服务器卡死（这个坑踩了两次）。
+4. **方块坐标与实体坐标的换算**
+   —— 岛面草方块在 Y=100，玩家脚底站在 Y=101 时 `blockPosition()`
+   报的仍是那一格，看起来像"站在方块里"，实际是正常的。
+
+5. **`PlayerInfoUpdatePacket.Entry` 的 `listed` 是硬编码 true**
+   —— `allowsListing=false` 对初始 ADD_PLAYER 包无效，必须 Mixin 改字段；
+   但**不能把条目整个删掉**，客户端要靠它创建玩家实体（删了 NPC 会消失）。
+
+6. **看门狗不吃"我以为"**
+   —— 只有把 `forceload` / 同步区块加载全部去掉之后才是干净验证。
+   用 forceload 在海洋维度预加载区块，本身就会触发看门狗。

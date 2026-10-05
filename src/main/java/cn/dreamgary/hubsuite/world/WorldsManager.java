@@ -38,6 +38,9 @@ public final class WorldsManager {
         // 持续刷新"玩家 → 目标存档"的映射，保证任何时刻保存都落到正确的子服
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(
                 PlayerDataRouter::refreshPending);
+        // 海上出生平台要等区块加载，启动时铺不成很正常 —— 每个 tick 补一次
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(
+                server -> SubServer.tickPendingPlatforms());
     }
 
     // ------------------------------------------------------------------
