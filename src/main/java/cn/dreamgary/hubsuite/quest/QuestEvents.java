@@ -74,6 +74,13 @@ public final class QuestEvents {
          * 右键毫无反应、没有任何报错、放方块却完全正常
          * （放方块走的是 stack.useOn 那条分支，不受影响）。
          * 排查了很久才定位到这里 —— 它跟"任务系统"看起来毫无关系。
+         *
+         * <p><b>已知局限（统计偏多）：</b>这里只判"手上有方块 + 右键了"，
+         * 判不出**有没有真的放下去**——对着箱子/告示牌右键也会 +1。
+         * 精确做法是 Mixin 到 {@code BlockItem.place} 的返回值上
+         * （{@code result.consumesAction()} 才算数），但那要新增一个 Mixin；
+         * 而内置的 20 个任务里没有任何 PLACE 目标，所以暂时不值得。
+         * 若以后要加"放 100 个方块"这类任务，请先把它改成精确统计。
          */
         BlockEvents.USE_ITEM_ON.register((stack, state, level, pos, player, hand, hit) -> {
             if (!(player instanceof ServerPlayer serverPlayer)) {
