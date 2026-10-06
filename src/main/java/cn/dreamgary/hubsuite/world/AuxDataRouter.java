@@ -111,6 +111,28 @@ public final class AuxDataRouter {
         return subDirForContext("advancements");
     }
 
+    /**
+     * 排查用：把"这次给谁解析成了哪个目录"记一行 **debug** 日志。
+     *
+     * <p>默认是静音的（logger 配的是 INFO），要用的时候开
+     * {@code -Dlog4j.configurationFile=...} 或把 HubSuite 的日志级别调到 DEBUG 即可。
+     * 之所以留着它：这条路径的隔离是"构造时定死、错过就再也不生效"，
+     * 出问题时必须能一眼看出目录解析成了什么，否则只能靠猜。
+     */
+    public static void logResolvedDirs(net.minecraft.server.level.ServerPlayer player,
+                                       ResourceKey<Level> dimension) {
+        if (!HubSuite.logger().isDebugEnabled() || player == null) {
+            return;
+        }
+        Path stats = subDir(dimension, "stats");
+        Path adv = subDir(dimension, "advancements");
+        HubSuite.logger().debug("成就/统计目录解析：玩家 {} 维度 {} → stats={} advancements={}",
+                player.getName() == null ? "?" : player.getName().getString(),
+                dimension == null ? "null" : dimension.identifier(),
+                stats == null ? "(回落原版全局)" : stats.toString(),
+                adv == null ? "(回落原版全局)" : adv.toString());
+    }
+
     private static Path subDirForContext(String sub) {
         return subDir(CONTEXT.get(), sub);
     }
@@ -147,6 +169,41 @@ public final class AuxDataRouter {
             return null;
         }
         return SAVE_BY_DIMENSION.get(player.level().dimension());
+    }
+
+    /**
+     * 玩家**下线/退出**时调用：把成就与统计存盘并从缓存放掉。
+     *
+     * <p><b>这一步是隔离能不能成立的关键，之前漏了，导致隔离实际从未生效：</b>
+     * <ul>
+     *   <li>原版 {@code PlayerList.remove(player)} <b>不清</b> {@code stats} /
+     *       {@code advancements} 这两个 Map（字节码里只调了
+     *       {@code PlayerAdvancements.stopListening()}）；</li>
+     *   <li>而 {@code getPlayerStats}/{@code getPlayerAdvancements} 是
+     *       {@code computeIfAbsent} 缓存 —— 对象一建出来就把文件路径
+     *       <b>烧死在字段里</b>（{@code playerSavePath}）；</li>
+     *   <li>于是"玩家第一次登录时建的那份对象"会一直留着。之后他无论切到哪个子服、
+     *       重新登录多少次，成就与统计都继续写回**第一次那个目录**。</li>
+     * </ul>
+     *
+     * <p>用户实测现象就是"服务器之间的成就等内容没有隔离"。
+     * 在退出时放掉缓存，下次登录（此时维度上下文是对的）会按正确的子服重建。
+     */
+    public static void forget(net.minecraft.server.level.ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        try {
+            var server = player.level() == null ? null : player.level().getServer();
+            if (server == null) {
+                return;
+            }
+            ((PlayerListAuxAccess) server.getPlayerList())
+                    .hubsuite$flushAux(player.getUUID());
+        } catch (Throwable t) {
+            HubSuite.logger().warn("退出时落盘成就/统计失败（玩家 {}）：{}",
+                    player.getName() == null ? "?" : player.getName().getString(), t.toString());
+        }
     }
 
     /**

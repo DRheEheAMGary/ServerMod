@@ -226,7 +226,7 @@ public final class IslandManager {
                 }
                 if (ok) {
                     int y = oceanAnchorY();
-                    HubSuite.logger().info("为海岛选定位置 ({}, {}, {})（尝试 {} 次，群系 {}，"
+                    HubSuite.logger().debug("为海岛选定位置 ({}, {}, {})（尝试 {} 次，群系 {}，"
                                     + "距已有岛最近 {} 格）",
                             x, y, z, attempts, biomeNameAt(x, z),
                             taken.isEmpty() ? "无（这是第一座）" : nearestIslandDistance(x, z, taken));
@@ -469,7 +469,7 @@ public final class IslandManager {
         }
         islands.put(uuid.toString(), created);
         save();
-        HubSuite.logger().info("为 {} 分配岛屿：方格({}, {}) 岛型 {}",
+        HubSuite.logger().debug("为 {} 分配岛屿：方格({}, {}) 岛型 {}",
                 playerName, created.plotX, created.plotZ, created.type);
         return created;
     }
@@ -752,64 +752,6 @@ public final class IslandManager {
     }
 
     /**
-     * 穷举检查：以岛主身份逐格询问 canBuild，把拒绝的位置与原因列出来。
-     *
-     * <p>用来一次性定位"为什么我岛上某块地方不能建造"。
-     */
-    public void exhaustiveBuildCheck(ServerPlayer player, Island island) {
-        BlockPos center = plotCenter(island.plotX, island.plotZ);
-        HubSuite.logger().info("=== 穷举建造检查：{} @ 方格({},{}) 中心 {} ===",
-                player.getName().getString(), island.plotX, island.plotZ, center);
-
-        int deniedCount = 0;
-        StringBuilder firstDenied = new StringBuilder();
-        // 覆盖岛半径 12 格（远超地形半径 4），以及方格边界的四个角
-        for (int dx = -12; dx <= 12; dx++) {
-            for (int dz = -12; dz <= 12; dz++) {
-                var pos = center.offset(dx, 1, dz);
-                if (!canBuild(player, pos)) {
-                    deniedCount++;
-                    if (firstDenied.length() < 300) {
-                        int[] pl = plotOf(pos.getX(), pos.getZ());
-                        firstDenied.append(String.format("(%+d,%+d)[方格%d,%d] ", dx, dz, pl[0], pl[1]));
-                    }
-                }
-            }
-        }
-        HubSuite.logger().info("  岛半径 12 格范围内：共 {} 格，被拒绝 {} 格", 25 * 25, deniedCount);
-        if (deniedCount > 0) {
-            HubSuite.logger().info("  被拒绝的位置：{}", firstDenied);
-        }
-
-        // 方格边界：岛主在自己的方格内应当全部允许
-        int half = config.plotSize / 2;
-        int[][] corners = {
-                {-half + 1, -half + 1}, {half - 1, -half + 1},
-                {-half + 1, half - 1}, {half - 1, half - 1},
-                {-half - 1, 0}, {half + 1, 0}, {0, -half - 1}, {0, half + 1}};
-        for (int[] c : corners) {
-            var pos = center.offset(c[0], 1, c[1]);
-            int[] pl = plotOf(pos.getX(), pos.getZ());
-            boolean ok = canBuild(player, pos);
-            boolean sameePlot = pl[0] == island.plotX && pl[1] == island.plotZ;
-            HubSuite.logger().info("  边界点 相对({:+d},{:+d}) → 方格({},{})，判定={}，{}",
-                    c[0], c[1], pl[0], pl[1],
-                    ok ? "允许" : "\u00A7c拒绝",
-                    sameePlot ? "(在自己方格内，应为允许)" : "(已跨到邻格，拒绝是对的)");
-        }
-    }
-
-    /** 诊断用：按相对中心坐标判断保护，不依赖玩家对象。 */
-    private boolean canBuildFor(Island island, int dx, int dz) {
-        if (!config.protectPlots) {
-            return true;
-        }
-        BlockPos center = plotCenter(island.plotX, island.plotZ);
-        Optional<Island> at = islandAt(center.getX() + dx, center.getZ() + dz);
-        return at.isPresent() && at.get().player.equals(island.player);
-    }
-
-    /**
      * 建岛的时间预算（毫秒）。
      *
      * <p>为什么需要：在海里建岛要先让那片区块生成出来，而海洋地形的生成很重
@@ -891,7 +833,7 @@ public final class IslandManager {
              * 放宽之后，岛只要区块就绪就会被铺好，不再依赖"玩家恰好站在那里"。
              */
             if (ensureTerrain(island)) {
-                HubSuite.logger().info("方格({}, {}) 的地形已补铺完成", island.plotX, island.plotZ);
+                HubSuite.logger().debug("方格({}, {}) 的地形已补铺完成", island.plotX, island.plotZ);
             }
         }
     }
@@ -1065,33 +1007,9 @@ public final class IslandManager {
                             + "（层配置 {} 条，方块 id 解析可能失败）",
                     island.plotX, island.plotZ, center, layers.size());
         } else {
-            // 打印中心柱的方块构成，便于确认"树干有没有出问题"
-            StringBuilder column = new StringBuilder();
-            for (int dy = -3; dy <= 6; dy++) {
-                var b = level.getBlockState(center.offset(0, dy, 0));
-                column.append(dy == 0 ? "[" : " ").append(center.getY() + dy).append(':')
-                        .append(b.isAir() ? "空" : b.getBlock().getName().getString())
-                        .append(dy == 0 ? "]" : "");
-            }
-            HubSuite.logger().info("已生成岛屿：方格({}, {}) 类型 {}，中心 {} = {}，半径 {}，层 {} 条",
+            HubSuite.logger().debug("已生成岛屿：方格({}, {}) 类型 {}，中心 {} = {}，半径 {}，层 {} 条",
                     island.plotX, island.plotZ, island.type, center,
                     state.getBlock().getName().getString(), radius, layers.size());
-            HubSuite.logger().info("  中心柱：{}", column);
-            var treeBase = center.offset(TREE_OFFSET_X, 1, TREE_OFFSET_Z);
-            var chestAt = center.offset(CHEST_OFFSET_X, 1, CHEST_OFFSET_Z);
-            HubSuite.logger().info("  布局：岛中心({}, {}, {}) / 树({}, {}, {}) / 箱子({}, {}, {}) / 落脚点({}, {}, {})",
-                    center.getX(), center.getY(), center.getZ(),
-                    treeBase.getX(), treeBase.getY(), treeBase.getZ(),
-                    chestAt.getX(), chestAt.getY(), chestAt.getZ(),
-                    spawnPos.getX(), spawnPos.getY(), spawnPos.getZ());
-            StringBuilder spawnColumn = new StringBuilder();
-            for (int dy = 0; dy <= 3; dy++) {
-                var b = level.getBlockState(spawnPos.offset(0, dy, 0));
-                spawnColumn.append(dy == 0 ? "[" : " ").append(spawnPos.getY() + dy).append(':')
-                        .append(b.isAir() ? "空" : b.getBlock().getName().getString())
-                        .append(dy == 0 ? "]" : "");
-            }
-            HubSuite.logger().info("  落脚点柱：{}", spawnColumn);
         }
 
         if (overBudget[0]) {

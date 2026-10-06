@@ -179,6 +179,16 @@ public final class AuthManager {
         // 登录表单状态（UUID → 当前是登录还是注册表单）也是按玩家存的，
         // 不随退出清理就会一直攒着（玩家进进出出只增不减）。
         cn.dreamgary.hubsuite.auth.AuthGui.forget(player.getUUID());
+        /*
+         * 成就与统计的缓存也必须放掉 —— 这是"按子服隔离"能不能成立的关键。
+         *
+         * 原版 PlayerList.remove(player) 不清 stats/advancements 这两个 Map，
+         * 而那两个对象**在构造时就把文件路径烧死在字段里**（computeIfAbsent 缓存）。
+         * 不清的话，玩家第一次登录建的那份对象会一直留着，
+         * 之后切到任何子服、重新登录多少次，成就与统计都写回第一次那个目录 ——
+         * 实测表现就是"服务器之间的成就等内容没有隔离"。
+         */
+        cn.dreamgary.hubsuite.world.AuxDataRouter.forget(player);
     }
 
     // ------------------------------------------------------------------

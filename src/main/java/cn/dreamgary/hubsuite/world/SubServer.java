@@ -588,7 +588,7 @@ public final class SubServer implements PlayableWorld {
                 // 注意：此刻区块**大概率还没加载**，而 setBlockAndUpdate 会静默失败
                 // （往未加载区块写方块要么无效、要么阻塞主线程）。所以这里先试一次，
                 // 没铺成的话登记到"待铺"列表，由 WorldsManager 的 tick 重试。
-                if (!buildOceanPlatform(level, spawn, entryId)) {
+                if (!buildOceanPlatform(level, spawn)) {
                     queueSpawnPlatform(level, spawn, 4, entryId,
                             net.minecraft.world.level.block.Blocks.SAND);
                     HubSuite.logger().info("海洋维度 '{}' 的出生平台等区块加载后补铺", entryId);
@@ -664,8 +664,7 @@ public final class SubServer implements PlayableWorld {
      *
      * @return true 表示铺成功；false 表示区块没加载，需要稍后重试
      */
-    private static boolean buildOceanPlatform(ServerLevel level, PlayableWorld.SpawnPoint spawn,
-                                              String label) {
+    private static boolean buildOceanPlatform(ServerLevel level, PlayableWorld.SpawnPoint spawn) {
         int cx = ((int) Math.floor(spawn.x())) >> 4;
         int cz = ((int) Math.floor(spawn.z())) >> 4;
         if (!isChunkReady(level, cx, cz)) {
@@ -675,7 +674,7 @@ public final class SubServer implements PlayableWorld {
         if (blocks == SpawnPlatform.CHUNKS_NOT_READY) {
             return false;   // 区块没就位，下一 tick 再来（别在这里同步生成）
         }
-        HubSuite.logger().info("海洋维度 '{}' 的海上出生平台已生成：{} 个方块", label, blocks);
+        // SpawnPlatform 内部已按 debug 记录，这里不再重复打一条
         return true;
     }
 

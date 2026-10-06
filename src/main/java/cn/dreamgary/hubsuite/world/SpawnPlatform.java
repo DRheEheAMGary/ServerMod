@@ -149,7 +149,8 @@ public final class SpawnPlatform {
             }
         }
 
-        HubSuite.logger().info("出生点平台已生成：{} 中心 ({}, {}, {})，半径 {}，共 {} 个方块。",
+        // 每次铺平台都会调用（含启动时的补铺重试）—— 降到 debug，别刷日志
+        HubSuite.logger().debug("出生点平台已生成：{} 中心 ({}, {}, {})，半径 {}，共 {} 个方块。",
                 level.dimension().identifier(),
                 center.getX(), center.getY(), center.getZ(), r, placed);
         return placed;
