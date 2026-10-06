@@ -107,6 +107,16 @@ public final class Lobby implements PlayableWorld {
 
         save.register(level);
         save.bindPlayerStorage(dimension);
+        /*
+         * 把**主世界维度**也绑到大厅存档上。
+         *
+         * 玩家登录那一刻维度还是主世界（还没被送进大厅），而原版在
+         * PlayerList.placeNewPlayer 里就已经取过 getStats()/getPlayerAdvancements() ——
+         * 主世界不绑的话那次取到的路径是原版的全局 world/players/...，
+         * 而且烧死在对象里，之后进了大厅也不会再重定向。表现就是
+         * "各子服的成就与统计没有隔离"（用户实测反馈）。
+         */
+        AuxDataRouter.bindOverworldFallback(save);
         RulesManager.register(dimension, rules);
 
         // 纯虚空世界没有地面，必须自己铺平台，否则玩家一进来就掉下去

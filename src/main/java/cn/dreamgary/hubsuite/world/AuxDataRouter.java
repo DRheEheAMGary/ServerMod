@@ -60,6 +60,29 @@ public final class AuxDataRouter {
         }
     }
 
+    /**
+     * 把**主世界维度**也绑到某个存档上（通常是大厅）。
+     *
+     * <p><b>为什么必须绑：</b>玩家登录的那一刻还没被送进大厅/子服，
+     * 维度仍是主世界 {@code minecraft:overworld}。而
+     * {@code PlayerList.placeNewPlayer} 在**送进目标维度之前**就会调用
+     * {@code ServerPlayer.getStats()} —— 这时 {@link #subDirForContext} 查不到
+     * 主世界的存档，于是返回 {@code null}、路径回落成原版的
+     * {@code world/players/stats/}，而且那个路径**烧死在对象里**；
+     * 之后玩家被传送进大厅/子服，命中缓存的还是同一个对象，重定向再也不生效。
+     *
+     * <p>结果就是用户实测的"服务器之间的成就等内容没有隔离"：
+     * 成就与统计一路写在主世界全局目录，各子服互相污染。
+     *
+     * <p>主世界只认第一个绑上来的存档（大厅最先加载）。
+     */
+    public static void bindOverworldFallback(IsolatedSave save) {
+        if (save == null) {
+            return;
+        }
+        SAVE_BY_DIMENSION.putIfAbsent(Level.OVERWORLD, save);
+    }
+
     public static void clear() {
         SAVE_BY_DIMENSION.clear();
         CONTEXT.remove();

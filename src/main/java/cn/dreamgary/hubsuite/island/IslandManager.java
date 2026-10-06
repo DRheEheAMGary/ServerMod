@@ -16,7 +16,6 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.LeavesBlock;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
@@ -1465,67 +1464,65 @@ public final class IslandManager {
     }
 
     /**
-     * 在岛上种一棵树：**固定 3 格树干**的原版橡树形状。
+     * 在岛上种一棵**原版橡树**（走原版地物生成，不再手摆方块）。
      *
-     * <p>为什么不用 {@code TreeFeatures.OAK}：原版橡树的高度是随机的（4~6），
-     * 而空岛需要**确定性** —— 固定 3 格树干，树冠大小也固定，
-     * 这样岛的外观每次重建都一致，也不会因为树太高顶到上方结构。
+     * <p><b>为什么改成原版地物：</b>以前这里是手写的形状 —— 固定 3 格树干 +
+     * 两层 5×5 去角 + 一层 3×3 + 顶盖。当时图的是"确定性"，但代价是
+     * 长出来的树**和原版橡树不一样**（高度、树冠形状、树叶衰减都是假的），
+     * 用户实测反馈："空岛的树还是沿用常规地物生成树吧"。
      *
-     * <p>形状照抄原版小橡树：两层 5×5（去掉四角）+ 一层 3×3 + 顶盖一格，
-     * 所以看起来是有层次的圆冠，而不是一个方块团。
+     * <p>现在走 {@code TreeGrower.OAK.growTree(...)} —— 树苗长成大树用的就是它，
+     * 所以形状、高度分布、树叶的 {@code persistent/距离} 全部与原版一致。
      *
-     * <p>只覆盖**空气**，不会把树干替换掉。
+     * <p><b>确定性：</b>随机源由**坐标**派生（不是每 tick 变的随机数），
+     * 所以同一座岛每次重建都长成同一棵树。
+     *
+     * <p><b>安全前提：</b>整个生成区域（树干 base 往上约 8 格、水平 ±3 格）
+     * 所在的区块必须已经到 FULL 才会往下走 —— 否则宁可不种，
+     * 也绝不让地物生成去同步加载区块（那会阻塞主线程）。
+     * 建岛本身就走"区块没就绪就登记待补铺"的延迟机制，下一次重试时会再种。
      */
     private void placeTree(ServerLevel level, BlockPos base) {
-        BlockState log = Blocks.OAK_LOG.defaultBlockState();
-        BlockState leaves = Blocks.OAK_LEAVES.defaultBlockState()
-                .setValue(LeavesBlock.PERSISTENT, true);
-
-        // 树干：固定 3 格（base 是地面之上那一格）
-        for (int i = 0; i < TRUNK_HEIGHT; i++) {
-            level.setBlockAndUpdate(base.offset(0, i, 0), log);
+        // 树干下方必须是可长树的土壤：草方块 → 换成泥土（原版橡树要求 dirt 类）
+        BlockPos belowPos = base.below();
+        BlockState below = level.getBlockState(belowPos);
+        if (below.is(Blocks.GRASS_BLOCK)) {
+            level.setBlockAndUpdate(belowPos, Blocks.DIRT.defaultBlockState());
         }
 
-        int topY = base.getY() + TRUNK_HEIGHT - 1;   // 树干最上面一格
+        // 生成范围全部在已就位区块里才动手（树干 base 之上约 8 格、水平 ±3 格）
+        if (!isTreeAreaReady(level, base)) {
+            HubSuite.logger().info("岛上的树等区块就绪后再种：{}", base);
+            return;
+        }
 
-        // 树冠（以树干为中心）：
-        //   与树顶同层、以及上面一层 → 5×5 去四角
-        //   再上面一层             → 3×3 去四角
-        //   顶盖                   → 一格
-        leafLayer(level, base.getX(), topY, base.getZ(), 2, leaves);
-        leafLayer(level, base.getX(), topY + 1, base.getZ(), 2, leaves);
-        leafLayer(level, base.getX(), topY + 2, base.getZ(), 1, leaves);
-        setLeafIfAir(level, base.offset(0, TRUNK_HEIGHT + 2, 0), leaves);
-
-        HubSuite.logger().debug("种树完成（固定 {} 格树干）：{}", TRUNK_HEIGHT, base);
+        // 确定性随机源：同一个坐标每次得到同一棵树
+        net.minecraft.util.RandomSource random = net.minecraft.util.RandomSource.create(
+                base.getX() * 341873128712L + base.getZ() * 132897987541L + base.getY());
+        BlockState saplingState = Blocks.OAK_SAPLING.defaultBlockState();
+        boolean grown = net.minecraft.world.level.block.grower.TreeGrower.OAK.growTree(
+                level, level.getChunkSource().getGenerator(), base, saplingState, random);
+        if (grown) {
+            HubSuite.logger().debug("种树完成（原版橡树地物）：{}", base);
+        } else {
+            HubSuite.logger().warn("原版橡树在 {} 没能长起来（上方空间可能不够），岛上将没有树", base);
+        }
     }
 
-    /** 树干高度（固定值，用户要求 3 格）。 */
-    private static final int TRUNK_HEIGHT = 3;
-
-    /**
-     * 铺一层树冠：边长 {@code 2r+1} 的正方形，**去掉四个角**。
-     *
-     * <p>去角是原版橡树的关键特征 —— 不去角就是个方块团
-     * （用户反馈"树生成有问题"的那版就是这样）。
-     */
-    private void leafLayer(ServerLevel level, int cx, int y, int cz, int r,
-                           BlockState leaves) {
-        for (int dx = -r; dx <= r; dx++) {
-            for (int dz = -r; dz <= r; dz++) {
-                if (Math.abs(dx) == r && Math.abs(dz) == r) {
-                    continue;   // 去掉四角
+    /** 树需要的空间（水平 ±3、向上 8 格）是否都在已就位区块里。 */
+    private static boolean isTreeAreaReady(ServerLevel level, BlockPos base) {
+        int minX = base.getX() - 3;
+        int maxX = base.getX() + 3;
+        int minZ = base.getZ() - 3;
+        int maxZ = base.getZ() + 3;
+        for (int cx = minX >> 4; cx <= (maxX >> 4); cx++) {
+            for (int cz = minZ >> 4; cz <= (maxZ >> 4); cz++) {
+                if (level.getChunkSource().getChunkNow(cx, cz) == null) {
+                    return false;
                 }
-                setLeafIfAir(level, new BlockPos(cx + dx, y, cz + dz), leaves);
             }
         }
-    }
-
-    /** 只在原本是空气的位置放树叶，避免把树干/箱子覆盖掉。 */
-    private void setLeafIfAir(ServerLevel level, BlockPos pos, BlockState leaves) {
-        if (level.getBlockState(pos).isAir()) {
-            level.setBlockAndUpdate(pos, leaves);
-        }
+        return true;
     }
 
     private List<int[]> parseLayers(IslandConfig.IslandType type) {

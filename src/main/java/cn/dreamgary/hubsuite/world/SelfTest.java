@@ -152,7 +152,7 @@ public final class SelfTest {
         step("菜单不会误吞真实容器的点击", this::checkMenuDoesNotEatRealContainers);
         step("开箱链路没有被事件处理器破坏", this::checkChestInteractionChainIntact);
         step("岛型之间切换不会落错坐标", this::checkIslandSwitchLandsCorrectly);
-        step("空岛的树完整（树干固定 3 格、树冠无空洞）", this::checkIslandTree);
+        step("空岛的树（原版橡树地物，且不堵落脚点）", this::checkIslandTree);
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -4160,80 +4160,75 @@ public final class SelfTest {
     }
 
     /**
-     * 空岛的树必须**完整**：固定 3 格树干，树冠不能有 3×3 的空气洞。
+     * 空岛的树必须**真的长出来了**，而且不能把玩家的落脚点堵住。
      *
-     * <p>锁住用户反馈的"树的接近一半树叶消失，中心 3×3 那块变成空气"：
-     * 建岛流程里在种树**之后**还有一次 {@code clearAbove(spawnPos, 1, 5)} ——
-     * 一个以落脚点为中心、半径 1、高 5 的立方体。而树在 center+(2,0)、
-     * 树冠半径 2，覆盖 center.x+0 .. center.x+4，**与那个 3×3 区域必然重叠**，
-     * 于是树冠被挖掉一大块。
-     *
-     * <p>这条自检逐格验证树干与树冠，任何"被清掉"都会立刻暴露。
+     * <p><b>历史：</b>这条以前是按"固定 3 格树干 + 每层逐格核对树冠"来判的 ——
+     * 那时树是手摆方块摆出来的。现在改成走**原版橡树地物**
+     * （`TreeGrower.OAK.growTree`，用户要求"沿用常规地物生成树"），
+     * 形状和高度由原版决定，所以不能再断言具体形状；
+     * 改为断言"确实是一棵完整的原版橡树"：
+     * <ol>
+     *   <li>约定位置上有树干，且高度在合理范围（原版橡树 4~6 格）；</li>
+     *   <li>树干顶端附近有树叶（树冠长出来了）；</li>
+     *   <li>**玩家落脚点那一列必须是空的** —— 树挪到偏心位置就是为了这个，
+     *       一旦有人把树移回中心，玩家就会卡在树干里（实测踩过）。</li>
+     * </ol>
      */
     private void checkIslandTree() {
-        checkIsland("classic", "hubsuite_tree", "空岛的树完整（树干固定 3 格、树冠无空洞）",
+        checkIsland("classic", "hubsuite_tree", "空岛的树（原版橡树地物，且不堵落脚点）",
                 (manager, level, island, center, probe) -> {
             // 树的位置与 IslandManager 内部约定一致：center + (2, 1, 0)
             var trunkBase = center.offset(2, 1, 0);
             var log = net.minecraft.world.level.block.Blocks.OAK_LOG;
             var leaves = net.minecraft.world.level.block.Blocks.OAK_LEAVES;
 
-            // 1) 树干固定 3 格
-            int trunkFound = 0;
-            for (int i = 0; i < 3; i++) {
-                if (level.getBlockState(trunkBase.offset(0, i, 0)).is(log)) {
-                    trunkFound++;
+            // 1) 树干存在，高度取"从 base 往上连续的原木格数"
+            int trunk = 0;
+            for (int i = 0; i < 16; i++) {
+                if (!level.getBlockState(trunkBase.offset(0, i, 0)).is(log)) {
+                    break;
                 }
+                trunk++;
             }
-            if (trunkFound == 3) {
-                ok("树干固定 3 格（" + trunkBase + " 起）");
-            } else {
-                return "\u00A7c[失败]\u00A7r 树干只有 " + trunkFound
-                        + "/3 格在原木位置 —— 树被挖掉了一部分";
+            if (trunk == 0) {
+                return "\u00A7c[失败]\u00A7r 岛上的树没长出来（" + trunkBase
+                        + " 处没有原木）—— 原版橡树地物生成失败";
+            }
+            if (trunk < 3 || trunk > 8) {
+                return "\u00A7c[失败]\u00A7r 树干高度 " + trunk
+                        + " 格，超出原版橡树的合理范围（3~8）—— 树可能被别的东西截断了";
             }
 
-            /*
-             * 2) 树冠不能有空洞。
-             *
-             * 逐格核对预期形状（两层 5×5 去四角 + 一层 3×3 去四角 + 顶盖）：
-             * 凡是我们应该放树叶的位置，都必须真的是树叶或被树干占据。
-             */
-            int expected = 0;
-            int missing = 0;
-            StringBuilder holes = new StringBuilder();
-            int topY = trunkBase.getY() + 2;
-            for (int layer = 0; layer <= 2; layer++) {
-                int r = layer <= 1 ? 2 : 1;
-                for (int dx = -r; dx <= r; dx++) {
-                    for (int dz = -r; dz <= r; dz++) {
-                        if (Math.abs(dx) == r && Math.abs(dz) == r) {
-                            continue;
-                        }
-                        var pos = new net.minecraft.core.BlockPos(
-                                trunkBase.getX() + dx, topY + layer, trunkBase.getZ() + dz);
-                        var st = level.getBlockState(pos);
-                        if (st.is(log)) {
-                            continue;   // 树干占据的位置不算洞
-                        }
-                        expected++;
-                        if (!st.is(leaves)) {
-                            missing++;
-                            if (holes.length() < 120) {
-                                holes.append('(').append(dx).append(',').append(layer)
-                                        .append(',').append(dz).append(')');
-                            }
+            // 2) 树干顶端附近必须有树叶（原版橡树的树冠从顶端往下铺）
+            boolean leavesFound = false;
+            for (int dy = trunk - 1; dy <= trunk + 2 && !leavesFound; dy++) {
+                for (int dx = -2; dx <= 2 && !leavesFound; dx++) {
+                    for (int dz = -2; dz <= 2; dz++) {
+                        if (level.getBlockState(trunkBase.offset(dx, dy, dz)).is(leaves)) {
+                            leavesFound = true;
+                            break;
                         }
                     }
                 }
             }
-            if (missing == 0) {
-                return "\u00A7a[通过]\u00A7r 树冠完整：预期 " + expected
-                        + " 格树叶全部在位（没有 3×3 空洞）";
+            if (!leavesFound) {
+                return "\u00A7c[失败]\u00A7r 树干顶端附近一片树叶都没有 —— 树冠没长出来";
             }
-            return "\u00A7c[失败]\u00A7r 树冠缺了 " + missing + "/" + expected
-                    + " 格树叶，缺失位置（相对树干）：" + holes;
+
+            // 3) 落脚点（岛中心）那一列不能被树占住
+            for (int dy = 0; dy <= 3; dy++) {
+                var at = level.getBlockState(center.above(dy));
+                if (at.is(log)) {
+                    return "\u00A7c[失败]\u00A7r 岛中心（落脚点）被树干占了（Y+" + dy
+                            + "）—— 玩家会被卡在树里。树必须种在偏心位置";
+                }
+            }
+
+            return "\u00A7a[通过]\u00A7r 原版橡树已长成：树干 " + trunk + " 格，树冠完整，"
+                    + "落脚点没被挡住（" + trunkBase + " 起）";
                 });
     }
+
 
     /** 在某个位置附近找一个指定方块（小范围扫描，区块已加载）。 */
     private net.minecraft.core.BlockPos findBlockNear(
