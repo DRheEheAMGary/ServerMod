@@ -197,6 +197,15 @@ public final class PlayerRouter {
             // 一死就一直往下掉（用户实测："kill 一下自己就卡住了"）。
             RespawnPoints.bind(player, target, true, spawn, level);
 
+            /*
+             * 成就/统计：把玩家身上那两个 final 引用换成按**新维度**解析的新对象。
+             *
+             * 必须在传送之后排（本方法里 flushAndEvict 跑在传送前，只负责落盘+清缓存）。
+             * 不换的话，玩家继续拿着旧对象，而旧对象的文件路径构造时就烧死了 ——
+             * 实测现象就是"服务器之间的成就没有隔离"。
+             */
+            AuxDataRouter.rebindAfterTeleport(player);
+
             HubSuite.logger().info("切服完成：{} 现在位于 {}（{}，{} 人）",
                     player.getName().getString(), target.id(),
                     level.dimension().identifier(), level.players().size());

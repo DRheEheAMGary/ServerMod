@@ -23,6 +23,7 @@
     "ServerGamePacketListenerCommandMixin",
     "ServerLevelGameRulesMixin",
     "ServerLevelSeedMixin",
+    "ServerPlayerRespawnDimensionMixin",
     "StructureTemplatePaletteCacheMixin",
     "BlockItemPlaceMixin"
   ],

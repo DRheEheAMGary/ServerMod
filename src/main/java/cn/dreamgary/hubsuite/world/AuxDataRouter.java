@@ -208,7 +208,7 @@ public final class AuxDataRouter {
                 return;
             }
             ((PlayerListAuxAccess) server.getPlayerList())
-                    .hubsuite$flushAux(player.getUUID());
+                    .hubsuite$flushAux(player);
         } catch (Throwable t) {
             HubSuite.logger().warn("退出时落盘成就/统计失败（玩家 {}）：{}",
                     player.getName() == null ? "?" : player.getName().getString(), t.toString());
@@ -234,11 +234,51 @@ public final class AuxDataRouter {
                 return 0;
             }
             handled += ((PlayerListAuxAccess) server.getPlayerList())
-                    .hubsuite$flushAux(player.getUUID());
+                    .hubsuite$flushAux(player);
         } catch (Throwable t) {
             HubSuite.logger().warn("切换维度时落盘成就/统计失败（玩家 {}）：{}",
                     player.getName().getString(), t.toString());
         }
         return handled;
+    }
+
+    /**
+     * 传送**完成之后**调用：把玩家身上的成就/统计引用换成按新维度解析的新对象。
+     *
+     * <p><b>为什么必须单独一步、且必须延后：</b>
+     * {@code ServerPlayer} 自己持有两个 {@code final} 引用
+     * （{@code advancements} / {@code stats}），而 {@code getStats()} /
+     * {@code getAdvancements()} 的字节码就是"读字段并返回"（javap 确认）。
+     * 只清 {@code PlayerList} 的两张 map 时，玩家仍拿着旧对象 ——
+     * 那个对象的文件路径是**构造时烧死的**，于是切服后照旧读写旧子服的目录。
+     *
+     * <p>换引用不能在上一步做：那时传送还没发生，{@code player.level()} 仍是旧维度，
+     * 新建的对象会又绑回刚清空的旧路径。所以这里排到下一 tick，
+     * 等玩家确实站在新维度里再换。
+     *
+     * @return 处理过的引用个数（诊断用）
+     */
+    public static void rebindAfterTeleport(net.minecraft.server.level.ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        try {
+            var server = player.level().getServer();
+            if (server == null) {
+                return;
+            }
+            // 下一 tick 执行：此时 teleport 已生效，player.level() 是目标维度
+            server.execute(() -> {
+                try {
+                    ((PlayerListAuxAccess) server.getPlayerList()).hubsuite$rebindAux(player);
+                } catch (Throwable t) {
+                    HubSuite.logger().warn("切服后重建成就/统计引用失败（玩家 {}）：{}",
+                            player.getName() == null ? "?" : player.getName().getString(),
+                            t.toString());
+                }
+            });
+        } catch (Throwable t) {
+            HubSuite.logger().debug("排入成就/统计重建任务失败：{}", t.toString());
+        }
     }
 }

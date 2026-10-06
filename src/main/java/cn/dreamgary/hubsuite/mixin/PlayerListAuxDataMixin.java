@@ -112,7 +112,11 @@ public abstract class PlayerListAuxDataMixin implements PlayerListAuxAccess {
     }
 
     @Override
-    public int hubsuite$flushAux(UUID uuid) {
+    public int hubsuite$flushAux(ServerPlayer player) {
+        if (player == null) {
+            return 0;
+        }
+        UUID uuid = player.getUUID();
         if (uuid == null) {
             return 0;
         }
@@ -135,7 +139,77 @@ public abstract class PlayerListAuxDataMixin implements PlayerListAuxAccess {
         } catch (Throwable t) {
             HubSuite.logger().warn("落盘成就失败：{}", t.toString());
         }
+        /*
+         * 注意：**这里不换玩家身上的引用**。
+         *
+         * 本方法在"切服流程"里是在**传送之前**调用的，此刻 player.level() 还是旧维度，
+         * 立刻重建只会把新对象又绑到刚清空的那条旧路径上。换引用交给
+         * {@link #hubsuite$rebindAux}，由 PlayerRouter 在传送完成后调用。
+         */
         return handled;
+    }
+
+    @Override
+    public int hubsuite$rebindAux(ServerPlayer player) {
+        if (player == null) {
+            return 0;
+        }
+        int swapped = 0;
+        PlayerList self = (PlayerList) (Object) this;
+        /*
+         * 关键一步：把玩家自己身上那份 final 引用也换掉。
+         *
+         * getStats() / getAdvancements() 的字节码就是"读字段并返回"（javap 已确认），
+         * 所以只清 PlayerList 的两张 map 时，玩家仍拿着旧对象 —— 而旧对象的
+         * 文件路径是构造时烧死的。换维度时玩家对象是复用的，于是照旧读写旧子服目录。
+         *
+         * 此刻玩家已在目标维度，新对象会绑到正确目录。
+         */
+        try {
+            ServerStatsCounter freshStats = self.getPlayerStats(player);
+            if (swapField(player, "stats", ServerStatsCounter.class, freshStats)) {
+                swapped++;
+            }
+        } catch (Throwable t) {
+            HubSuite.logger().warn("换掉玩家身上的统计引用失败：{}", t.toString());
+        }
+        try {
+            PlayerAdvancements freshAdv = self.getPlayerAdvancements(player);
+            if (swapField(player, "advancements", PlayerAdvancements.class, freshAdv)) {
+                swapped++;
+            }
+        } catch (Throwable t) {
+            HubSuite.logger().warn("换掉玩家身上的成就引用失败：{}", t.toString());
+        }
+        return swapped;
+    }
+
+    /**
+     * 反射把 {@code ServerPlayer} 里的 final 字段换成新对象。
+     *
+     * <p>为什么必须反射：那两个字段是 {@code private final}，原版没有 setter，
+     * 而"换掉引用"正是隔离能否成立的前提。
+     *
+     * @return 是否真的换了（字段不存在/已经相同/失败都返回 false，只记日志）
+     */
+    private static <T> boolean swapField(ServerPlayer player, String fieldName,
+                                         Class<T> type, T fresh) {
+        if (player == null || fresh == null) {
+            return false;
+        }
+        try {
+            java.lang.reflect.Field f = ServerPlayer.class.getDeclaredField(fieldName);
+            f.setAccessible(true);
+            Object old = f.get(player);
+            if (old == fresh) {
+                return false;   // 已经是对的，不用动
+            }
+            f.set(player, fresh);
+            return true;
+        } catch (Throwable t) {
+            HubSuite.logger().warn("反射替换 ServerPlayer.{} 失败：{}", fieldName, t.toString());
+            return false;
+        }
     }
 
     @Override
