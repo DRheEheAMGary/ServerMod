@@ -18,7 +18,7 @@
 | **空岛系统** | 空岛服 = **1 个大厅 + 2 个岛屿维度**：经典空岛用网格方格，海岛是**自然生成的海洋世界**（海洋/暖海/深海群系 + 沉船、海底废墟、珊瑚礁），岛按距离摆放。两种岛可同时拥有，归属与地形完全独立 |
 | **入口分流** | 进空岛服时按"上次在哪个岛"回哪个岛；没岛先去大厅，大厅假人点开**岛型选择界面** |
 | **权限分级** | LuckPerms → fabric-permissions-api → 原版 OP 三级降级；创造服屏蔽 40+ 条作弊指令 |
-| **内置自检** | `/hub selftest` 跑 **94 项**验证，覆盖存档隔离、规则隔离、玩家数据隔离、账号安全、空岛生成与保护、入口分流、集成适配、指令注册 |
+| **内置自检** | `/hub selftest` 跑 **182 项**验证，覆盖存档隔离、规则隔离、玩家数据隔离、账号安全、空岛生成与保护、入口分流、集成适配、指令注册 |
 
 ---
 
@@ -89,7 +89,7 @@ hub selftest
 
 ```
 MinecraftSeverMod/
-├─ src/main/java/cn/dreamgary/hubsuite/   源码（55 个类）
+├─ src/main/java/cn/dreamgary/hubsuite/   源码（86 个 Java 文件 / 17 个 Mixin）
 ├─ src/main/resources/                    fabric.mod.json / mixin 配置 / 图标
 ├─ docs/                                  中文文档
 ├─ mods/                                  依赖 jar（归档，不入版本库）

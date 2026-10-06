@@ -7,7 +7,7 @@
 
 ## 0. 一分钟速览
 
-**状态：`./gradlew build` 通过；`hub selftest` 49 项全部通过；中文文档齐全。**
+**状态：`./gradlew build` 通过；`hub selftest` 182 项全部通过；中文文档齐全。**
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -19,12 +19,18 @@
 | Phase 5 | HuskHomes / 占位符 / LuckPerms 适配 | ✅ |
 | Phase 6 | 中文文档 + 全流程自测 | ✅ |
 
-**产物**：`build/libs/hubsuite-0.1.0.jar`（约 226 KB，83 个类）
+**产物**：`build/libs/hubsuite-0.1.0.jar`（源码现为 86 个 Java 文件、17 个 Mixin）
+
+> ⚠️ 别拿体积/类数当核对标准：它们随每次构建变化
+> （同一份源码换个 Loom 版本就能差出十几 KB）。
+> 要核对请跑 `hub selftest`，它才是真正的验收门。
+> 构建需要 **Java 25**（`JAVA_HOME` 指向 25 的 JDK），
+> 否则 Loom 在**配置阶段**就报 `Dependency requires at least JVM runtime version 25`。
 
 **验证命令**：
 ```bash
 ./gradlew build
-./scripts/dev-server.sh "hub selftest"     # 无人值守起服 + 49 项自检，约 1–3 分钟
+./scripts/dev-server.sh "hub selftest"     # 无人值守起服 + 182 项自检，约 1–3 分钟
 ```
 
 ### ⚠️ 运维约定：清数据 = 连地图一起清
@@ -60,13 +66,35 @@ run/usercache.json  run/ops.json  run/*/session.lock
 | 大厅夜晚+下雨 | 大厅改用 overworld 维度后继承主世界昼夜天气 | `LobbyEnvironment` 强制永昼 + 晴朗（并修了自己引入的"每进一人时钟跳一天"）|
 | 对话框卡 5 秒 | `after_action=WAIT_FOR_RESPONSE` 让客户端进入"等待响应"态 | 改为 `CLOSE` |
 | 切服中断（点进服务器没反应） | 原版 `DistanceManager.removePlayer` 对未登记区块不判空 | 加防护 Mixin |
+| `/hub` 后进不去别的子服 | 大厅不在 `subServers` 表里，菜单"返回大厅"走 `joinById` 落进 `orElse` 分支 | `joinById` 单独处理 `Lobby.ID`（详见下方"曾经待复现确认的三项"）|
+| 重连时间长 | 登录先落主世界再被传送去大厅 → 客户端连加载两个世界 | `PrepareSpawnTaskMixin` 直接落大厅（详见下方）|
 | 空岛服永不建岛 | `onEnterSkyblock()` 是死代码，从未被调用 | 接到 `PlayerRouter` 入场监听器 |
 | 进服时查库阻塞主线程 | `isRegistered` 同步查 SQLite | 改异步 + 加耗时埋点 |
 
-**仍然待你复现确认的一项**：`/hub` 退出后进不去别的子服 + 重连时间长。
-服务端日志显示切服只用 1–8 ms 且无异常，因此怀疑在客户端侧；
-已加的诊断日志（`切服请求`/`切服完成`/`到达大厅耗时`/`左键点击 NPC`）能直接区分
-"请求没到服务端"和"服务端处理成功但客户端没反应"。
+### 曾经"待复现确认"的三项 —— 已全部修复并回归
+
+原先这里记着一条待办：`/hub` 退出后进不去别的子服 + 重连时间长。
+实际上它把**三个不同症状**混在了一起，各自根因不同，后来分别修掉（已在库 + 有回归自检）：
+
+| 症状 | 根因 | 修复 | 回归自检 |
+|---|---|---|---|
+| 点进服务器没反应 | `DistanceManager.removePlayer` 对未登记区块不判空 → 切服中途 NPE | `DistanceManagerRemovePlayerMixin` | 传送相关用例 |
+| `/hub` 后进不去别的子服 | 大厅不在 `subServers` 表里，`joinById(Lobby.ID)` 走 `orElse` 分支 | `8599739` | `SelfTest` 菜单检查："返回大厅"真的能回大厅（**修复前会红**）|
+| 重连时间长 | 登录先落主世界、再传送去大厅 → 客户端连加载两个世界 | `PrepareSpawnTaskMixin` | 登录路径覆盖 |
+
+**另外两件曾经把水搅浑、也已在 `36e50fa` 修掉的事**（它们会伪装成"连不上/切服坏了"）：
+
+- 空岛选岛假人取名 `hub_island_select`（**17 字符**，超过 MC 用户名 16 上限），
+  名字进了 `ClientboundPlayerInfoUpdatePacket`，`Utf8String.write` 长度检查失败
+  （`String too big (was 17 characters, max 16)`）→ **每个玩家一连上就被踢**，
+  现象上完全看不出是"某个假人名字太长"。已在 `FakePlayers.spawn` / `HubNpc.sanitizeName`
+  入口统一强制 3..16 字符 `[A-Za-z0-9_]`。
+- 大厅/空岛引导假人是真 `ServerPlayer`，会触发 JOIN 被认证系统当"未登录玩家"抓走
+  （日志实证：`切服请求：hub_island -> lobby`）—— 于是排查真玩家切服时，
+  日志里混着**假人在被搬运**的记录。已让 `AuthManager` 对 `MarkedFakePlayer` 直接跳过。
+
+> 诊断日志（`切服请求` / `切服完成` / `到达大厅耗时` / `左键点击 NPC`）**保留着**，
+> 它们只在自己那条路径上打 INFO，能区分"请求没到服务端"和"服务端成功但客户端没反应"。
 
 ---
 
@@ -260,7 +288,7 @@ Java 25 / 官方 Mojang 名（无 mappings、无 remapJar）
 - [x] `README.md` + `docs/`：安装部署、配置说明、命令与权限、架构与扩展
       （含"如何新增第四个子服""如何加岛型""如何加对话框"）
 - [x] 打包交付说明（依赖清单 + 版本注意事项）
-- [x] 服务端侧全流程自测（`hub selftest` 49 项全绿）
+- [x] 服务端侧全流程自测（`hub selftest` 182 项全绿）
 - [ ] **真实客户端联调**（唯一剩余项，需人工图形界面操作）：
       1. 起服务端：`./gradlew runServer`
       2. 客户端连 `localhost:25565`（离线服，用户名随意）
@@ -347,7 +375,7 @@ hubsuite:skyblock_ocean    海岛（自然海洋世界，岛按距离摆放）
 三个维度各有**独立存档**（`hubsuite_skyblock_{hub,classic,ocean}`）——
 `PlayerDataStorage` 是按存档分目录的，共用一份会让三个维度的背包/经验互相覆盖。
 
-### 完成的验证（`/hub selftest` 共 94 项，全绿；看门狗 0 次）
+### 完成的验证（当时 `/hub selftest` 共 94 项全绿；看门狗 0 次。当前基线已涨到 182 项）
 
 - 三维度就绪、岛型配置正确（classic + ocean）
 - **入口分流**：没岛 → 大厅；有经典岛 → 回该岛；两岛型归属互不影响；
