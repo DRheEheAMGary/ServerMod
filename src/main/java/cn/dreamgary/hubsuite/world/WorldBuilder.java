@@ -37,26 +37,40 @@ public final class WorldBuilder {
                                      LevelStem stem,
                                      long seed,
                                      boolean tickTime) {
-        ServerLevel level = new ServerLevel(
-                server,
-                ServerInternals.executor(server),
-                save.access(),
-                save.worldData().overworldData(),
-                dimension,
-                stem,
-                false,
-                BiomeManager.obfuscateSeed(seed),
-                List.of(),
-                tickTime);
         /*
-         * 登记这个维度自己的**地形种子**。
+         * 登记这个维度自己的**地形种子**，而且必须赶在构造之前 ——
+         * 这是踩过的坑：
          *
-         * 上面那个 seed 只喂给了 BiomeManager（**群系分布**）；地形种子在
-         * ServerLevel.getSeed() 里是"全服一份"的，于是所有维度会生成同一张地形。
-         * 这里把它登记下来，由 ServerLevelSeedMixin 让 getSeed() 返回它 ——
-         * ChunkMap 建 RandomState 用的正是 getSeed()，噪声/矿脉/结构就都跟着各自种子走了。
+         * 原版的地形种子是全服一份的（{@code ServerLevel.getSeed()} 返回
+         * {@code server.getWorldGenSettings().options().seed()}），
+         * 而区块系统在 **ServerLevel 构造函数内部**就把它用掉了：
+         * <pre>
+         *   ServerLevel.&lt;init&gt; → 建 ChunkMap
+         *   ChunkMap.&lt;init&gt;   → ServerLevel.getSeed() → RandomState.create(...)
+         * </pre>
+         * 第一版把 LevelSeeds.register 写在构造**之后**，于是 ChunkMap 拿到的
+         * 仍是全服种子 —— 各子服照样生成同一张地形（用户复测："种子还是没生效"）。
+         *
+         * 现在改成"先登记、后构造"。因为构造期间还没人能拿到这个 level 引用，
+         * 所以我把种子按**维度 key**预先登记，构造完再迁移到实例键上。
          */
-        LevelSeeds.register(level, seed);
-        return level;
+        LevelSeeds.registerPending(dimension, seed);
+        try {
+            ServerLevel level = new ServerLevel(
+                    server,
+                    ServerInternals.executor(server),
+                    save.access(),
+                    save.worldData().overworldData(),
+                    dimension,
+                    stem,
+                    false,
+                    BiomeManager.obfuscateSeed(seed),
+                    List.of(),
+                    tickTime);
+            LevelSeeds.bind(level);
+            return level;
+        } finally {
+            LevelSeeds.clearPending(dimension);
+        }
     }
 }

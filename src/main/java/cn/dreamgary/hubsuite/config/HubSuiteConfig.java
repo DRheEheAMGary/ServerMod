@@ -109,9 +109,19 @@ public final class HubSuiteConfig {
         public String worldKind = "normal";
         /** 仅 {@code flat} 时生效：从下到上的层，格式 {@code 方块id*高度}，例如 {@code minecraft:bedrock*1}。 */
         public List<String> flatLayers = new ArrayList<>(List.of("minecraft:bedrock*1"));
-        /** 该子服是否生成下界 / 末地。 */
-        public boolean generateNether = false;
-        public boolean generateEnd = false;
+        /**
+         * 该子服是否拥有**自己独立的下界**。
+         *
+         * <p>默认开着：每个子服"完全独立"是本模组的核心承诺，
+         * 而下界/末地是玩家能拿到资源、能互相串门的地方 ——
+         * 共用一个下界等于把三个子服连通了（在生存服挖的下界通道，
+         * 创造服能直接走过去）。所以默认给每个子服各自一份。
+         *
+         * <p>关掉的话，传送门会退回原版行为（全服共用一个下界）。
+         */
+        public boolean ownNether = true;
+        /** 该子服是否拥有**自己独立的末地**。语义同 {@link #ownNether}。 */
+        public boolean ownEnd = true;
 
         public long seed = 0L;
 

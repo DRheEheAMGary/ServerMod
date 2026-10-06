@@ -167,6 +167,8 @@ public final class WorldsManager {
         PlayerDataRouter.clear();
         // 维度 → 地形种子的登记同理：维度对象已经关了，别把上一局的引用留着
         LevelSeeds.clear();
+        // 传送门目标映射也清掉，避免下一局误用上一局的维度 key
+        PortalLinks.clear();
         this.server = null;
         HubSuite.logger().info("多世界引擎已关闭，全部子服已保存。");
     }

@@ -15,6 +15,7 @@
     "PlayerListFieldAccessor",
     "PlayerInfoListedMixin",
     "PlayerListStorageMixin",
+    "PortalBlockDestinationMixin",
     "PrepareSpawnTaskMixin",
     "ServerCommonPacketListenerMixin",
     "ServerGamePacketListenerMenuMixin",

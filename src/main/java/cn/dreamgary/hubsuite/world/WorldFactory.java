@@ -51,6 +51,53 @@ public final class WorldFactory {
     }
 
     /**
+     * 按**原版自己的方式**造一个下界或末地维度。
+     *
+     * <p>用途：让每个子服拥有自己独立的下界 / 末地（见
+     * {@link PortalLinks}）。做成"和原版一模一样"是关键 ——
+     * 群系源、噪声设置、维度类型全部取原版注册表里的同一份，
+     * 不自己拼参数，这样地形、结构、刷怪、光照都跟原版下界/末地没有区别。
+     *
+     * <ul>
+     *   <li>下界：{@code Minecraft} 用 {@code NoiseGeneratorSettings.NETHER}
+     *       + 下界群系参数预设 {@code MultiNoiseBiomeSourceParameterLists.NETHER}；</li>
+     *   <li>末地：{@code NoiseGeneratorSettings.END} + {@code TheEndBiomeSource.create}，
+     *       这样才有主岛/外岛的正确分布。</li>
+     * </ul>
+     *
+     * @param nether true 造下界，false 造末地
+     * @return 构造好的维度定义；失败返回 null，调用方应跳过该维度
+     */
+    public static LevelStem vanillaStem(MinecraftServer server, boolean nether) {
+        try {
+            var access = server.registryAccess();
+            var biomes = access.lookupOrThrow(Registries.BIOME);
+
+            net.minecraft.world.level.biome.BiomeSource biomeSource;
+            Holder<net.minecraft.world.level.levelgen.NoiseGeneratorSettings> settings;
+            Holder<DimensionType> type;
+            if (nether) {
+                biomeSource = net.minecraft.world.level.biome.MultiNoiseBiomeSource.createFromPreset(
+                        access.lookupOrThrow(Registries.MULTI_NOISE_BIOME_SOURCE_PARAMETER_LIST)
+                                .getOrThrow(net.minecraft.world.level.biome.MultiNoiseBiomeSourceParameterLists.NETHER));
+                settings = access.lookupOrThrow(Registries.NOISE_SETTINGS)
+                        .getOrThrow(net.minecraft.world.level.levelgen.NoiseGeneratorSettings.NETHER);
+                type = resolveDimensionType(server, "minecraft:the_nether");
+            } else {
+                biomeSource = net.minecraft.world.level.biome.TheEndBiomeSource.create(biomes);
+                settings = access.lookupOrThrow(Registries.NOISE_SETTINGS)
+                        .getOrThrow(net.minecraft.world.level.levelgen.NoiseGeneratorSettings.END);
+                type = resolveDimensionType(server, "minecraft:the_end");
+            }
+            return new LevelStem(type,
+                    new net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator(biomeSource, settings));
+        } catch (Throwable t) {
+            HubSuite.logger().error("构造原版{}维度失败，将不生成该维度", nether ? "下界" : "末地", t);
+            return null;
+        }
+    }
+
+    /**
      * 海洋世界：与原版主世界**同样的地形与群系生成**（海洋/暖海/深海/寒冷海洋…），
      * 所以沉船、海底废墟、珊瑚礁这些结构也会照常生成。
      *

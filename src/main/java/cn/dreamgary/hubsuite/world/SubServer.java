@@ -528,7 +528,104 @@ public final class SubServer implements PlayableWorld {
         entries.put(primary.id(), primary);
         SubServer sub = new SubServer(server, config, rules, primary, entries);
         registerInstance(sub);   // 延迟任务（出生点补算）要能从静态上下文回填 Entry
+        sub.createOwnNetherAndEnd();
         return sub;
+    }
+
+    /**
+     * 给这个子服造**它自己的**下界与末地。
+     *
+     * <p><b>为什么要各自一份：</b>下界/末地是玩家能拿资源、也能互相串门的地方。
+     * 共用一个下界等于把三个子服连通了 —— 生存服挖的下界通道，创造服能直接走过去，
+     * 这跟"每个子服完全独立"的承诺直接冲突。
+     *
+     * <p><b>为什么不能直接用 {@code minecraft:the_nether}：</b>
+     * {@code MinecraftServer.levels} 按维度 key 唯一，三个子服各注册一个
+     * {@code minecraft:the_nether} 会互相顶掉。所以用自己的 key
+     * （{@code hubsuite:server_<id>_nether} / {@code _end}），
+     * 再由 {@link PortalLinks} + {@code PortalBlockDestinationMixin} 负责传送时改道。
+     *
+     * <p>方块生成器直接用**原版那一份**（见 {@link WorldFactory#vanillaStem}），
+     * 所以地形、结构、刷怪、光照都与原版下界/末地一致。
+     *
+     * <p>只给普通地形（normal）的子服造：虚空/超平坦是功能性维度（大厅、空岛），
+     * 给它们配下界没有意义，只会白占内存和启动时间。
+     */
+    private void createOwnNetherAndEnd() {
+        if (!"normal".equalsIgnoreCase(config.worldKind)) {
+            return;
+        }
+        ResourceKey<Level> nether = null;
+        ResourceKey<Level> end = null;
+        if (config.ownNether) {
+            nether = createVanillaSideDimension("nether", "下界", true,
+                    config.seed ^ 0x4E45544845524CL);
+        }
+        if (config.ownEnd) {
+            end = createVanillaSideDimension("end", "末地", false,
+                    config.seed ^ 0x454E4421212121L);
+        }
+        if (nether != null || end != null) {
+            // 正反两个方向都要登记：从子服过去、以及从那边回来
+            PortalLinks.register(primary.dimension(), nether, end);
+            HubSuite.logger().info("子服 '{}' 的独立维度已就绪：下界={} 末地={}",
+                    config.id,
+                    nether == null ? "未启用" : nether.identifier().toString(),
+                    end == null ? "未启用" : end.identifier().toString());
+        }
+    }
+
+    /**
+     * 造一个"原版风格"的侧维度（下界或末地）。
+     *
+     * @param suffix 维度 key 后缀，{@code nether} / {@code end}
+     * @param seed   这个维度自己的地形种子（由子服种子派生，保证每次启动一致）
+     * @return 维度 key；失败返回 null（调用方跳过，不影响子服本身）
+     */
+    private ResourceKey<Level> createVanillaSideDimension(String suffix, String label,
+                                                          boolean nether, long seed) {
+        String saveName = "hubsuite_" + config.id + "_" + suffix;
+        try {
+            LevelStem stem = WorldFactory.vanillaStem(server, nether);
+            if (stem == null) {
+                return null;   // 构造失败，WorldFactory 已经打过日志
+            }
+            IsolatedSave sideSave = IsolatedSave.open(server, saveName,
+                    config.displayName + " §7" + label, GameType.SURVIVAL,
+                    Difficulty.NORMAL, false);
+            ResourceKey<Level> dimension = WorldBuilder.dimensionKey(config.id + "_" + suffix);
+            ServerLevel level = WorldBuilder.create(server, sideSave, dimension, stem, seed, true);
+            level.getWorldBorder().setAbsoluteMaxSize(server.getAbsoluteMaxWorldSize());
+
+            /*
+             * 出生点：交给原版算。
+             *
+             * 下界出生点原版是拿主世界出生点 /8 得出来的，我们的下界和子服主维度
+             * 同样是 1:8 关系，所以直接按同一个坐标换算即可。
+             * 末地则固定落在 (100, 50, 0) 的黑曜石平台上 —— 原版
+             * ServerLevel 构造时就会铺那块平台，这里只要把重生点指过去。
+             */
+            int sx = (int) Math.floor(primary.spawn().x() / 8.0);
+            int sz = (int) Math.floor(primary.spawn().z() / 8.0);
+            int sy = nether ? 64 : 50;
+            if (!nether) {
+                sx = 100;
+                sz = 0;
+            }
+            PlayableWorld.SpawnPoint sideSpawn =
+                    new PlayableWorld.SpawnPoint(sx + 0.5, sy, sz + 0.5, 0.0F, 0.0F);
+            applySpawn(level, sideSpawn);
+            applyWorldBorder(level, rules, sideSpawn);
+
+            sideSave.register(level);
+            RulesManager.register(dimension, rules);
+            entries.put(suffix, new Entry(suffix, dimension, level, sideSave, sideSpawn, label));
+            return dimension;
+        } catch (Throwable t) {
+            HubSuite.logger().error("子服 '{}' 的{}维度创建失败，将退回原版共用维度",
+                    config.id, label, t);
+            return null;
+        }
     }
 
     /**

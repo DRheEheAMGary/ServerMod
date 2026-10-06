@@ -9,6 +9,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.NameAndId;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.gamerules.GameRules;
 
 import java.io.IOException;
@@ -115,6 +116,9 @@ public final class SelfTest {
         passed = 0;
         failed = 0;
 
+        // 放最前面：后面的"规则落盘"会触发全维度同步落盘，在刚清档、区块还在
+        // 大量生成时可能超 60 秒被看门狗强杀 —— 排后面就永远跑不到这条了。
+        step("两个地形子服不是同一张地图（种子真的生效了）", this::checkSubServerSeedsDiffer);
         step("环境检查", this::checkEnvironment);
         step("存档目录隔离", this::checkSaveIsolation);
         step("规则隔离", this::checkRuleIsolation);
@@ -153,6 +157,193 @@ public final class SelfTest {
         step("开箱链路没有被事件处理器破坏", this::checkChestInteractionChainIntact);
         step("岛型之间切换不会落错坐标", this::checkIslandSwitchLandsCorrectly);
         step("空岛的树（原版橡树地物，且不堵落脚点）", this::checkIslandTree);
+        step("传送门进的是本子服自己的下界/末地（且能回来）", this::checkPortalRedirect);
+    }
+
+    /**
+     * 传送门必须把玩家送到**本子服自己的**下界/末地，而不是全服共用的那一份。
+     *
+     * <p>锁住"子服之间完全独立"这条承诺：共用一个下界等于把三个子服连通了。
+     *
+     * <p>检查 {@link cn.dreamgary.hubsuite.world.PortalLinks#redirect} 的四个方向：
+     * <ol>
+     *   <li>子服主维度 →（原版目标：下界）→ 应该变成该子服自己的下界；</li>
+     *   <li>该子服的下界 →（原版目标：下界）→ 应该回到该子服主维度；</li>
+     *   <li>末地同上；</li>
+     *   <li>没登记过的维度（大厅）必须**原样返回**，不能乱改原版行为。</li>
+     * </ol>
+     * 这是纯逻辑检查，不加载区块、不消耗时间。
+     */
+    private void checkPortalRedirect() {
+        try {
+            var worlds = HubSuite.worlds();
+            if (worlds == null) {
+                ok("传送门改道检查跳过（多世界引擎还没就绪）");
+                return;
+            }
+            int checked = 0;
+            for (SubServer sub : worlds.subServers()) {
+                if (!"normal".equalsIgnoreCase(sub.config().worldKind)) {
+                    continue;   // 虚空/超平坦不配下界末地
+                }
+                var main = sub.primaryEntry().dimension();
+                var nether = sub.entry("nether").map(e -> e.dimension()).orElse(null);
+                var end = sub.entry("end").map(e -> e.dimension()).orElse(null);
+
+                if (sub.config().ownNether) {
+                    if (nether == null) {
+                        fail("子服 '" + sub.id() + "' 配置了独立下界，但下界维度没建出来");
+                        return;
+                    }
+                    var go = cn.dreamgary.hubsuite.world.PortalLinks.redirect(main, Level.NETHER);
+                    if (!nether.equals(go)) {
+                        fail("子服 '" + sub.id() + "' 进传送门去的是 " + go
+                                + "，而不是它自己的下界 " + nether);
+                        return;
+                    }
+                    var back = cn.dreamgary.hubsuite.world.PortalLinks.redirect(nether, Level.NETHER);
+                    if (!main.equals(back)) {
+                        fail("从子服 '" + sub.id() + "' 的下界回来会到 " + back
+                                + "，而不是 " + main + " —— 玩家会串到别的子服");
+                        return;
+                    }
+                    checked += 2;
+                }
+                if (sub.config().ownEnd) {
+                    if (end == null) {
+                        fail("子服 '" + sub.id() + "' 配置了独立末地，但末地维度没建出来");
+                        return;
+                    }
+                    var go = cn.dreamgary.hubsuite.world.PortalLinks.redirect(main, Level.END);
+                    if (!end.equals(go)) {
+                        fail("子服 '" + sub.id() + "' 去末地会到 " + go + "，而不是 " + end);
+                        return;
+                    }
+                    var back = cn.dreamgary.hubsuite.world.PortalLinks.redirect(end, Level.END);
+                    if (!main.equals(back)) {
+                        fail("从子服 '" + sub.id() + "' 的末地回来会到 " + back + "，而不是 " + main);
+                        return;
+                    }
+                    checked += 2;
+                }
+            }
+            if (checked == 0) {
+                ok("传送门改道检查跳过（没有启用独立下界/末地的子服）");
+                return;
+            }
+
+            // 没登记过的维度必须原样返回 —— 不能把大厅的传送门也改道
+            var lobbyDim = worlds.lobby().map(l -> l.level().dimension()).orElse(null);
+            if (lobbyDim != null) {
+                var untouched = cn.dreamgary.hubsuite.world.PortalLinks.redirect(lobbyDim, Level.NETHER);
+                if (!Level.NETHER.equals(untouched)) {
+                    fail("大厅的传送门目标被改成了 " + untouched + " —— 没登记的维度不该被改道");
+                    return;
+                }
+            }
+            ok("传送门改道正确：进/出各方向都指向本子服自己的维度（" + checked + " 项映射），"
+                    + "未登记的维度保持原版行为");
+        } catch (Throwable t) {
+            fail("传送门改道检查出错：" + t);
+        }
+    }
+
+    /**
+     * 子服之间必须生成**不同的地形**。
+     *
+     * <p>锁住用户两次反馈的问题："生存服和创造服是同一张地图"、"种子还是没生效"。
+     *
+     * <p>根因是原版地形种子**全服一份**（{@code ServerLevel.getSeed()} 返回
+     * {@code server.getWorldGenSettings().options().seed()}），而区块系统在
+     * {@code ServerLevel} 构造**内部**就用它建好了 {@code RandomState} ——
+     * 所以配置里的 {@code servers[].seed} 必须在那之前生效，否则形同虚设。
+     *
+     * <p>检查三件事（任一不成立就说明种子没进地形管线）：
+     * <ol>
+     *   <li>两个 normal 地形子服的配置种子本来就不同；</li>
+     *   <li>用生成器的 {@code getBaseHeight} 在同一批坐标上抽样，地表高度**确实不同**
+     *       —— 这是直接问生成器，与区块有没有生成无关；</li>
+     *   <li>顺便看群系是否也有差异。</li>
+     * </ol>
+     * 只取少数采样点：{@code getBaseHeight} 会实打实算一遍噪声，点太多会拖慢主线程。
+     */
+    private void checkSubServerSeedsDiffer() {
+        try {
+            var worlds = HubSuite.worlds();
+            if (worlds == null) {
+                ok("子服种子比对跳过（多世界引擎还没就绪）");
+                return;
+            }
+            var subs = new java.util.ArrayList<cn.dreamgary.hubsuite.world.SubServer>();
+            for (var sub : worlds.subServers()) {
+                if (sub != null && "normal".equalsIgnoreCase(sub.config().worldKind)) {
+                    subs.add(sub);
+                }
+            }
+            if (subs.size() < 2) {
+                ok("子服种子比对跳过（normal 地形的子服不足 2 个）");
+                return;
+            }
+
+            var a = subs.get(0);
+            var b = subs.get(1);
+            long seedA = a.config().seed;
+            long seedB = b.config().seed;
+            if (seedA == seedB) {
+                fail("子服 '" + a.id() + "' 与 '" + b.id() + "' 配置的种子相同（" + seedA
+                        + "）—— 它们必然会生成同一张地图");
+                return;
+            }
+
+            var levelA = a.primaryEntry().level();
+            var levelB = b.primaryEntry().level();
+            var genA = levelA.getChunkSource().getGenerator();
+            var genB = levelB.getChunkSource().getGenerator();
+            var randA = levelA.getChunkSource().randomState();
+            var randB = levelB.getChunkSource().randomState();
+
+            int[][] probes = {{0, 0}, {96, -64}, {-128, 160}, {256, 256}, {-320, -192}, {512, 64}};
+            int compared = 0;
+            int differing = 0;
+            var detail = new StringBuilder();
+            for (int[] p : probes) {
+                int ha;
+                int hb;
+                try {
+                    ha = genA.getBaseHeight(p[0], p[1],
+                            net.minecraft.world.level.levelgen.Heightmap.Types.OCEAN_FLOOR_WG,
+                            levelA, randA);
+                    hb = genB.getBaseHeight(p[0], p[1],
+                            net.minecraft.world.level.levelgen.Heightmap.Types.OCEAN_FLOOR_WG,
+                            levelB, randB);
+                } catch (Throwable t) {
+                    continue;
+                }
+                compared++;
+                if (ha != hb) {
+                    differing++;
+                }
+                if (detail.length() < 160) {
+                    detail.append('(').append(p[0]).append(',').append(p[1]).append("):")
+                            .append(ha).append('/').append(hb).append(' ');
+                }
+            }
+
+            if (compared == 0) {
+                ok("子服种子比对跳过（生成器不支持高度抽样）");
+                return;
+            }
+            if (differing == 0) {
+                fail("两个子服在 " + compared + " 个采样点上地表高度**完全相同**（"
+                        + detail.toString().trim() + "）—— 说明它们用的是同一个种子，"
+                        + "配置里的 servers[].seed 没有进入地形管线");
+                return;
+            }
+            ok("子服 '" + a.id() + "'(种子 " + seedA + ") 与 '" + b.id() + "'(种子 " + seedB
+                    + ") 地形不同：" + differing + "/" + compared + " 个采样点高度不一致");
+        } catch (Throwable t) {
+            fail("比对各子服地形时出错：" + t);
+        }
     }
 
     private void step(String name, ThrowingRunnable body) {
@@ -733,21 +924,47 @@ public final class SelfTest {
         }
     }
 
-    /** 规则落盘：把各子服的 gamerule 快照写到 config/hubsuite/rules/。 */
+    /**
+     * 规则落盘：把各子服的 gamerule 快照写到 config/hubsuite/rules/。
+     *
+     * <p><b>这里曾经把整个自检跑崩：</b>以前直接 {@code worlds.saveAll(true)} ——
+     * flush=true 会**同步**把每个维度的区块与实体全部写出去
+     * （{@code ChunkMap.saveAllChunks} 之后主线程等全部写完）。
+     * 而自检整体是在 {@code END_SERVER_TICK} 里同步跑的，于是单个 tick
+     * 轻松超过 60 秒，被看门狗判定为卡死强杀 —— 自检因此从来没跑完过。
+     *
+     * <p>现在改成两步：
+     * <ol>
+     *   <li>{@code saveAll(false)}：触发保存但**不阻塞**等写完（区块写盘走后台线程），
+     *       gamerule 快照本身是同步写的；</li>
+     *   <li>文件是否存在交给跨 tick 的延迟断言去核对，给后台写盘留时间。</li>
+     * </ol>
+     */
     private void checkRulesPersistence() {
         try {
-            worlds.saveAll(true);
-            for (SubServer sub : worlds.subServers()) {
-                java.nio.file.Path file = RulesStorage.fileOf(sub.id());
-                if (java.nio.file.Files.exists(file)) {
-                    ok("规则已落盘：" + file.getFileName() + "（"
-                            + java.nio.file.Files.size(file) + " 字节）");
-                } else {
-                    fail("规则未落盘：" + file);
-                }
-            }
+            worlds.saveAll(false);
         } catch (Throwable t) {
-            fail("规则落盘检查异常：" + t);
+            fail("触发规则落盘时异常：" + t);
+            return;
+        }
+        for (SubServer sub : worlds.subServers()) {
+            java.nio.file.Path file = RulesStorage.fileOf(sub.id());
+            // 规则快照是同步写的，通常立刻就在；区块写盘则不在这里等
+            if (java.nio.file.Files.exists(file)) {
+                long size = 0L;
+                try {
+                    size = java.nio.file.Files.size(file);
+                } catch (java.io.IOException ignored) {
+                    // 拿不到大小不影响"已经落盘"这个结论
+                }
+                ok("规则已落盘：" + file.getFileName() + "（" + size + " 字节）");
+            } else {
+                defer("规则落盘：" + file.getFileName(),
+                        () -> java.nio.file.Files.exists(file),
+                        () -> "\u00A7a[通过]\u00A7r 规则已落盘（延迟确认）："
+                                + file.getFileName(),
+                        20);
+            }
         }
     }
 

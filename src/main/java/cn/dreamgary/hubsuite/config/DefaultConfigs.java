@@ -58,8 +58,6 @@ public final class DefaultConfigs {
         s.displayName = "\u00A7a生存服";
         s.order = 0;
         s.worldKind = "normal";
-        s.generateNether = false;
-        s.generateEnd = false;
         // 正常世界交给原版算地表高度，不硬写 Y（硬写会悬空）
         s.useWorldSpawn = true;
         // 每个子服给**不同**的种子：seed=0 会让生存服和创造服生成
