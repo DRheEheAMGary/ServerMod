@@ -123,17 +123,30 @@ public final class SubServer implements PlayableWorld {
             HubSuiteConfig.SubServerConfig config = pending.config();
             PlayableWorld.SpawnPoint resolved;
             if (pending.cachedSpawn() != null) {
-                // 缓存复检：就地校验能不能站人，不能就落到地表
+                /*
+                 * 缓存复检：就地校验能不能站人，不能就落到地表。
+                 *
+                 * 注意**必须校验出生点所在的那一格区块也已经就位** ——
+                 * 光看"原版搜索区域就绪"不够：sanitizeSpawn 内部遇到区块没加载时
+                 * 会直接返回原值（保守设计），于是复检等于没做，玩家照样卡在地里。
+                 */
+                int sx = (int) Math.floor(pending.cachedSpawn().x());
+                int sz = (int) Math.floor(pending.cachedSpawn().z());
+                if (!isChunkReady(pending.level(), sx >> 4, sz >> 4)) {
+                    continue;   // 出生点所在区块还没就绪，下一 tick 再看
+                }
                 resolved = sanitizeSpawn(pending.level(), config.id, pending.cachedSpawn());
-                boolean moved = Math.abs(resolved.y() - pending.cachedSpawn().y()) > 0.01
+                // **无条件写回**（以前只在坐标变化时写）：
+                // 坐标没变也必须把结果落到配置里，否则每局都要重算一遍，
+                // 而且一旦算出来是"埋在地下"就永远修不好。
+                rememberSpawnAndApply(pending.level(), config, resolved);
+                if (Math.abs(resolved.y() - pending.cachedSpawn().y()) > 0.01
                         || Math.abs(resolved.x() - pending.cachedSpawn().x()) > 0.01
-                        || Math.abs(resolved.z() - pending.cachedSpawn().z()) > 0.01;
-                if (moved) {
+                        || Math.abs(resolved.z() - pending.cachedSpawn().z()) > 0.01) {
                     HubSuite.logger().info("子服 '{}' 的缓存出生点已失效（地图可能被重置过），"
                                     + "从 ({}, {}, {}) 修正到 ({}, {}, {})",
                             config.id, pending.cachedSpawn().x(), pending.cachedSpawn().y(),
                             pending.cachedSpawn().z(), resolved.x(), resolved.y(), resolved.z());
-                    rememberSpawnAndApply(pending.level(), config, resolved);
                 }
             } else {
                 resolved = rawVanillaSpawn(pending.server(), pending.level(), config);

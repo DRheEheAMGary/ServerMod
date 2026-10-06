@@ -21,4 +21,15 @@ public interface PlayerListAuxAccess {
      * @return 实际处理的条目数（统计 + 成就，各算 1）
      */
     int hubsuite$flushAux(UUID uuid);
+
+    /**
+     * 诊断用：缓存里现在**还有没有**这个玩家的成就条目。
+     *
+     * <p>给自检判断"切服到底有没有把缓存放掉"用 —— 这是成就/统计能否隔离的
+     * 唯一前提，光看文件路径推断不出结论。
+     */
+    boolean hubsuite$debugHasAdvancements(UUID uuid);
+
+    /** 诊断用：缓存里现在还有没有这个玩家的统计条目。 */
+    boolean hubsuite$debugHasStats(UUID uuid);
 }

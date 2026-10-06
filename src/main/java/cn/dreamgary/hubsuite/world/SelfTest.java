@@ -159,6 +159,236 @@ public final class SelfTest {
         step("空岛的树（原版橡树地物，且不堵落脚点）", this::checkIslandTree);
         step("传送门进的是本子服自己的下界/末地（且能回来）", this::checkPortalRedirect);
         step("虚空维度里没有任何结构（不会长出村庄）", this::checkVoidHasNoStructures);
+        step("退出服务器不会丢成就（退出→重登仍读得回来）", this::checkAdvancementsSurviveRelogin);
+        step("切服会真的放掉成就/统计缓存（隔离的前提）", this::checkAuxCacheEvictedOnSwitch);
+    }
+
+    /**
+     * 切服时必须真的把 {@code PlayerList.stats/advancements} 里那个玩家放掉。
+     *
+     * <p>这是成就/统计能不能隔离的**唯一前提**：那两个对象在构造时就把文件路径
+     * 烧死在字段里（{@code ServerStatsCounter.file} / {@code PlayerAdvancements.playerSavePath}），
+     * 只要缓存里还留着旧对象，之后无论玩家走到哪个子服，读写都还在旧那个文件上
+     * —— 表现就是"切服成就也跟着走"（用户实测）。
+     *
+     * <p>这条检查只看缓存本身，不看路径推断：
+     * <ol>
+     *   <li>假玩家进生存服 → 取一次成就/统计（确保缓存里有条目）；</li>
+     *   <li>断言缓存里**确实有**这个 UUID（不然下面的检查没有意义）；</li>
+     *   <li>调 {@link AuxDataRouter#flushAndEvict}（切服走的就是它）；</li>
+     *   <li>断言缓存里**已经没有了** —— 还在就说明放不掉，隔离必然失效。</li>
+     * </ol>
+     */
+    private void checkAuxCacheEvictedOnSwitch() {
+        SubServer survival = worlds.subServer("survival").orElse(null);
+        if (survival == null) {
+            ok("成就缓存清理检查跳过（没有 survival 子服）");
+            return;
+        }
+        ServerPlayer probe = null;
+        try {
+            probe = FakePlayers.spawn(server, "hubsuite_auxevict", survival.level(), false);
+            if (probe == null) {
+                fail("成就缓存清理检查：假玩家创建失败");
+                return;
+            }
+            java.util.UUID uuid = probe.getUUID();
+            var list = server.getPlayerList();
+            var aux = (cn.dreamgary.hubsuite.world.PlayerListAuxAccess) list;
+
+            // 确保缓存里有条目（构造 ServerPlayer 时原版就会填进去）
+            list.getPlayerAdvancements(probe);
+            list.getPlayerStats(probe);
+
+            boolean hadAdv = aux.hubsuite$debugHasAdvancements(uuid);
+            boolean hadStats = aux.hubsuite$debugHasStats(uuid);
+            if (!hadAdv || !hadStats) {
+                fail("检查前提不成立：缓存里本来就没有该玩家的条目"
+                        + "（advancements=" + hadAdv + ", stats=" + hadStats + "）");
+                return;
+            }
+
+            // 切服走的就是这一步
+            AuxDataRouter.flushAndEvict(probe);
+
+            boolean stillAdv = aux.hubsuite$debugHasAdvancements(uuid);
+            boolean stillStats = aux.hubsuite$debugHasStats(uuid);
+            if (stillAdv || stillStats) {
+                fail("切服后缓存没被清掉（advancements=" + stillAdv + ", stats=" + stillStats
+                        + "）—— 旧对象里烧死的文件路径会一直生效，成就/统计不可能隔离");
+                return;
+            }
+            ok("切服后成就/统计缓存已放掉，下次进入会按新子服重建（隔离成立的前提）");
+        } catch (Throwable t) {
+            fail("成就缓存清理检查异常：" + t);
+        } finally {
+            try {
+                if (probe != null) {
+                    var dir = survival.save().playersDir();
+                    java.util.UUID u = probe.getUUID();
+                    AuxDataRouter.forget(probe, server);
+                    server.getPlayerList().remove(probe);
+                    java.nio.file.Files.deleteIfExists(dir.resolve("advancements").resolve(u + ".json"));
+                    java.nio.file.Files.deleteIfExists(dir.resolve("stats").resolve(u + ".json"));
+                }
+            } catch (Throwable ignored) {
+                // 清理失败不影响结论
+            }
+        }
+    }
+
+    /**
+     * 成就必须在"退出服务器 → 重新登录"之后仍然存在。
+     *
+     * <p>锁住用户实测的 bug："退出重进成就就没了"，而**切服是正常的** ——
+     * 这个对比直接指向退出那条路：切服时玩家还在维度里（{@code player.level()} 有效），
+     * 而断线时玩家可能已经脱离世界，于是保存逻辑拿到 null 服务器、直接 return，
+     * 什么都没写。
+     *
+     * <p>这里完整走一遍真实流程，不靠推断：
+     * <ol>
+     *   <li>建一个假玩家，进生存服，拿一个真实成就（挑第一个能授权的）；</li>
+     *   <li>先验证它确实被写进了**该子服存档**的 advancements 文件；</li>
+     *   <li>{@code PlayerList.remove(player)} —— 这就是退出服务器走的原版路径；</li>
+     *   <li>重新构造同名假玩家（会重新读档），断言那个成就**还在**。</li>
+     * </ol>
+     * 全程用假玩家，测试完删掉自己产生的数据文件。
+     */
+    private void checkAdvancementsSurviveRelogin() {
+        SubServer survival = worlds.subServer("survival").orElse(null);
+        if (survival == null) {
+            ok("成就重登检查跳过（没有 survival 子服）");
+            return;
+        }
+        ServerPlayer first = null;
+        try {
+            first = FakePlayers.spawn(server, "hubsuite_advsave", survival.level(), false);
+            if (first == null) {
+                fail("成就重登检查：假玩家创建失败");
+                return;
+            }
+            var list = server.getAdvancements().getAllAdvancements();
+            if (list == null || list.isEmpty()) {
+                ok("成就重登检查跳过（成就表为空）");
+                return;
+            }
+            var advancements = first.getAdvancements();
+            net.minecraft.advancements.AdvancementHolder granted = null;
+            outermost:
+            for (net.minecraft.advancements.AdvancementHolder holder : list) {
+                // 跳过配方类成就：它们靠配方解锁驱动，没有普通 criteria
+                if (holder.id().getPath().startsWith("recipes/")) {
+                    continue;
+                }
+                try {
+                    var progress = advancements.getOrStartProgress(holder);
+                    var adv = holder.value();
+                    // 逐条 criteria 授权，直到这条成就真的完成
+                    for (String criterion : adv.criteria().keySet()) {
+                        progress.grantProgress(criterion);
+                        if (progress.isDone()) {
+                            granted = holder;
+                            break outermost;
+                        }
+                    }
+                } catch (Throwable ignored) {
+                    // 这条处理不了，换下一条
+                }
+            }
+            if (granted == null) {
+                ok("成就重登检查跳过（没有能直接授权完成的成就）");
+                return;
+            }
+
+            java.nio.file.Path file = survival.save().playersDir()
+                    .resolve("advancements").resolve(first.getUUID() + ".json");
+
+            // 第一次落盘：走"切服"那条路（玩家还在维度里，一定能存）
+            AuxDataRouter.flushAndEvict(first);
+            if (!java.nio.file.Files.exists(file)) {
+                fail("成就没有落到子服存档：" + file);
+                return;
+            }
+            String saved = java.nio.file.Files.readString(file);
+            if (!saved.contains(granted.id().toString())) {
+                fail("落盘的成就文件里没有刚拿到的 '" + granted.id() + "'（内容：" + saved + "）");
+                return;
+            }
+
+            java.util.UUID uuid = first.getUUID();
+
+            // 关键一步：走**退出服务器**的原版路径
+            AuxDataRouter.forget(first, server);
+            server.getPlayerList().remove(first);
+            first = null;
+
+            // 重新登录
+            ServerPlayer again = FakePlayers.spawn(server, "hubsuite_advsave", survival.level(), false);
+            if (again == null || !again.getUUID().equals(uuid)) {
+                fail("成就重登检查：重新登录的假玩家 UUID 不一致");
+                return;
+            }
+            // 关键一步：走**退出服务器**的原版路径
+            boolean stillThere = again.getAdvancements().getOrStartProgress(granted).isDone();
+            if (stillThere) {
+                ok("退出服务器后重新登录，成就仍在：'" + granted.id() + "'（文件 "
+                        + file.getFileName() + "）");
+            } else {
+                fail("退出服务器重新登录后成就丢了：'" + granted.id()
+                        + "' —— 文件在 " + file + "，说明保存或读取有一条路没生效");
+            }
+
+            /*
+             * 再复现用户报的那个场景：**切服不隔离**。
+             *
+             * 做法与真实切服一致：放掉缓存（PlayerRouter.sendTo 里就是这么做的），
+             * 然后以**另一个子服**的身份去读同一名玩家的成就 —— 刚拿到的那个
+             * 成就**绝不能**出现在新子服里，否则就是"成就跟着人跨服走"。
+             */
+            SubServer creative = worlds.subServer("creative").orElse(null);
+            if (creative != null) {
+                AuxDataRouter.flushAndEvict(again);
+                AuxDataRouter.register(creative.primaryEntry().dimension(), creative.save());
+                AuxDataRouter.setContext(creative.primaryEntry().dimension());
+                var advInCreative = ((cn.dreamgary.hubsuite.world.PlayerListAuxAccess) server.getPlayerList())
+                        .hubsuite$debugHasAdvancements(again.getUUID());
+                // 缓存已放掉；再以创造服上下文重新解析一次目录
+                AuxDataRouter.clearContext();
+                java.nio.file.Path creativeFile = creative.save().playersDir()
+                        .resolve("advancements").resolve(uuid + ".json");
+                boolean leaked = java.nio.file.Files.exists(creativeFile)
+                        && java.nio.file.Files.readString(creativeFile).contains(granted.id().toString());
+                if (leaked) {
+                    fail("切到创造服后，生存服里拿到的成就 '" + granted.id()
+                            + "' 出现在创造服的成就文件里 —— 隔离失效：" + creativeFile);
+                } else {
+                    ok("切服隔离成立：生存服拿到的成就没有出现在创造服（缓存放掉="
+                            + advInCreative + "，创造服文件存在="
+                            + java.nio.file.Files.exists(creativeFile) + "）");
+                }
+                java.nio.file.Files.deleteIfExists(creativeFile);
+                java.nio.file.Files.deleteIfExists(creative.save().playersDir()
+                        .resolve("stats").resolve(uuid + ".json"));
+            }
+            AuxDataRouter.forget(again, server);
+            server.getPlayerList().remove(again);
+        } catch (Throwable t) {
+            fail("成就重登检查异常：" + t);
+        } finally {
+            try {
+                java.nio.file.Path dir = survival.save().playersDir().resolve("advancements");
+                java.nio.file.Path statsDir = survival.save().playersDir().resolve("stats");
+                if (first != null) {
+                    java.util.UUID u = first.getUUID();
+                    AuxDataRouter.forget(first, server);
+                    server.getPlayerList().remove(first);
+                    java.nio.file.Files.deleteIfExists(dir.resolve(u + ".json"));
+                    java.nio.file.Files.deleteIfExists(statsDir.resolve(u + ".json"));
+                }
+            } catch (Throwable ignored) {
+                // 清理失败不影响结论
+            }
+        }
     }
 
     /**

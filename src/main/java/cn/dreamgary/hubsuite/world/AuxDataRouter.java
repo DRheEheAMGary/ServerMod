@@ -8,7 +8,6 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-
 /**
  * 成就与统计的**按维度隔离**。
  *
@@ -189,12 +188,22 @@ public final class AuxDataRouter {
      * <p>用户实测现象就是"服务器之间的成就等内容没有隔离"。
      * 在退出时放掉缓存，下次登录（此时维度上下文是对的）会按正确的子服重建。
      */
-    public static void forget(net.minecraft.server.level.ServerPlayer player) {
+    public static void forget(net.minecraft.server.level.ServerPlayer player,
+                              net.minecraft.server.MinecraftServer server) {
         if (player == null) {
             return;
         }
         try {
-            var server = player.level() == null ? null : player.level().getServer();
+            /*
+             * 注意：**不能**用 player.level() 去拿服务器/维度。
+             *
+             * 这个方法是在 ServerPlayConnectionEvents.DISCONNECT 里调的，
+             * 那一刻玩家可能已经脱离世界（level() 为 null 或抛异常）——
+             * 第一版就是这么写的，结果 forget() 直接 return、什么都没存，
+             * 表现就是用户实测的"退出重进成就就没了"。
+             *
+             * 所以服务器引用**由调用方传进来**（AuthManager 手里一定有）。
+             */
             if (server == null) {
                 return;
             }

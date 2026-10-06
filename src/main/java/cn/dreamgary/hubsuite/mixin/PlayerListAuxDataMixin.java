@@ -137,4 +137,14 @@ public abstract class PlayerListAuxDataMixin implements PlayerListAuxAccess {
         }
         return handled;
     }
+
+    @Override
+    public boolean hubsuite$debugHasAdvancements(UUID uuid) {
+        return uuid != null && this.advancements.containsKey(uuid);
+    }
+
+    @Override
+    public boolean hubsuite$debugHasStats(UUID uuid) {
+        return uuid != null && this.stats.containsKey(uuid);
+    }
 }

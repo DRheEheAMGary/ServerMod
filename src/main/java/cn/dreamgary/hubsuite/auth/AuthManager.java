@@ -89,7 +89,8 @@ public final class AuthManager {
 
     public void register() {
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> onJoin(handler.getPlayer()));
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> onQuit(handler.getPlayer()));
+        ServerPlayConnectionEvents.DISCONNECT.register(
+                (handler, server) -> onQuit(handler.getPlayer(), server));
 
         // 未登录禁止受伤（含掉虚空、窒息等）
         ServerLivingEntityEvents.ALLOW_DAMAGE.register(this::allowDamage);
@@ -163,7 +164,7 @@ public final class AuthManager {
                 username, tLobby - t0, tSession - t0);
     }
 
-    private void onQuit(ServerPlayer player) {
+    private void onQuit(ServerPlayer player, net.minecraft.server.MinecraftServer server) {
         states.remove(player.getUUID());
         // 玩家在某个子服的当前状态会随玩家数据落盘到那个子服的存档里，
         // 所以内存暂存可以清掉（下次进入会重新建立）。
@@ -187,8 +188,12 @@ public final class AuthManager {
          * 不清的话，玩家第一次登录建的那份对象会一直留着，
          * 之后切到任何子服、重新登录多少次，成就与统计都写回第一次那个目录 ——
          * 实测表现就是"服务器之间的成就等内容没有隔离"。
+         *
+         * 注意 server 必须由调用方传进来：此刻玩家可能已经脱离世界，
+         * 用 player.level() 去拿服务器会拿到 null，导致**什么都没保存**
+         * （实测表现："退出重进成就就没了"）。
          */
-        cn.dreamgary.hubsuite.world.AuxDataRouter.forget(player);
+        cn.dreamgary.hubsuite.world.AuxDataRouter.forget(player, server);
     }
 
     // ------------------------------------------------------------------
