@@ -20,7 +20,7 @@
 
 ```bash
 # 1. 编译
-./gradlew build                     # 产物 build/libs/hubsuite-0.2.2.jar
+./gradlew build                     # 产物 build/libs/hubsuite-0.2.3.jar
 
 # 2. 放进服务端 mods/（连同 Fabric API），启动
 
