@@ -158,6 +158,68 @@ public final class SelfTest {
         step("岛型之间切换不会落错坐标", this::checkIslandSwitchLandsCorrectly);
         step("空岛的树（原版橡树地物，且不堵落脚点）", this::checkIslandTree);
         step("传送门进的是本子服自己的下界/末地（且能回来）", this::checkPortalRedirect);
+        step("虚空维度里没有任何结构（不会长出村庄）", this::checkVoidHasNoStructures);
+    }
+
+    /**
+     * 虚空维度（大厅、经典空岛）里**不允许**有任何结构。
+     *
+     * <p>锁住用户实测的 bug："空岛服虚空中有村庄结构，两个商铺"。
+     *
+     * <p>根因是造虚空世界时复用了原版超平坦的默认设置
+     * （{@code FlatLevelGeneratorSettings.getDefault(...)}），
+     * 而它默认带结构覆盖 —— 字节码里明确包含
+     * {@code BuiltinStructureSets.STRONGHOLDS} 与 {@code VILLAGES}。
+     * 于是一片空气的虚空里照样生成村庄。
+     *
+     * <p>检查方式：直接问区块生成器的
+     * {@code ChunkGeneratorStructureState.possibleStructureSets()} ——
+     * 它是"这个维度允许生成哪些结构集"的唯一来源，为空就不可能长出任何东西。
+     * 纯查询，不加载区块、不花时间。
+     */
+    private void checkVoidHasNoStructures() {
+        try {
+            var worlds = HubSuite.worlds();
+            if (worlds == null) {
+                ok("虚空结构检查跳过（多世界引擎还没就绪）");
+                return;
+            }
+            var voids = new java.util.ArrayList<ServerLevel>();
+            // 大厅 + 各子服的虚空维度（经典空岛、空岛服大厅）
+            worlds.lobby().ifPresent(l -> voids.add(l.level()));
+            for (SubServer sub : worlds.subServers()) {
+                for (var entry : sub.entries()) {
+                    if (entry.level().getChunkSource().getGenerator()
+                            instanceof net.minecraft.world.level.levelgen.FlatLevelSource) {
+                        voids.add(entry.level());
+                    }
+                }
+            }
+            if (voids.isEmpty()) {
+                ok("虚空结构检查跳过（没有虚空维度）");
+                return;
+            }
+
+            var offenders = new StringBuilder();
+            int checked = 0;
+            for (ServerLevel level : voids) {
+                checked++;
+                var sets = level.getChunkSource().getGeneratorState().possibleStructureSets();
+                if (!sets.isEmpty()) {
+                    if (offenders.length() < 200) {
+                        offenders.append(level.dimension().identifier()).append("(")
+                                .append(sets.size()).append(" 个结构集) ");
+                    }
+                }
+            }
+            if (offenders.length() == 0) {
+                ok("虚空维度里没有任何结构集，不会长出村庄（检查了 " + checked + " 个虚空维度）");
+            } else {
+                fail("虚空维度里放行了结构集，会长出村庄/要塞：" + offenders.toString().trim());
+            }
+        } catch (Throwable t) {
+            fail("虚空结构检查出错：" + t);
+        }
     }
 
     /**

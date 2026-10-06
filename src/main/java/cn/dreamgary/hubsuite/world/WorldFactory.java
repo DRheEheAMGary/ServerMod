@@ -174,12 +174,28 @@ public final class WorldFactory {
                 });
     }
 
-    /** 纯虚空：单层空气的超平坦生成器（原版内部会自动把 voidGen 标记为 true）。 */
+    /**
+     * 纯虚空：单层空气，而且**结构、地物、湖泊全部关掉**。
+     *
+     * <p><b>踩过的坑（用户实测反馈："空岛服虚空中有村庄结构，两个商铺"）：</b>
+     * 以前这里偷懒复用了原版超平坦的默认设置 ——
+     * {@code FlatLevelGeneratorSettings.getDefault(...)}，而**原版超平坦默认带结构覆盖**
+     * （字节码里明确写了 {@code BuiltinStructureSets.STRONGHOLDS} 和
+     * {@code BuiltinStructureSets.VILLAGES}）。于是在一片空气的虚空里，
+     * 村庄会照常生成 —— 玩家在大厅平台上就能看到悬空的村庄房屋。
+     *
+     * <p>现在两件事一起做，保证"空就是空"：
+     * <ol>
+     *   <li>结构覆盖传 {@code Optional.empty()} —— 不再放行村庄/要塞；</li>
+     *   <li>群系用 {@code minecraft:the_void}（原版虚空群系）——
+     *       它本身不带任何结构集与地表装饰，作为第二道保险。</li>
+     * </ol>
+     */
     private static ChunkGenerator voidGenerator(MinecraftServer server) {
-        return buildFlat(server, List.of(new FlatLayerInfo(1, Blocks.AIR)));
+        return buildFlat(server, List.of(new FlatLayerInfo(1, Blocks.AIR)), true);
     }
 
-    /** 超平坦：从配置解析层定义，解析不了就用一层基岩兜底。 */
+    /** 超平坦：从配置解析层定义，解析不了就用一层基岩兜底。保留原版的结构与地物行为。 */
     private static ChunkGenerator flatGenerator(MinecraftServer server, List<String> rawLayers) {
         List<FlatLayerInfo> layers = new ArrayList<>();
         if (rawLayers != null) {
@@ -194,18 +210,51 @@ public final class WorldFactory {
             HubSuite.logger().warn("超平坦层配置为空或全部非法，回落到 minecraft:bedrock*1。");
             layers.add(new FlatLayerInfo(1, Blocks.BEDROCK));
         }
-        return buildFlat(server, layers);
+        return buildFlat(server, layers, false);
     }
 
-    private static ChunkGenerator buildFlat(MinecraftServer server, List<FlatLayerInfo> layers) {
+    /**
+     * 组装超平坦生成器。
+     *
+     * @param empty 是否要"纯虚空"语义（无结构、无地物、虚空群系）。
+     *              大厅/空岛的虚空维度必须传 true —— 见 {@link #voidGenerator}。
+     */
+    private static ChunkGenerator buildFlat(MinecraftServer server, List<FlatLayerInfo> layers,
+                                            boolean empty) {
         var biomes = server.registryAccess().lookupOrThrow(Registries.BIOME);
+        if (empty) {
+            /*
+             * 纯虚空：**结构集必须给"显式空集合"，不能给 Optional.empty()**。
+             *
+             * 两处都踩过：
+             *   1) FlatLevelGeneratorSettings.getDefault(...) 的默认结构覆盖就是原版
+             *      超平坦那一套，字节码里明确包含 BuiltinStructureSets.STRONGHOLDS 与
+             *      VILLAGES —— 于是虚空里长出村庄（用户实测："虚空中有村庄结构，两个商铺"）；
+             *   2) 改成 Optional.empty() **也没用**：那表示"没有覆盖"，
+             *      原版会回落到**群系自带的结构集**（平原群系有 6 个），照旧生村庄。
+             *      自检实测抓到了这一点：4 个虚空维度各放行 6 个结构集。
+             *
+             * 所以要给 Optional.of(HolderSet.empty()) —— 明确的"一个都不许生成"。
+             *
+             * 群系保持平原：不能换 minecraft:the_void，那个群系没有刷怪表，
+             * 换了大厅就不刷生物了。
+             */
+            FlatLevelGeneratorSettings voidSettings = new FlatLevelGeneratorSettings(
+                    java.util.Optional.of(net.minecraft.core.HolderSet
+                            .<StructureSet>empty()),
+                    biomes.getOrThrow(Biomes.PLAINS),
+                    java.util.List.<Holder<PlacedFeature>>of());
+            voidSettings.getLayersInfo().clear();
+            voidSettings.getLayersInfo().addAll(layers);
+            voidSettings.updateLayers();
+            return new FlatLevelSource(voidSettings);
+        }
         HolderGetter<StructureSet> structureSets = server.registryAccess().lookupOrThrow(Registries.STRUCTURE_SET);
         HolderGetter<PlacedFeature> placedFeatures = server.registryAccess().lookupOrThrow(Registries.PLACED_FEATURE);
-
-        FlatLevelGeneratorSettings settings = FlatLevelGeneratorSettings.getDefault(biomes, structureSets, placedFeatures);
-        List<FlatLayerInfo> copy = new ArrayList<>(layers);
+        FlatLevelGeneratorSettings settings =
+                FlatLevelGeneratorSettings.getDefault(biomes, structureSets, placedFeatures);
         settings.getLayersInfo().clear();
-        settings.getLayersInfo().addAll(copy);
+        settings.getLayersInfo().addAll(layers);
         settings.updateLayers();
         return new FlatLevelSource(settings);
     }
