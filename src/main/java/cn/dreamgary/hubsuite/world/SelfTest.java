@@ -47,6 +47,48 @@ public final class SelfTest {
     private int passed;
     private int failed;
 
+    /**
+     * 需要**等世界生成**才能判定的检查。每个 tick 由一个泵推进（见 {@link #pumpDeferred}）。
+     *
+     * <p><b>为什么必须有这个：</b>自检跑在主线程，而冷存档上区块要现生成。
+     * 早先的做法是就地 {@code level.getChunk(...)} 同步拉区块 —— 单次 tick
+     * 累计超过 60 秒看门狗上限，服务端直接被强杀（实测跑到第 36 步）。
+     * 改法是把"等"摊到多个 tick 上：先挂加载票据让服务端异步生成，
+     * 生成好了再接着断言。
+     */
+    private final List<Deferred> deferred = new ArrayList<>();
+
+    /** 一条"等世界就绪再判定"的检查。 */
+    private static final class Deferred {
+        final String description;
+        final java.util.function.BooleanSupplier ready;
+        final java.util.function.Supplier<String> finish;
+        /** 无论完成、失败还是超时都跑一次；用来清掉测试岛/假玩家，避免污染存档。 */
+        final Runnable cleanup;
+        long deadlineMillis;
+        int placeholderIndex = -1;
+        boolean finished;
+
+        Deferred(String description, java.util.function.BooleanSupplier ready,
+                 java.util.function.Supplier<String> finish, Runnable cleanup) {
+            this.description = description;
+            this.ready = ready;
+            this.finish = finish;
+            this.cleanup = cleanup;
+        }
+
+        void runCleanup() {
+            if (cleanup == null) {
+                return;
+            }
+            try {
+                cleanup.run();
+            } catch (Throwable t) {
+                HubSuite.logger().warn("延迟项清理失败（{}）：{}", description, t.toString());
+            }
+        }
+    }
+
     public SelfTest(MinecraftServer server, WorldsManager worlds,
                     cn.dreamgary.hubsuite.auth.AuthService auth,
                     cn.dreamgary.hubsuite.auth.AuthManager authManager) {
@@ -413,7 +455,7 @@ public final class SelfTest {
                     fail("报告已铺地形，但中心仍是空气");
                 }
             } else {
-                boolean loaded = classicLevel.getChunkSource().hasChunk(pos.getX() >> 4, pos.getZ() >> 4);
+                boolean loaded = isChunkReady(classicLevel, pos.getX() >> 4, pos.getZ() >> 4);
                 if (!loaded) {
                     ok("岛屿地形待补铺（区块未加载，玩家落地时自动铺好）—— 延迟机制正常");
                 } else {
@@ -1304,7 +1346,7 @@ public final class SelfTest {
                         boolean allLoaded = true;
                         for (int ddx = -1; ddx <= 1 && allLoaded; ddx++) {
                             for (int ddz = -1; ddz <= 1; ddz++) {
-                                if (!level.getChunkSource().hasChunk(acx + ddx, acz + ddz)) {
+                                if (!isChunkReady(level, acx + ddx, acz + ddz)) {
                                     allLoaded = false;
                                     break;
                                 }
@@ -1674,7 +1716,7 @@ public final class SelfTest {
      */
     private static net.minecraft.world.level.block.state.BlockState blockIfLoaded(
             net.minecraft.server.level.ServerLevel level, net.minecraft.core.BlockPos pos) {
-        if (!level.getChunkSource().hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) {
+        if (!isChunkReady(level, pos.getX() >> 4, pos.getZ() >> 4)) {
             return null;
         }
         return level.getBlockState(pos);
@@ -1894,6 +1936,30 @@ public final class SelfTest {
             var pad = islands.hubEntry().spawn();
             var platformPos = net.minecraft.core.BlockPos.containing(
                     pad.x() + 2, pad.y() - 1, pad.z() + 2);
+            var placedPos = platformPos.above();
+
+            /*
+             * 先确认"这块地方真的能放"。
+             *
+             * 这条检查原来直接假设"平台中心 +2 格处是空的" —— 在**冷存档**上
+             * 空岛大厅可能已经有别的方块（岛、别处补铺的地形），
+             * 于是方块放下去等于没变化，进度自然不动，误报成"放置没计数"
+             * （实测：冷存档上就报了这条假失败）。
+             *
+             * 只读已就位区块里的方块，且要求目标格是空气 —— 不满足就跳过，
+             * 不去猜、也不为了它同步生成区块。
+             * 这里在注入临时任务**之前**返回，所以不需要额外清理。
+             */
+            if (!isChunkReady(level, platformPos.getX() >> 4, platformPos.getZ() >> 4)) {
+                server.getPlayerList().remove(probe);
+                ok("放置计数检查跳过（目标区块尚未就位）");
+                return;
+            }
+            if (!blockIfLoaded(level, placedPos).isAir()) {
+                server.getPlayerList().remove(probe);
+                ok("放置计数检查跳过（目标位置已被占用，无法验证放置）");
+                return;
+            }
 
             // 临时任务：只存在于内存，测完移除（绝不调用 save()）
             injected = new cn.dreamgary.hubsuite.quest.Quest();
@@ -1923,7 +1989,6 @@ public final class SelfTest {
             }
             var placeResult = dirtItem.place(placeCtx);
             int afterPlace = quests.progressOf(probe, injected);
-            var placedPos = platformPos.above();
             boolean reallyPlaced = level.getBlockState(placedPos)
                     .is(net.minecraft.world.level.block.Blocks.DIRT);
             if (reallyPlaced && afterPlace == before + 1) {
@@ -2415,50 +2480,10 @@ public final class SelfTest {
      * </ol>
      */
     private void checkOceanIslandShape() {
-        var islands = HubSuite.islands();
-        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
-        if (ocean == null) {
-            fail("缺少 ocean 岛型");
-            return;
-        }
-
-        var probe = FakePlayers.spawn(server, "hubsuite_sshape",
-                ocean.entry().level(), false);
-        if (probe == null) {
-            fail("海岛形状测试用假玩家创建失败");
-            return;
-        }
-        try {
-            var island = ocean.manager().getOrCreate(
-                    probe.getUUID(), probe.getName().getString(), "ocean");
-            var anchor = ocean.manager().anchorOf(island);
-
-            /*
-             * 显式把岛周围的区块加载出来。
-             *
-             * 生产代码**绝不允许**这么做（未加载区块上的 getChunk 会同步生成整片
-             * 区块，海洋地形很重，实测被看门狗强杀过），所以建岛走的是
-             * "登记待补铺 + 每 tick 重试"。
-             *
-             * 但自检是同步执行的，没有"下一个 tick"可等 ——
-             * 而这个检查的意义恰恰是验证地形形状，不加载就没法看。
-             * 这里只加载 3×3 个区块，代价可控。
-             */
-            var oceanLevel = ocean.entry().level();
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    oceanLevel.getChunk((anchor.getX() >> 4) + dx, (anchor.getZ() >> 4) + dz);
-                }
-            }
-
-            if (!ocean.manager().ensureTerrain(island)) {
-                ok("海岛地形待补铺（区块未加载）—— 延迟机制正常，跳过形状检查");
-                return;
-            }
-
+        checkOceanIsland("hubsuite_sshape", "海岛形状（方形草皮 + 一直填到天然海床）",
+                (manager, level, island, anchor, probe) -> {
             int seaLevel = cn.dreamgary.hubsuite.world.OceanWorldGenerator.seaLevel();
-            var center = ocean.manager().anchorOf(island);
-            var level = ocean.entry().level();
+            var center = anchor;
 
             // 实测岛外的水面高度，用来核对"高出海平面几格"
             int waterTop = -1;
@@ -2533,7 +2558,7 @@ public final class SelfTest {
             // 4) 岛外应当还是海 —— 确认生成器造的是海洋而不是陆地
             var outside = new net.minecraft.core.BlockPos(
                     center.getX() + 120, seaLevel, center.getZ() + 120);
-            if (level.getChunkSource().hasChunk(outside.getX() >> 4, outside.getZ() >> 4)) {
+            if (isChunkReady(level, outside.getX() >> 4, outside.getZ() >> 4)) {
                 var st = level.getBlockState(outside);
                 if (!st.getFluidState().isEmpty()) {
                     ok("岛外 120 格外是水域（世界确实是海洋）");
@@ -2545,17 +2570,10 @@ public final class SelfTest {
                 ok("岛外区块未加载，跳过水域抽查");
             }
 
-            checkOceanIslandOutline(level, center, ocean.manager(), island);
-        } catch (Throwable t) {
-            fail("海岛形状检查异常：" + t);
-        } finally {
-            try {
-                ocean.manager().delete(probe.getUUID());
-                server.getPlayerList().remove(probe);
-            } catch (Throwable ignored) {
-                // 忽略
-            }
-        }
+            checkOceanIslandOutline(level, center,
+                    HubSuite.islands().type("ocean").orElseThrow().manager(), island);
+            return "\u00A7a[通过]\u00A7r 海岛形状/轮廓检查完成（明细见上面各条）";
+                });
     }
 
     /**
@@ -2749,45 +2767,19 @@ public final class SelfTest {
      * 这条检查就是这么验的：建岛 → 删岛 → 原地应该重新是水。
      */
     private void checkOceanDeleteRestoresWater() {
-        var islands = HubSuite.islands();
-        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
-        if (ocean == null) {
-            fail("缺少 ocean 岛型");
-            return;
-        }
-        var probe = FakePlayers.spawn(server, "hubsuite_delwater",
-                ocean.entry().level(), false);
-        if (probe == null) {
-            fail("删岛检查用假玩家创建失败");
-            return;
-        }
-        var level = ocean.entry().level();
-        try {
-            var island = ocean.manager().getOrCreate(
-                    probe.getUUID(), probe.getName().getString(), "ocean");
-            var center = ocean.manager().anchorOf(island);
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    level.getChunk((center.getX() >> 4) + dx, (center.getZ() >> 4) + dz);
-                }
-            }
-            if (!ocean.manager().ensureTerrain(island)) {
-                ok("删岛检查跳过（地形未铺好）");
-                return;
-            }
+        checkOceanIsland("hubsuite_delwater", "删岛后原地恢复成水（不留空气坑）",
+                (manager, level, island, center, probe) -> {
             int waterY = cn.dreamgary.hubsuite.world.OceanWorldGenerator.waterSurface();
             if (!level.getBlockState(center).is(net.minecraft.world.level.block.Blocks.GRASS_BLOCK)) {
-                ok("删岛检查跳过（岛中心不是草方块，地形可能刚被别的检查动过）");
-                return;
+                return "\u00A7e[跳过]\u00A7r 删岛检查：岛中心不是草方块，地形可能刚被别的检查动过";
             }
 
-            ocean.manager().delete(probe.getUUID());
+            manager.delete(probe.getUUID());
 
             // 1) 岛顶那一格必须重新是水
             var top = level.getBlockState(center);
             if (top.getFluidState().isEmpty()) {
-                fail("删岛后岛顶那一格是 " + top + "，应该是水 —— 清理把海水清成了空气");
-                return;
+                return "\u00A7c[失败]\u00A7r 删岛后岛顶那一格是 " + top + "，应该是水 —— 清理把海水清成了空气";
             }
             // 2) 往下 12 格不能有空气（有空气说明挖出了空腔、水会灌下去）
             int air = -1;
@@ -2800,20 +2792,12 @@ public final class SelfTest {
                 }
             }
             if (air > 0) {
-                fail("删岛后海面下 Y=" + air + " 出现空气 —— 水被清成空气了，海水会灌下去");
-            } else {
-                ok("删岛后原地恢复成水（水面 Y=" + waterY + " 往下 12 格都是水/实心，没有空气坑）");
+                return "\u00A7c[失败]\u00A7r 删岛后海面下 Y=" + air
+                        + " 出现空气 —— 水被清成空气了，海水会灌下去";
             }
-        } catch (Throwable t) {
-            fail("删岛检查异常：" + t);
-        } finally {
-            try {
-                ocean.manager().delete(probe.getUUID());
-                server.getPlayerList().remove(probe);
-            } catch (Throwable ignored) {
-                // 忽略
-            }
-        }
+            return "\u00A7a[通过]\u00A7r 删岛后原地恢复成水（水面 Y=" + waterY
+                    + " 往下 12 格都是水/实心，没有空气坑）";
+                });
     }
 
     /**
@@ -2871,7 +2855,7 @@ public final class SelfTest {
                 int x = (int) spawn.x() + dx;
                 int z = (int) spawn.z() + dz;
                 // 只查已加载区块：绝不为了抽样去 getChunk（会同步生成整片区块）
-                if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) {
+                if (!isChunkReady(level, x >> 4, z >> 4)) {
                     continue;
                 }
                 var top = level.getBlockState(new net.minecraft.core.BlockPos(x, 62, z));
@@ -3188,12 +3172,12 @@ public final class SelfTest {
         // 2) 纯噪声：远处没加载的坐标探测之后，区块必须仍然没加载
         int farX = 9000;
         int farZ = -9000;
-        if (level.getChunkSource().hasChunk(farX >> 4, farZ >> 4)) {
+        if (isChunkReady(level, farX >> 4, farZ >> 4)) {
             ok("选位纯噪声检查跳过（测试坐标恰好已加载）");
             return;
         }
         boolean verdict = manager.oceanBiomeAt(farX, farZ);
-        if (level.getChunkSource().hasChunk(farX >> 4, farZ >> 4)) {
+        if (isChunkReady(level, farX >> 4, farZ >> 4)) {
             fail("选位探测把 (" + farX + ", " + farZ + ") 的区块生成出来了！"
                     + "（读方块 = 同步生成整片区块，选位会一次扫几百个点）");
         } else {
@@ -3223,292 +3207,264 @@ public final class SelfTest {
      * 任何一环拦下都会让箱子打不开，而只有真的调用一次才看得出来。
      */
     private void checkChestActuallyOpens() {
-        var islands = HubSuite.islands();
-        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
-        if (ocean == null) {
-            fail("缺少 ocean 岛型");
-            return;
-        }
-        var probe = FakePlayers.spawn(server, "hubsuite_chest",
-                ocean.entry().level(), false);
-        if (probe == null) {
-            fail("箱子测试用假玩家创建失败");
-            return;
-        }
-        try {
+        checkOceanIsland("hubsuite_chest", "箱子/工作台真的能打开（走原版 useWithoutItem 分支）",
+                (manager, level, island, anchor, probe) -> {
             probe.setGameMode(net.minecraft.world.level.GameType.SURVIVAL);
-            var island = ocean.manager().getOrCreate(
-                    probe.getUUID(), probe.getName().getString(), "ocean");
-            var anchor = ocean.manager().anchorOf(island);
-            var level = ocean.entry().level();
 
-            // 加载岛周边区块（生产代码不允许，但自检是同步的，没有下一 tick 可等）
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    level.getChunk((anchor.getX() >> 4) + dx, (anchor.getZ() >> 4) + dz);
+                // 找到岛上真实的箱子（不靠猜坐标）
+                // （区块已由 checkOceanIsland 异步等到位、地形也铺好了）
+                var chestPos = findBlockNear(level, anchor, net.minecraft.world.level.block.Blocks.CHEST, 10);
+                if (chestPos == null) {
+                    return "\u00A7c[失败]\u00A7r 岛上根本没有箱子 —— 右键当然没反应";
                 }
-            }
-            if (!ocean.manager().ensureTerrain(island)) {
-                ok("箱子检查跳过（地形未铺好）");
-                return;
-            }
 
-            // 找到岛上真实的箱子（不靠猜坐标）
-            var chestPos = findBlockNear(level, anchor, net.minecraft.world.level.block.Blocks.CHEST, 10);
-            if (chestPos == null) {
-                fail("岛上根本没有箱子 —— 右键当然没反应");
-                return;
-            }
+                // 站到箱子旁边（原版要求距离不能太远）
+                probe.teleportTo(level, chestPos.getX() + 0.5, chestPos.getY(), chestPos.getZ() + 2.5,
+                        java.util.Set.of(), 0.0F, 0.0F, false);
+                // **双手必须为空**：原版 ServerPlayerGameMode.useItemOn 只在
+                // "主手和副手都空"的分支里才调用 state.useWithoutItem(...)，
+                // 而箱子正是靠 useWithoutItem 打开的。
+                // 手里拿着东西时右键箱子，原版走的是 ItemStack.useOn（放置）分支。
+                probe.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+                        net.minecraft.world.item.ItemStack.EMPTY);
+                probe.setItemInHand(net.minecraft.world.InteractionHand.OFF_HAND,
+                        net.minecraft.world.item.ItemStack.EMPTY);
+                probe.setShiftKeyDown(false);
 
-            // 站到箱子旁边（原版要求距离不能太远）
-            probe.teleportTo(level, chestPos.getX() + 0.5, chestPos.getY(), chestPos.getZ() + 2.5,
-                    java.util.Set.of(), 0.0F, 0.0F, false);
-            // **双手必须为空**：原版 ServerPlayerGameMode.useItemOn 只在
-            // "主手和副手都空"的分支里才调用 state.useWithoutItem(...)，
-            // 而箱子正是靠 useWithoutItem 打开的。
-            // 手里拿着东西时右键箱子，原版走的是 ItemStack.useOn（放置）分支。
-            probe.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
-                    net.minecraft.world.item.ItemStack.EMPTY);
-            probe.setItemInHand(net.minecraft.world.InteractionHand.OFF_HAND,
-                    net.minecraft.world.item.ItemStack.EMPTY);
-            probe.setShiftKeyDown(false);
+                // 命中点必须落在**方块朝向玩家那一面**上，否则原版会因为
+                // "点击位置离方块太远"直接判定无效（第一版写成玩家自己眼睛的位置，
+                // 结果 useItemOn 返回 Pass、什么都没发生）。
+                var hit = new net.minecraft.world.phys.BlockHitResult(
+                        new net.minecraft.world.phys.Vec3(
+                                chestPos.getX() + 0.5, chestPos.getY() + 0.5, chestPos.getZ() + 1.0),
+                        net.minecraft.core.Direction.SOUTH,
+                        chestPos, false);
 
-            // 命中点必须落在**方块朝向玩家那一面**上，否则原版会因为
-            // "点击位置离方块太远"直接判定无效（第一版写成玩家自己眼睛的位置，
-            // 结果 useItemOn 返回 Pass、什么都没发生）。
-            var hit = new net.minecraft.world.phys.BlockHitResult(
-                    new net.minecraft.world.phys.Vec3(
-                            chestPos.getX() + 0.5, chestPos.getY() + 0.5, chestPos.getZ() + 1.0),
-                    net.minecraft.core.Direction.SOUTH,
-                    chestPos, false);
-
-            // 1) 事件链：任何模组返回 FAIL 都会拦下交互
-            var verdict = net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.invoker()
-                    .interact(probe, level, net.minecraft.world.InteractionHand.MAIN_HAND, hit);
-            if (verdict == net.minecraft.world.InteractionResult.FAIL) {
-                fail("右键箱子被某个模组拦截了（UseBlockCallback 返回 FAIL）");
-            } else {
-                ok("右键箱子没有被模组拦截（事件链返回 " + verdict + "）");
-            }
-
-            /*
-             * ★ 第一优先：走**真实数据包路径**。
-             *
-             * 前面的 useWithoutItem / 事件链都只是片段 —— 真实客户端右键会发
-             * ServerboundUseItemOnPacket，服务端在 handleUseItemOn 里先做一串
-             * 校验（序列号 ack、手持物品合法性、**交互距离** isWithinBlockInteractionRange、
-             * 旁观者判定……），任何一条不过就直接 return，连方块都碰不到。
-             * 这里把这整条链路跑一遍，才有资格说"箱子能开"。
-             */
-            try {
-                probe.closeContainer();
-                var beforePacket = probe.containerMenu;
+                // 1) 事件链：任何模组返回 FAIL 都会拦下交互
+                var verdict = net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.invoker()
+                        .interact(probe, level, net.minecraft.world.InteractionHand.MAIN_HAND, hit);
+                if (verdict == net.minecraft.world.InteractionResult.FAIL) {
+                    fail("右键箱子被某个模组拦截了（UseBlockCallback 返回 FAIL）");
+                } else {
+                    ok("右键箱子没有被模组拦截（事件链返回 " + verdict + "）");
+                }
 
                 /*
-                 * 先补上"客户端已加载"这一步。
+                 * ★ 第一优先：走**真实数据包路径**。
                  *
-                 * ServerGamePacketListenerImpl.hasClientLoaded() 会检查
-                 * clientLoadedTimeoutTimer —— 它由客户端的
-                 * ServerboundPlayerLoadedPacket 清零（markClientLoaded）。
-                 * 假玩家从不发这个包，所以 hasClientLoaded() 一直是 false，
-                 * handleUseItemOn 会在第一行就 return，**任何方块交互都不生效**。
-                 * 这是测试环境的问题，不是产品问题 —— 但它会让"箱子能不能开"
-                 * 这类测试全部得出假的失败结论（实测踩过）。
+                 * 前面的 useWithoutItem / 事件链都只是片段 —— 真实客户端右键会发
+                 * ServerboundUseItemOnPacket，服务端在 handleUseItemOn 里先做一串
+                 * 校验（序列号 ack、手持物品合法性、**交互距离** isWithinBlockInteractionRange、
+                 * 旁观者判定……），任何一条不过就直接 return，连方块都碰不到。
+                 * 这里把这整条链路跑一遍，才有资格说"箱子能开"。
                  */
-                probe.connection.handleAcceptPlayerLoad(
-                        new net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket());
-
-                var packet = new net.minecraft.network.protocol.game.ServerboundUseItemOnPacket(
-                        net.minecraft.world.InteractionHand.MAIN_HAND, hit, 0);
-                probe.connection.handleUseItemOn(packet);
-                boolean packetOpened = probe.containerMenu != beforePacket
-                        && probe.containerMenu != probe.inventoryMenu;
-                if (packetOpened) {
-                    ok("走真实数据包路径右键箱子能打开（"
-                            + probe.containerMenu.getClass().getSimpleName() + "）");
+                try {
                     probe.closeContainer();
-                } else {
-                    // 逐条查 handleUseItemOn 的前置校验，定位到底卡在哪
-                    StringBuilder why = new StringBuilder();
-                    why.append("spectator=").append(probe.isSpectator());
-                    why.append(" 客户端已加载=").append(probe.connection.hasClientLoaded());
-                    why.append(" 距离=").append(String.format("%.2f",
-                            Math.sqrt(probe.distanceToSqr(
-                                    chestPos.getX() + 0.5, chestPos.getY() + 0.5,
-                                    chestPos.getZ() + 0.5))));
-                    why.append(" 在交互范围内=")
-                            .append(probe.isWithinBlockInteractionRange(chestPos, 1.0));
-                    why.append(" 主手=").append(probe.getMainHandItem());
-                    why.append(" 副手=").append(probe.getOffhandItem());
-                    why.append(" 同维度=").append(probe.level() == level);
-                    // ★ handleUseItemOn 在 offset 310 会检查 mayInteract，
-                    //   返回 false 就整个跳过交互（连方块都不碰）。
-                    why.append(" ｜mayInteract=").append(level.mayInteract(probe, chestPos));
-                    why.append(" 世界边界内=")
-                            .append(level.getWorldBorder().isWithinBounds(chestPos));
-                    why.append(" 世界边界尺寸=")
-                            .append(String.format("%.0f", level.getWorldBorder().getSize()));
-                    why.append(" 边界中心=").append(level.getWorldBorder().getCenterX())
-                            .append(',').append(level.getWorldBorder().getCenterZ());
-                    why.append(" 出生点保护=")
-                            .append(server.isUnderSpawnProtection(level, chestPos, probe));
-                    why.append(" 出生点=").append(level.getLevelData().getRespawnData().pos());
-                    /*
-                     * 这里**不算失败** —— 对照组（原版生存服）用同样的方法也开不了，
-                     * 证明是"用假玩家模拟客户端数据包"这件事本身不忠实
-                     * （handleUseItemOn 还依赖数据包序列号 ack 等真实连接状态），
-                     * 而不是产品代码有问题。
-                     *
-                     * 真正有判定力的是下面两条：事件链未被拦截、以及方块的
-                     * useWithoutItem 能打开容器 —— 那才是原版开箱走的分支。
-                     */
-                    ok("数据包级模拟未能开箱（对照组同样失败，属模拟局限）：" + why);
-                }
-            } catch (Throwable t) {
-                fail("真实数据包路径右键箱子抛异常：" + t);
-            }
+                    var beforePacket = probe.containerMenu;
 
-            /*
-             * ★ 对照组：在**原版维度的普通世界**里做同样的事。
-             *
-             * 如果这边能开、海岛维度不能开，说明是维度相关的问题；
-             * 如果两边都开不了，说明是我这套"模拟客户端"还不够忠实
-             * （那就要换一种验证方式，而不是继续怀疑产品代码）。
-             */
-            try {
-                var survival = worlds.subServer("survival").orElse(null);
-                if (survival != null) {
-                    var sLevel = survival.level();
-                    var sPos = net.minecraft.core.BlockPos.containing(
-                            survival.spawn().x(), survival.spawn().y() + 1, survival.spawn().z());
-                    sLevel.getChunk(sPos.getX() >> 4, sPos.getZ() >> 4);
-                    // 在出生点上方放一个箱子（并清出落脚空间）
-                    sLevel.setBlockAndUpdate(sPos, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
-                    sLevel.setBlockAndUpdate(sPos.above(), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
-                    var sChest = sPos.below();
-                    if (!sLevel.getBlockState(sChest)
-                            .is(net.minecraft.world.level.block.Blocks.CHEST)) {
-                        sLevel.setBlockAndUpdate(sChest,
-                                net.minecraft.world.level.block.Blocks.CHEST.defaultBlockState());
-                    }
-                    probe.teleportTo(sLevel, sChest.getX() + 0.5, sChest.getY() + 1.0,
-                            sChest.getZ() + 2.5, java.util.Set.of(), 0.0F, 0.0F, false);
-                    probe.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
-                            net.minecraft.world.item.ItemStack.EMPTY);
-                    probe.setItemInHand(net.minecraft.world.InteractionHand.OFF_HAND,
-                            net.minecraft.world.item.ItemStack.EMPTY);
+                    /*
+                     * 先补上"客户端已加载"这一步。
+                     *
+                     * ServerGamePacketListenerImpl.hasClientLoaded() 会检查
+                     * clientLoadedTimeoutTimer —— 它由客户端的
+                     * ServerboundPlayerLoadedPacket 清零（markClientLoaded）。
+                     * 假玩家从不发这个包，所以 hasClientLoaded() 一直是 false，
+                     * handleUseItemOn 会在第一行就 return，**任何方块交互都不生效**。
+                     * 这是测试环境的问题，不是产品问题 —— 但它会让"箱子能不能开"
+                     * 这类测试全部得出假的失败结论（实测踩过）。
+                     */
                     probe.connection.handleAcceptPlayerLoad(
                             new net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket());
-                    var sHit = new net.minecraft.world.phys.BlockHitResult(
-                            new net.minecraft.world.phys.Vec3(sChest.getX() + 0.5,
-                                    sChest.getY() + 0.5, sChest.getZ() + 1.0),
-                            net.minecraft.core.Direction.SOUTH, sChest, false);
-                    probe.closeContainer();
-                    var sBefore = probe.containerMenu;
-                    probe.connection.handleUseItemOn(
-                            new net.minecraft.network.protocol.game.ServerboundUseItemOnPacket(
-                                    net.minecraft.world.InteractionHand.MAIN_HAND, sHit, 0));
-                    boolean sOpened = probe.containerMenu != sBefore
+
+                    var packet = new net.minecraft.network.protocol.game.ServerboundUseItemOnPacket(
+                            net.minecraft.world.InteractionHand.MAIN_HAND, hit, 0);
+                    probe.connection.handleUseItemOn(packet);
+                    boolean packetOpened = probe.containerMenu != beforePacket
                             && probe.containerMenu != probe.inventoryMenu;
-                    HubSuite.logger().info("  [对照] 生存服（原版维度）走数据包路径开箱子：{}",
-                            sOpened ? "成功" : "失败");
-                    if (sOpened) {
-                        ok("对照组：原版维度里同样的方法能开箱子 → 海岛维度的问题是真实的");
+                    if (packetOpened) {
+                        ok("走真实数据包路径右键箱子能打开（"
+                                + probe.containerMenu.getClass().getSimpleName() + "）");
                         probe.closeContainer();
                     } else {
-                        ok("对照组：原版维度里也开不了 → 是我的模拟方式不忠实，"
-                                + "不代表产品有问题（结论以 useWithoutItem 那条为准）");
+                        // 逐条查 handleUseItemOn 的前置校验，定位到底卡在哪
+                        StringBuilder why = new StringBuilder();
+                        why.append("spectator=").append(probe.isSpectator());
+                        why.append(" 客户端已加载=").append(probe.connection.hasClientLoaded());
+                        why.append(" 距离=").append(String.format("%.2f",
+                                Math.sqrt(probe.distanceToSqr(
+                                        chestPos.getX() + 0.5, chestPos.getY() + 0.5,
+                                        chestPos.getZ() + 0.5))));
+                        why.append(" 在交互范围内=")
+                                .append(probe.isWithinBlockInteractionRange(chestPos, 1.0));
+                        why.append(" 主手=").append(probe.getMainHandItem());
+                        why.append(" 副手=").append(probe.getOffhandItem());
+                        why.append(" 同维度=").append(probe.level() == level);
+                        // ★ handleUseItemOn 在 offset 310 会检查 mayInteract，
+                        //   返回 false 就整个跳过交互（连方块都不碰）。
+                        why.append(" ｜mayInteract=").append(level.mayInteract(probe, chestPos));
+                        why.append(" 世界边界内=")
+                                .append(level.getWorldBorder().isWithinBounds(chestPos));
+                        why.append(" 世界边界尺寸=")
+                                .append(String.format("%.0f", level.getWorldBorder().getSize()));
+                        why.append(" 边界中心=").append(level.getWorldBorder().getCenterX())
+                                .append(',').append(level.getWorldBorder().getCenterZ());
+                        why.append(" 出生点保护=")
+                                .append(server.isUnderSpawnProtection(level, chestPos, probe));
+                        why.append(" 出生点=").append(level.getLevelData().getRespawnData().pos());
+                        /*
+                         * 这里**不算失败** —— 对照组（原版生存服）用同样的方法也开不了，
+                         * 证明是"用假玩家模拟客户端数据包"这件事本身不忠实
+                         * （handleUseItemOn 还依赖数据包序列号 ack 等真实连接状态），
+                         * 而不是产品代码有问题。
+                         *
+                         * 真正有判定力的是下面两条：事件链未被拦截、以及方块的
+                         * useWithoutItem 能打开容器 —— 那才是原版开箱走的分支。
+                         */
+                        ok("数据包级模拟未能开箱（对照组同样失败，属模拟局限）：" + why);
                     }
+                } catch (Throwable t) {
+                    fail("真实数据包路径右键箱子抛异常：" + t);
                 }
-            } catch (Throwable t) {
-                HubSuite.logger().warn("  [对照] 生存服对照组异常：{}", t.toString());
-            }
 
-            /*
-             * 真正决定"箱子能不能开"的是方块自己的 useWithoutItem
-             * （ChestBlock 在这里打开容器）。直接调用它，等价于原版
-             * ServerPlayerGameMode.useItemOn 在"双手空 + 未潜行"时走的那条分支。
-             *
-             * 注意**不要**用 probe.gameMode.useItemOn(...) 来测 ——
-             * 那条路径依赖客户端数据包建立的上下文，直接调用会返回 Pass
-             * 且不开容器，给出假的失败结论（第一版就踩了这个坑）。
-             */
-            var chestState = level.getBlockState(chestPos);
+                /*
+                 * ★ 对照组：在**原版维度的普通世界**里做同样的事。
+                 *
+                 * 如果这边能开、海岛维度不能开，说明是维度相关的问题；
+                 * 如果两边都开不了，说明是我这套"模拟客户端"还不够忠实
+                 * （那就要换一种验证方式，而不是继续怀疑产品代码）。
+                 */
+                try {
+                    var survival = worlds.subServer("survival").orElse(null);
+                    var sLevel = survival == null ? null : survival.level();
+                    var sPos = survival == null ? null : net.minecraft.core.BlockPos.containing(
+                            survival.spawn().x(), survival.spawn().y() + 1, survival.spawn().z());
+                    if (sLevel == null) {
+                        ok("对照组跳过（没有生存服）");
+                    } else if (!isChunkReady(sLevel, sPos.getX() >> 4, sPos.getZ() >> 4)) {
+                        // 出生点区块没就位就**跳过**，绝不用 getChunk 同步生成它
+                        // （冷存档上那就是几十秒的阻塞，看门狗会强杀）
+                        ok("对照组跳过（生存服出生点区块尚未就位）");
+                    } else {
+                        // 在出生点上方放一个箱子（并清出落脚空间）
+                        sLevel.setBlockAndUpdate(sPos, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                        sLevel.setBlockAndUpdate(sPos.above(), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                        var sChest = sPos.below();
+                        if (!sLevel.getBlockState(sChest)
+                                .is(net.minecraft.world.level.block.Blocks.CHEST)) {
+                            sLevel.setBlockAndUpdate(sChest,
+                                    net.minecraft.world.level.block.Blocks.CHEST.defaultBlockState());
+                        }
+                        probe.teleportTo(sLevel, sChest.getX() + 0.5, sChest.getY() + 1.0,
+                                sChest.getZ() + 2.5, java.util.Set.of(), 0.0F, 0.0F, false);
+                        probe.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+                                net.minecraft.world.item.ItemStack.EMPTY);
+                        probe.setItemInHand(net.minecraft.world.InteractionHand.OFF_HAND,
+                                net.minecraft.world.item.ItemStack.EMPTY);
+                        probe.connection.handleAcceptPlayerLoad(
+                                new net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket());
+                        var sHit = new net.minecraft.world.phys.BlockHitResult(
+                                new net.minecraft.world.phys.Vec3(sChest.getX() + 0.5,
+                                        sChest.getY() + 0.5, sChest.getZ() + 1.0),
+                                net.minecraft.core.Direction.SOUTH, sChest, false);
+                        probe.closeContainer();
+                        var sBefore = probe.containerMenu;
+                        probe.connection.handleUseItemOn(
+                                new net.minecraft.network.protocol.game.ServerboundUseItemOnPacket(
+                                        net.minecraft.world.InteractionHand.MAIN_HAND, sHit, 0));
+                        boolean sOpened = probe.containerMenu != sBefore
+                                && probe.containerMenu != probe.inventoryMenu;
+                        HubSuite.logger().info("  [对照] 生存服（原版维度）走数据包路径开箱子：{}",
+                                sOpened ? "成功" : "失败");
+                        if (sOpened) {
+                            ok("对照组：原版维度里同样的方法能开箱子 → 海岛维度的问题是真实的");
+                            probe.closeContainer();
+                        } else {
+                            ok("对照组：原版维度里也开不了 → 是我的模拟方式不忠实，"
+                                    + "不代表产品有问题（结论以 useWithoutItem 那条为准）");
+                        }
+                    }
+                } catch (Throwable t) {
+                    HubSuite.logger().warn("  [对照] 生存服对照组异常：{}", t.toString());
+                }
 
-            /*
-             * ★★ 关键前置条件：箱子必须有**方块实体**。
-             *
-             * ChestBlock.useWithoutItem 的逻辑是：
-             *   getBlockEntity(pos) instanceof ChestBlockEntity ?
-             *       有 → 开界面
-             *       没有 → **什么都不做，但仍然返回 SUCCESS**
-             * 所以"返回值是 SUCCESS"根本不能证明箱子能开 ——
-             * 之前那条断言就是这么假通过的（用户实测：右键毫无反应）。
-             * 必须直接检查方块实体在不在。
-             */
-            var be = level.getBlockEntity(chestPos);
-            if (be instanceof net.minecraft.world.level.block.entity.ChestBlockEntity) {
-                ok("箱子有方块实体（ChestBlockEntity 存在，容器才可能打开）");
-            } else {
-                fail("箱子没有方块实体（实际是 " + be + "）—— "
-                        + "useWithoutItem 会返回 SUCCESS 但不会打开任何界面，"
-                        + "玩家右键毫无反应");
-            }
+                /*
+                 * 真正决定"箱子能不能开"的是方块自己的 useWithoutItem
+                 * （ChestBlock 在这里打开容器）。直接调用它，等价于原版
+                 * ServerPlayerGameMode.useItemOn 在"双手空 + 未潜行"时走的那条分支。
+                 *
+                 * 注意**不要**用 probe.gameMode.useItemOn(...) 来测 ——
+                 * 那条路径依赖客户端数据包建立的上下文，直接调用会返回 Pass
+                 * 且不开容器，给出假的失败结论（第一版就踩了这个坑）。
+                 */
+                var chestState = level.getBlockState(chestPos);
 
-            // 原版的"箱子被挡住就打不开"判定
-            if (net.minecraft.world.level.block.ChestBlock.isChestBlockedAt(level, chestPos)) {
-                fail("箱子被判定为受阻（上方有实心方块）—— 原版不会打开它");
-            } else {
-                ok("箱子未被阻挡（上方是 "
-                        + level.getBlockState(chestPos.above()).getBlock().getName().getString()
-                        + "）");
-            }
+                /*
+                 * ★★ 关键前置条件：箱子必须有**方块实体**。
+                 *
+                 * ChestBlock.useWithoutItem 的逻辑是：
+                 *   getBlockEntity(pos) instanceof ChestBlockEntity ?
+                 *       有 → 开界面
+                 *       没有 → **什么都不做，但仍然返回 SUCCESS**
+                 * 所以"返回值是 SUCCESS"根本不能证明箱子能开 ——
+                 * 之前那条断言就是这么假通过的（用户实测：右键毫无反应）。
+                 * 必须直接检查方块实体在不在。
+                 */
+                var be = level.getBlockEntity(chestPos);
+                if (be instanceof net.minecraft.world.level.block.entity.ChestBlockEntity) {
+                    ok("箱子有方块实体（ChestBlockEntity 存在，容器才可能打开）");
+                } else {
+                    fail("箱子没有方块实体（实际是 " + be + "）—— "
+                            + "useWithoutItem 会返回 SUCCESS 但不会打开任何界面，"
+                            + "玩家右键毫无反应");
+                }
 
-            probe.closeContainer();
-            var before = probe.containerMenu;
-            var opened = chestState.useWithoutItem(level, probe, hit);
-            boolean didOpen = probe.containerMenu != before
-                    && probe.containerMenu != probe.inventoryMenu;
-            if (didOpen) {
-                ok("右键箱子能打开容器（" + probe.containerMenu.getClass().getSimpleName() + "）");
+                // 原版的"箱子被挡住就打不开"判定
+                if (net.minecraft.world.level.block.ChestBlock.isChestBlockedAt(level, chestPos)) {
+                    fail("箱子被判定为受阻（上方有实心方块）—— 原版不会打开它");
+                } else {
+                    ok("箱子未被阻挡（上方是 "
+                            + level.getBlockState(chestPos.above()).getBlock().getName().getString()
+                            + "）");
+                }
+
                 probe.closeContainer();
-            } else {
-                fail("右键箱子打不开（方块返回 " + opened + "，开容器=" + didOpen + "）");
-            }
-
-            // 3) 工作台同样要能开
-            var tablePos = findBlockNear(level, anchor,
-                    net.minecraft.world.level.block.Blocks.CRAFTING_TABLE, 10);
-            if (tablePos == null) {
-                ok("岛上没有工作台（海岛默认物资不含，跳过）");
-            } else {
-                probe.teleportTo(level, tablePos.getX() + 0.5, tablePos.getY(), tablePos.getZ() + 2.5,
-                        java.util.Set.of(), 0.0F, 0.0F, false);
-                var th = new net.minecraft.world.phys.BlockHitResult(
-                        new net.minecraft.world.phys.Vec3(tablePos.getX() + 0.5,
-                                tablePos.getY() + 0.5, tablePos.getZ() + 1.0),
-                        net.minecraft.core.Direction.SOUTH, tablePos, false);
-                probe.closeContainer();
-                var b2 = probe.containerMenu;
-                var tableResult = level.getBlockState(tablePos)
-                        .useWithoutItem(level, probe, th);
-                if (probe.containerMenu != b2 && probe.containerMenu != probe.inventoryMenu) {
-                    ok("右键工作台能打开（" + tableResult + "）");
+                var before = probe.containerMenu;
+                var opened = chestState.useWithoutItem(level, probe, hit);
+                boolean didOpen = probe.containerMenu != before
+                        && probe.containerMenu != probe.inventoryMenu;
+                if (didOpen) {
+                    ok("右键箱子能打开容器（" + probe.containerMenu.getClass().getSimpleName() + "）");
                     probe.closeContainer();
                 } else {
-                    fail("右键工作台打不开（" + tableResult + "）");
+                    fail("右键箱子打不开（方块返回 " + opened + "，开容器=" + didOpen + "）");
                 }
-            }
-        } catch (Throwable t) {
-            fail("箱子交互检查异常：" + t);
-        } finally {
-            try {
-                ocean.manager().delete(probe.getUUID());
-                server.getPlayerList().remove(probe);
-            } catch (Throwable ignored) {
-                // 忽略
-            }
-        }
+
+                // 3) 工作台同样要能开
+                var tablePos = findBlockNear(level, anchor,
+                        net.minecraft.world.level.block.Blocks.CRAFTING_TABLE, 10);
+                if (tablePos == null) {
+                    ok("岛上没有工作台（海岛默认物资不含，跳过）");
+                } else {
+                    probe.teleportTo(level, tablePos.getX() + 0.5, tablePos.getY(), tablePos.getZ() + 2.5,
+                            java.util.Set.of(), 0.0F, 0.0F, false);
+                    var th = new net.minecraft.world.phys.BlockHitResult(
+                            new net.minecraft.world.phys.Vec3(tablePos.getX() + 0.5,
+                                    tablePos.getY() + 0.5, tablePos.getZ() + 1.0),
+                            net.minecraft.core.Direction.SOUTH, tablePos, false);
+                    probe.closeContainer();
+                    var b2 = probe.containerMenu;
+                    var tableResult = level.getBlockState(tablePos)
+                            .useWithoutItem(level, probe, th);
+                    if (probe.containerMenu != b2 && probe.containerMenu != probe.inventoryMenu) {
+                        ok("右键工作台能打开（" + tableResult + "）");
+                        probe.closeContainer();
+                    } else {
+                        fail("右键工作台打不开（" + tableResult + "）");
+                    }
+                }
+
+            return "\u00A7a[通过]\u00A7r 箱子/工作台开箱检查完成（明细见上面各条）";
+                });
     }
 
     /**
@@ -3598,51 +3554,103 @@ public final class SelfTest {
         }
     }
 
-    /**
-     * 铺开 {@code (2r+1)²} 个区块，但**绝不阻塞主线程**。
-     *
-     * <p><b>为什么不能用 {@code level.getChunk(...)}：</b>那是同步加载 ——
-     * 未生成的区块会在主线程上现生成。自检跑在主线程，一个 19×19 的循环
-     * （361 个区块）在**全新存档**上必然超过 60 秒看门狗上限，服务端被强杀。
-     * 实测崩溃栈：
-     * {@code SelfTest.checkOceanStructures} → {@code ServerChunkCache.getChunk}
-     * → {@code BlockableEventLoop.managedBlock}。
-     * 这个坑项目里累计踩过多次，只是前几次是 {@code getBlockState}，这次是 {@code getChunk} 本身。
-     *
-     * <p><b>也不能"原地等"：</b>第一版改法是加票据后在主线程 {@code Thread.sleep}
-     * 轮询 {@code hasChunk}。同样会卡死 —— 区块生成要主线程参与，
-     * 主线程占着不放，区块就永远不会就位，白等到看门狗开火（实测第二次踩）。
-     *
-     * <p><b>所以：</b>票据挂上去（区块由服务端异步生成），这里只**数一眼**
-     * 当前已就位的数量就返回。冷存档上会少覆盖，如实少报；
-     * 等这些区块被异步生成完之后再跑一次自检，就是满覆盖。
-     *
-     * @return 已就位的区块数
-     */
-    private int loadRegionAsync(net.minecraft.server.level.ServerLevel level,
-                                int cx, int cz, int r) {
-        var chunkSource = level.getChunkSource();
-        var center = new net.minecraft.world.level.ChunkPos(cx, cz);
-        try {
-            // addTicketWithRadius（不是 *AndLoad*）：只登记票据，不等加载完成
-            chunkSource.addTicketWithRadius(
-                    net.minecraft.server.level.TicketType.PLAYER_LOADING, center, r);
-        } catch (Throwable t) {
-            HubSuite.logger().warn("添加区块加载票据失败，只能检查已加载的部分：{}", t.toString());
-        }
+    // ------------------------------------------------------------------
+    // 海岛类检查的统一骨架
+    // ------------------------------------------------------------------
 
-        int total = (2 * r + 1) * (2 * r + 1);
-        int ready = 0;
-        for (int dx = -r; dx <= r; dx++) {
-            for (int dz = -r; dz <= r; dz++) {
-                if (chunkSource.hasChunk(cx + dx, cz + dz)) {
-                    ready++;
-                }
+    /** 海岛检查里"要等世界生成"的那一半。 */
+    @FunctionalInterface
+    private interface IslandCheck {
+        String run(cn.dreamgary.hubsuite.island.IslandManager manager,
+                   net.minecraft.server.level.ServerLevel level,
+                   cn.dreamgary.hubsuite.island.IslandManager.Island island,
+                   net.minecraft.core.BlockPos anchor, ServerPlayer probe) throws Throwable;
+    }
+
+    /**
+     * 海岛类检查的统一入口：建岛 → **异步**等岛周区块 → 铺地形 → 断言 → 清理。
+     *
+     * <p><b>为什么不就地 {@code level.getChunk(...)}：</b>那是同步生成。
+     * 这些调用点原来都是"3×3 同步加载"，注释里写着"代价可控" ——
+     * 但**冷存档上每个区块都要现生成**，单次 tick 累计超过 60 秒看门狗上限，
+     * 实测自检跑到第 36 步服务端被强杀（崩溃栈就落在其中一个 3×3 循环里）。
+     *
+     * <p>现在改成：挂加载票据 → 没就位就登记延迟项返回 →
+     * 由 {@link #pumpDeferred} 每 tick 推进，生成好了再跑断言。
+     * 超时则如实记为"跳过"，不冒充通过也不误报失败。
+     */
+    private void checkOceanIsland(String probeName, String description, IslandCheck check) {
+        checkIsland("ocean", probeName, description, check);
+    }
+
+    private void checkIsland(String typeId, String probeName, String description,
+                             IslandCheck check) {
+        var islands = HubSuite.islands();
+        var type = islands == null ? null : islands.type(typeId).orElse(null);
+        if (type == null) {
+            fail("缺少 " + typeId + " 岛型");
+            return;
+        }
+        var level = type.entry().level();
+        var manager = type.manager();
+        var probe = FakePlayers.spawn(server, probeName, level, false);
+        if (probe == null) {
+            fail(description + "：测试用假玩家创建失败");
+            return;
+        }
+        try {
+            var island = manager.getOrCreate(
+                    probe.getUUID(), probe.getName().getString(), typeId);
+            var anchor = manager.anchorOf(island);
+            final int cx = anchor.getX() >> 4;
+            final int cz = anchor.getZ() >> 4;
+            final int r = 1;
+            if (readyChunks(level, cx, cz, r) < regionSize(r)) {
+                defer(description + "（等岛周 " + regionSize(r) + " 个区块生成）",
+                        () -> readyChunks(level, cx, cz, r) >= regionSize(r),
+                        () -> {
+                            if (!manager.ensureTerrain(island)) {
+                                return "\u00A7a[通过]\u00A7r " + description
+                                        + "：地形待补铺（区块未加载），跳过";
+                            }
+                            try {
+                                return check.run(manager, level, island, anchor, probe);
+                            } catch (Throwable t) {
+                                return "\u00A7c[失败]\u00A7r " + description + "异常：" + t;
+                            }
+                        },
+                        () -> releaseIslandProbe(manager, probe),
+                        600);
+                return;
+            }
+            // 已就位：直接跑，走原来那条同步路径（warm 存档上就是这条路）
+            if (!manager.ensureTerrain(island)) {
+                ok(description + "：地形待补铺（区块未加载），跳过");
+                return;
+            }
+            ok(check.run(manager, level, island, anchor, probe));
+        } catch (Throwable t) {
+            fail(description + "异常：" + t);
+        } finally {
+            if (deferred.isEmpty()) {
+                releaseIslandProbe(manager, probe);
             }
         }
-        HubSuite.logger().info("  [自检] 结构检查区域内已就位区块 {}/{}（半径 {}，其余交由服务端异步生成）",
-                ready, total, r);
-        return ready;
+    }
+
+    /** 清理测试岛与假玩家。 */
+    private void releaseIslandProbe(cn.dreamgary.hubsuite.island.IslandManager manager,
+                                    ServerPlayer probe) {
+        try {
+            manager.delete(probe.getUUID());
+        } catch (Throwable ignored) {
+            // 忽略
+        }
+        try {
+            server.getPlayerList().remove(probe);
+        } catch (Throwable ignored) {
+            // 忽略
+        }
     }
 
     /**
@@ -3689,60 +3697,21 @@ public final class SelfTest {
                     probe.getUUID(), probe.getName().getString(), "ocean");
             var anchor = ocean.manager().anchorOf(island);
 
-            // 先把岛周围一大片区块**异步**加载出来：天然结构的间距是几十个区块，
-            // 不铺开一片就看不到（正式游玩时玩家游过去，区块会自然加载）。
-            // 注意必须走票据（异步），绝不能用 level.getChunk 同步拉 361 个区块 ——
-            // 全新存档上那一下就是 60 秒看门狗强杀（本文件 loadRegionAsync 的注释里有崩溃栈）。
-            int cx = anchor.getX() >> 4;
-            int cz = anchor.getZ() >> 4;
-            int have = loadRegionAsync(level, cx, cz, 9);
-            if (!ocean.manager().ensureTerrain(island)) {
-                ok("结构检查跳过（地形未铺好）");
+            // 天然结构的间距是几十个区块，不铺开一片就看不到
+            // （正式游玩时玩家游过去，区块会自然加载）。
+            // 注意必须走票据异步铺 + 跨 tick 等：绝不能用 level.getChunk 同步拉
+            // 361 个区块 —— 全新存档上那一下就是 60 秒看门狗强杀（实测跑崩过）。
+            final int cx = anchor.getX() >> 4;
+            final int cz = anchor.getZ() >> 4;
+            final int r = 9;
+            int have = readyChunks(level, cx, cz, r);
+            if (have < regionSize(r)) {
+                defer("海岛附近的天然海洋结构（等 " + regionSize(r) + " 个区块生成）",
+                        () -> readyChunks(level, cx, cz, r) >= regionSize(r),
+                        () -> scanOceanStructures(level, cx, cz, r), 600);
                 return;
             }
-
-            // 结构是异步写在区块里的，这里直接问区块的 structure starts
-            var structureRegistry = server.registryAccess()
-                    .lookupOrThrow(net.minecraft.core.registries.Registries.STRUCTURE);
-            int found = 0;
-            int shipwreck = 0;
-            StringBuilder names = new StringBuilder();
-            for (int dx = -9; dx <= 9; dx++) {
-                for (int dz = -9; dz <= 9; dz++) {
-                    var chunk = chunkSourceNow(level, cx + dx, cz + dz);
-                    if (chunk == null) {
-                        continue;   // 还没就位就跳过，不为了它同步生成
-                    }
-                    for (var start : chunk.getAllStarts().values()) {
-                        if (!start.isValid()) {
-                            continue;
-                        }
-                        found++;
-                        // 用注册表 id 而不是类名：原版沉船是 JigsawStructure，
-                        // 按类名数会全部漏掉（第一版就是这么错过的）
-                        var key = structureRegistry.getKey(start.getStructure());
-                        String path = key == null ? "?" : key.getPath();
-                        if (path.contains("shipwreck")) {
-                            shipwreck++;
-                        }
-                        if (names.length() < 120) {
-                            names.append(path).append(' ');
-                        }
-                    }
-                }
-            }
-            if (found > 0) {
-                ok("岛附近 19×19 区块内有 " + found + " 个**天然**海洋结构"
-                        + "（沉船 " + shipwreck + " 个）：" + names.toString().trim());
-            } else if (have < 361) {
-                // 冷存档上区块来不及生成完就超了等待预算。
-                // 这时**不能判失败** —— 一个结构都没看到只是因为没看全，
-                // 而不是"群系源没让结构通过"。少报比误报好。
-                ok("结构检查跳过（区域内只就位 " + have + "/361 个区块，"
-                        + "冷存档首次生成较慢；地图生成过一遍后重跑即可）");
-            } else {
-                fail("岛附近 19×19 区块内一个结构都没有 —— 海洋群系源没让原版结构通过检查");
-            }
+            ok(scanOceanStructures(level, cx, cz, r));
         } catch (Throwable t) {
             fail("结构检查异常：" + t);
         } finally {
@@ -3753,6 +3722,52 @@ public final class SelfTest {
                 // 忽略
             }
         }
+    }
+
+    /**
+     * 扫描已就位区块里的结构。**只读已加载的区块**，不为了它同步生成。
+     *
+     * <p>区块没全就位时如实少报（"只看了 N 个"），不冒充"一个结构都没有"。
+     */
+    private String scanOceanStructures(net.minecraft.server.level.ServerLevel level,
+                                       int cx, int cz, int r) {
+        var structureRegistry = server.registryAccess()
+                .lookupOrThrow(net.minecraft.core.registries.Registries.STRUCTURE);
+        int found = 0;
+        int shipwreck = 0;
+        int scanned = 0;
+        StringBuilder names = new StringBuilder();
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dz = -r; dz <= r; dz++) {
+                var chunk = chunkSourceNow(level, cx + dx, cz + dz);
+                if (chunk == null) {
+                    continue;   // 还没就位就跳过，不为了它同步生成
+                }
+                scanned++;
+                for (var start : chunk.getAllStarts().values()) {
+                    if (!start.isValid()) {
+                        continue;
+                    }
+                    found++;
+                    // 用注册表 id 而不是类名：原版沉船是 JigsawStructure，
+                    // 按类名数会全部漏掉（第一版就是这么错过的）
+                    var key = structureRegistry.getKey(start.getStructure());
+                    String path = key == null ? "?" : key.getPath();
+                    if (path.contains("shipwreck")) {
+                        shipwreck++;
+                    }
+                    if (names.length() < 120) {
+                        names.append(path).append(' ');
+                    }
+                }
+            }
+        }
+        if (found > 0) {
+            return "\u00A7a[通过]\u00A7r 岛附近 " + scanned + " 个区块内有 " + found
+                    + " 个**天然**海洋结构（沉船 " + shipwreck + " 个）：" + names.toString().trim();
+        }
+        return "\u00A7c[失败]\u00A7r 岛附近 " + scanned
+                + " 个区块内一个结构都没有 —— 海洋群系源没让原版结构通过检查";
     }
 
     /**
@@ -3937,7 +3952,11 @@ public final class SelfTest {
             var sLevel = survival.level();
             var pos = net.minecraft.core.BlockPos.containing(
                     survival.spawn().x(), survival.spawn().y() + 1, survival.spawn().z());
-            sLevel.getChunk(pos.getX() >> 4, pos.getZ() >> 4);
+            // 出生点区块没就位就跳过，绝不用 getChunk 同步生成（冷存档上会卡到看门狗强杀）
+            if (!isChunkReady(sLevel, pos.getX() >> 4, pos.getZ() >> 4)) {
+                ok("菜单误吞检查跳过（生存服出生点区块尚未就位）");
+                return;
+            }
             sLevel.setBlockAndUpdate(pos,
                     net.minecraft.world.level.block.Blocks.CHEST.defaultBlockState());
             var be = sLevel.getBlockEntity(pos);
@@ -3998,75 +4017,40 @@ public final class SelfTest {
      * <p>这条测试直接断言那个返回值 —— 只要有人再写错一次就会立刻红。
      */
     private void checkChestInteractionChainIntact() {
-        var islands = HubSuite.islands();
-        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
-        if (ocean == null) {
-            fail("缺少 ocean 岛型");
-            return;
-        }
-        var probe = FakePlayers.spawn(server, "hubsuite_chain",
-                ocean.entry().level(), false);
-        if (probe == null) {
-            fail("链路检查用假玩家创建失败");
-            return;
-        }
-        try {
-            var island = ocean.manager().getOrCreate(
-                    probe.getUUID(), probe.getName().getString(), "ocean");
-            var anchor = ocean.manager().anchorOf(island);
-            var level = ocean.entry().level();
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    level.getChunk((anchor.getX() >> 4) + dx, (anchor.getZ() >> 4) + dz);
-                }
-            }
-            if (!ocean.manager().ensureTerrain(island)) {
-                ok("链路检查跳过（地形未铺好）");
-                return;
-            }
-            var chestPos = findBlockNear(level, anchor,
-                    net.minecraft.world.level.block.Blocks.CHEST, 10);
-            if (chestPos == null) {
-                fail("岛上没有箱子，无法验证开箱链路");
-                return;
-            }
+        checkOceanIsland("hubsuite_chain", "开箱链路完好（useItemOn 没有被事件处理器覆盖）",
+                (manager, level, island, anchor, probe) -> {
+                    var chestPos = findBlockNear(level, anchor,
+                            net.minecraft.world.level.block.Blocks.CHEST, 10);
+                    if (chestPos == null) {
+                        return "\u00A7c[失败]\u00A7r 岛上没有箱子，无法验证开箱链路";
+                    }
 
-            probe.setGameMode(net.minecraft.world.level.GameType.SURVIVAL);
-            probe.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
-                    net.minecraft.world.item.ItemStack.EMPTY);
-            probe.setItemInHand(net.minecraft.world.InteractionHand.OFF_HAND,
-                    net.minecraft.world.item.ItemStack.EMPTY);
-            var hit = new net.minecraft.world.phys.BlockHitResult(
-                    new net.minecraft.world.phys.Vec3(chestPos.getX() + 0.5,
-                            chestPos.getY() + 0.5, chestPos.getZ() + 1.0),
-                    net.minecraft.core.Direction.SOUTH, chestPos, false);
+                    probe.setGameMode(net.minecraft.world.level.GameType.SURVIVAL);
+                    probe.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+                            net.minecraft.world.item.ItemStack.EMPTY);
+                    probe.setItemInHand(net.minecraft.world.InteractionHand.OFF_HAND,
+                            net.minecraft.world.item.ItemStack.EMPTY);
+                    var hit = new net.minecraft.world.phys.BlockHitResult(
+                            new net.minecraft.world.phys.Vec3(chestPos.getX() + 0.5,
+                                    chestPos.getY() + 0.5, chestPos.getZ() + 1.0),
+                            net.minecraft.core.Direction.SOUTH, chestPos, false);
 
-            /*
-             * 这一步会同时跑过所有 BlockEvents.USE_ITEM_ON 监听器 ——
-             * 只要有任何一个返回了 PASS（而不是 null），返回值就会被覆盖。
-             */
-            var result = level.getBlockState(chestPos).useItemOn(
-                    net.minecraft.world.item.ItemStack.EMPTY, level, probe,
-                    net.minecraft.world.InteractionHand.MAIN_HAND, hit);
+                    /*
+                     * 这一步会同时跑过所有 BlockEvents.USE_ITEM_ON 监听器 ——
+                     * 只要有任何一个返回了 PASS（而不是 null），返回值就会被覆盖。
+                     */
+                    var result = level.getBlockState(chestPos).useItemOn(
+                            net.minecraft.world.item.ItemStack.EMPTY, level, probe,
+                            net.minecraft.world.InteractionHand.MAIN_HAND, hit);
 
-            if (result == net.minecraft.world.InteractionResult.TRY_WITH_EMPTY_HAND) {
-                ok("箱子 useItemOn 返回 TRY_WITH_EMPTY_HAND（开箱链路完好）");
-            } else {
-                fail("箱子 useItemOn 被覆盖成了 " + result
-                        + "（应为 TRY_WITH_EMPTY_HAND）—— "
-                        + "某个 BlockEvents.USE_ITEM_ON 监听器返回了 PASS 而不是 null，"
-                        + "会导致**所有箱子永远打不开**");
-            }
-        } catch (Throwable t) {
-            fail("开箱链路检查异常：" + t);
-        } finally {
-            try {
-                ocean.manager().delete(probe.getUUID());
-                server.getPlayerList().remove(probe);
-            } catch (Throwable ignored) {
-                // 忽略
-            }
-        }
+                    if (result == net.minecraft.world.InteractionResult.TRY_WITH_EMPTY_HAND) {
+                        return "\u00A7a[通过]\u00A7r 箱子 useItemOn 返回 TRY_WITH_EMPTY_HAND（开箱链路完好）";
+                    }
+                    return "\u00A7c[失败]\u00A7r 箱子 useItemOn 被覆盖成了 " + result
+                            + "（应为 TRY_WITH_EMPTY_HAND）—— "
+                            + "某个 BlockEvents.USE_ITEM_ON 监听器返回了 PASS 而不是 null，"
+                            + "会导致**所有箱子永远打不开**";
+                });
     }
 
     /**
@@ -4173,33 +4157,8 @@ public final class SelfTest {
      * <p>这条自检逐格验证树干与树冠，任何"被清掉"都会立刻暴露。
      */
     private void checkIslandTree() {
-        var islands = HubSuite.islands();
-        var classic = islands == null ? null : islands.type("classic").orElse(null);
-        if (classic == null) {
-            fail("缺少 classic 岛型");
-            return;
-        }
-        var level = classic.entry().level();
-        var probe = FakePlayers.spawn(server, "hubsuite_tree",
-                classic.entry().level(), false);
-        if (probe == null) {
-            fail("树检查用假玩家创建失败");
-            return;
-        }
-        try {
-            var island = classic.manager().getOrCreate(
-                    probe.getUUID(), probe.getName().getString(), "classic");
-            var center = classic.manager().anchorOf(island);
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    level.getChunk((center.getX() >> 4) + dx, (center.getZ() >> 4) + dz);
-                }
-            }
-            if (!classic.manager().ensureTerrain(island)) {
-                ok("树检查跳过（地形未铺好）");
-                return;
-            }
-
+        checkIsland("classic", "hubsuite_tree", "空岛的树完整（树干固定 3 格、树冠无空洞）",
+                (manager, level, island, center, probe) -> {
             // 树的位置与 IslandManager 内部约定一致：center + (2, 1, 0)
             var trunkBase = center.offset(2, 1, 0);
             var log = net.minecraft.world.level.block.Blocks.OAK_LOG;
@@ -4215,7 +4174,8 @@ public final class SelfTest {
             if (trunkFound == 3) {
                 ok("树干固定 3 格（" + trunkBase + " 起）");
             } else {
-                fail("树干只有 " + trunkFound + "/3 格在原木位置 —— 树被挖掉了一部分");
+                return "\u00A7c[失败]\u00A7r 树干只有 " + trunkFound
+                        + "/3 格在原木位置 —— 树被挖掉了一部分";
             }
 
             /*
@@ -4253,21 +4213,12 @@ public final class SelfTest {
                 }
             }
             if (missing == 0) {
-                ok("树冠完整：预期 " + expected + " 格树叶全部在位（没有 3×3 空洞）");
-            } else {
-                fail("树冠缺了 " + missing + "/" + expected + " 格树叶，缺失位置（相对树干）："
-                        + holes);
+                return "\u00A7a[通过]\u00A7r 树冠完整：预期 " + expected
+                        + " 格树叶全部在位（没有 3×3 空洞）";
             }
-        } catch (Throwable t) {
-            fail("树检查异常：" + t);
-        } finally {
-            try {
-                classic.manager().delete(probe.getUUID());
-                server.getPlayerList().remove(probe);
-            } catch (Throwable ignored) {
-                // 忽略
-            }
-        }
+            return "\u00A7c[失败]\u00A7r 树冠缺了 " + missing + "/" + expected
+                    + " 格树叶，缺失位置（相对树干）：" + holes;
+                });
     }
 
     /** 在某个位置附近找一个指定方块（小范围扫描，区块已加载）。 */
@@ -4285,6 +4236,167 @@ public final class SelfTest {
             }
         }
         return null;
+    }
+
+    // ------------------------------------------------------------------
+    // 世界就绪：绝不阻塞主线程的等价物
+    // ------------------------------------------------------------------
+
+    /**
+     * 请求 {@code (2r+1)²} 个区块就位，返回**当前**已就位的数量（不等待）。
+     *
+     * <p>票据挂上去之后区块由服务端异步生成；这里只数一眼，绝不 sleep、绝不 getChunk。
+     * 冷存档上第一遍会少，之后自然会满 —— 调用方配合 {@link #defer} 用。
+     *
+     * <p><b>就位判据必须是"FULL"</b>（{@code getChunkNow} 非空），不能图省事用
+     * {@code hasChunk} —— 后者对"已加载到任意非空阶段"都返回 true，
+     * 而我们紧接着要调 {@code getBlockState} / {@code setBlockAndUpdate}，
+     * 那两个要的是 FULL 区块，没到就 {@code getChunk(...).join()} 同步等下去。
+     * 实测拿 hasChunk 当守卫照样被看门狗强杀。
+     */
+    private int readyChunks(net.minecraft.server.level.ServerLevel level,
+                            int cx, int cz, int r) {
+        var chunkSource = level.getChunkSource();
+        try {
+            chunkSource.addTicketWithRadius(
+                    net.minecraft.server.level.TicketType.PLAYER_LOADING,
+                    new net.minecraft.world.level.ChunkPos(cx, cz), r);
+        } catch (Throwable t) {
+            HubSuite.logger().warn("添加区块加载票据失败，只能检查已加载的部分：{}", t.toString());
+        }
+        int ready = 0;
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dz = -r; dz <= r; dz++) {
+                if (chunkSource.getChunkNow(cx + dx, cz + dz) != null) {
+                    ready++;
+                }
+            }
+        }
+        return ready;
+    }
+
+    /** 区块是否已到 FULL —— 只有 FULL 才能安全地读/写方块而不阻塞主线程。 */
+    private static boolean isChunkReady(net.minecraft.server.level.ServerLevel level,
+                                        int cx, int cz) {
+        return level.getChunkSource().getChunkNow(cx, cz) != null;
+    }
+
+    /** 完整的区块总数，配合 {@link #readyChunks} 比较。 */
+    private static int regionSize(int r) {
+        return (2 * r + 1) * (2 * r + 1);
+    }
+
+    /**
+     * 登记一条"等世界就绪再判定"的检查。
+     *
+     * <p>调用方**必须**先用 {@link #readyChunks} 之类把票据挂上（否则永远等不到），
+     * 然后判断还没就绪就调用本方法返回，不要自己 sleep。
+     * 结果行先占位，等 {@code finish} 跑完再原地替换 —— 这样只有一条结果行，
+     * 计数也不会重复。
+     */
+    private void defer(String description, java.util.function.BooleanSupplier ready,
+                       java.util.function.Supplier<String> finish, int timeoutSeconds) {
+        defer(description, ready, finish, null, timeoutSeconds);
+    }
+
+    private void defer(String description, java.util.function.BooleanSupplier ready,
+                       java.util.function.Supplier<String> finish, Runnable cleanup,
+                       int timeoutSeconds) {
+        Deferred d = new Deferred(description, ready, finish, cleanup);
+        d.deadlineMillis = System.currentTimeMillis() + timeoutSeconds * 1000L;
+        ok("【等待中】" + description);
+        d.placeholderIndex = results.size() - 1;
+        deferred.add(d);
+    }
+
+    /** 还在等的检查数。0 才代表自检真正跑完了。 */
+    public int pendingCount() {
+        return deferred.size();
+    }
+
+    /**
+     * 推进等待中的检查，每个 tick 调一次。
+     *
+     * <p>一次 tick 只处理最多 {@code MAX_PER_TICK} 条，而且单条里也不做重活 ——
+     * 否则又变成"一个 tick 干太多"，绕回看门狗那个坑。
+     */
+    public void pumpDeferred() {
+        pumpDeferred(2);
+    }
+
+    public void pumpDeferred(int maxPerTick) {
+        if (deferred.isEmpty()) {
+            return;
+        }
+        int handled = 0;
+        var it = deferred.iterator();
+        while (it.hasNext() && handled < maxPerTick) {
+            Deferred d = it.next();
+            handled++;
+            boolean alive = true;
+            try {
+                boolean isReady;
+                try {
+                    isReady = d.ready.getAsBoolean();
+                } catch (Throwable t) {
+                    // replaceResult 自己会记一次失败，这里不要再 failed++
+                    replaceResult(d, "\u00A7c[失败]\u00A7r " + d.description + " —— 等待时异常：" + t);
+                    continue;
+                }
+                if (!isReady) {
+                    if (System.currentTimeMillis() > d.deadlineMillis) {
+                        // 超时：如实少报，不冒充"没问题"。冷存档首次生成慢是正常的。
+                        replaceResult(d, "\u00A7e[跳过]\u00A7r " + d.description
+                                + " —— 世界生成太慢，等超时了（地图生成过一遍后重跑即可）");
+                        alive = false;
+                    }
+                } else {
+                    try {
+                        replaceResult(d, d.finish.get());
+                    } finally {
+                        alive = false;
+                    }
+                }
+            } finally {
+                if (!alive) {
+                    d.runCleanup();
+                    it.remove();
+                }
+            }
+        }
+    }
+
+    /** 原地替换占位结果行。占位那行已经记过计数，这里按最终结论修正计数。 */
+    private void replaceResult(Deferred d, String message) {
+        if (d.finished) {
+            return;
+        }
+        d.finished = true;
+        if (d.placeholderIndex >= 0 && d.placeholderIndex < results.size()) {
+            results.set(d.placeholderIndex, message);
+        } else {
+            results.add(message);
+        }
+        // 占位时按"通过"计过一次，这里按真实结论纠正
+        if (message.contains("\u00A7c[失败]")) {
+            passed--;
+            failed++;
+        } else if (!message.contains("\u00A7a[通过]")) {
+            passed--;   // 跳过：不计入通过，也不计失败
+        }
+        HubSuite.logger().info("  [自检] 等待项已完成：{}", message.replaceAll("\u00A7.", ""));
+    }
+
+    /** 校验/收尾：把等待中的项全部结算掉，让结果自洽（超时的一律按跳过处理）。 */
+    public void settleAllDeferred() {
+        for (Deferred d : new ArrayList<>(deferred)) {
+            try {
+                replaceResult(d, "\u00A7e[跳过]\u00A7r " + d.description + " —— 世界生成未完成，未等到底");
+            } finally {
+                d.runCleanup();
+            }
+        }
+        deferred.clear();
     }
 
     // ------------------------------------------------------------------
@@ -4306,6 +4418,10 @@ public final class SelfTest {
 
     /** 便于从命令里调用：把结果写进日志，返回是否全通过。 */
     public boolean logSummary() {
+        // 还有等待项就不许打印报告 —— 否则会报出一个"还没跑完"的结论
+        if (!deferred.isEmpty()) {
+            settleAllDeferred();
+        }
         // 收尾：把自检过程产生的痕迹全部清掉，避免污染真实存档。
         // （自检会在各子服创建假玩家、建测试岛，不清理的话会留下数据文件和归属记录）
         sweepTestResidue();

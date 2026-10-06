@@ -29,10 +29,25 @@ public final class SpawnPlatform {
     }
 
     /**
+     * 平台所在区块还没就位，本次没铺；调用方应稍后重试。
+     *
+     * <p>这个返回值是必需的：{@code getBlockState} 在**未加载**区块上会走
+     * {@code getChunk(...).join()} —— 把区块同步生成出来。建岛/铺平台是
+     * "登记待补铺 + 每 tick 重试"的延迟设计，在这里同步生成就把它变成了
+     * 每 tick 卡一次主线程（实测冷存档上直接触发看门狗强杀）：
+     * <pre>
+     *   SpawnPlatform.build → Level.getBlockState → ServerChunkCache.getChunk
+     *     → BlockableEventLoop.managedBlock（阻塞 60 秒，服务端被强杀）
+     * </pre>
+     */
+    public static final int CHUNKS_NOT_READY = -1;
+
+    /**
      * 在指定出生点铺平台。
      *
      * @param radius 平台半径（不含护栏那一圈）
-     * @return 实际放置的方块数；0 表示平台已存在、本次跳过
+     * @return 实际放置的方块数；0 表示平台已存在、本次跳过；
+     *         {@link #CHUNKS_NOT_READY} 表示区块没就位，**需要稍后重试**
      */
     public static int build(ServerLevel level, PlayableWorld.SpawnPoint spawn, int radius) {
         return build(level, spawn, radius, net.minecraft.world.level.block.Blocks.STONE);
@@ -46,6 +61,36 @@ public final class SpawnPlatform {
         }
         BlockPos center = BlockPos.containing(spawn.x(), spawn.y(), spawn.z());
         int r = Math.max(3, Math.min(radius, 64));
+
+        /*
+         * 先确认要碰的区块都**已经就位**。
+         *
+         * 平台半径 r（再加护栏）会跨区块：块坐标 [center-r-1, center+r+1]。
+         * 只要有一个没加载，这次就什么都不做 —— 由调用方下一 tick 再来。
+         * 绝不能让下面的 getBlockState / setBlockAndUpdate 去同步生成它们。
+         */
+        int minCx = (center.getX() - r - 1) >> 4;
+        int maxCx = (center.getX() + r + 1) >> 4;
+        int minCz = (center.getZ() - r - 1) >> 4;
+        int maxCz = (center.getZ() + r + 1) >> 4;
+        /*
+         * 先确认要碰的区块**真的到 FULL 了**。
+         *
+         * 平台半径 r（再加护栏）会跨区块：块坐标 [center-r-1, center+r+1]。
+         *
+         * 注意不能用 {@code hasChunk}（或 getChunkSource().hasChunk）来判断 ——
+         * 那个对"已加载到任意非空阶段"都返回 true，但 {@code getBlockState}
+         * 要的是 **FULL** 区块，没到就 {@code getChunk(...).join()} 同步等下去。
+         * 实测：用 hasChunk 当守卫仍然被看门狗强杀（崩溃栈就落在下面那行
+         * getBlockState 上）。而 {@code getChunkNow} 不阻塞 —— 没到 FULL 就返回 null。
+         */
+        for (int cx = minCx; cx <= maxCx; cx++) {
+            for (int cz = minCz; cz <= maxCz; cz++) {
+                if (level.getChunkSource().getChunkNow(cx, cz) == null) {
+                    return CHUNKS_NOT_READY;
+                }
+            }
+        }
 
         // 中心已经是实体方块 → 认为平台已存在，不再重复放置
         if (!level.getBlockState(center.below()).isAir() && !level.getBlockState(center).isAir()) {

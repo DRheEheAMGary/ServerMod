@@ -60,6 +60,15 @@ java {
 	targetCompatibility = JavaVersion.VERSION_25
 }
 
+// 让 -Dhubsuite.selftest=<秒> 能传到 runServer 的**分叉 JVM** 里。
+// 不转发的话属性只留在 Gradle 自己的 JVM，服务端看不到（实测踩过）。
+// 用法：./gradlew runServer -Dhubsuite.selftest=90
+tasks.matching { it.name == "runServer" }.configureEach {
+	if (System.getProperty("hubsuite.selftest") != null) {
+		systemProperty "hubsuite.selftest", System.getProperty("hubsuite.selftest")
+	}
+}
+
 // 许可证：MIT（见 LICENSE 文件）
 // jar 里会带上 LICENSE，方便使用者随包获取授权条款
 jar {

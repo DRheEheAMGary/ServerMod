@@ -40,6 +40,9 @@ public final class HubSuite implements ModInitializer {
 
     private ConfigManager configManager;
     private WorldsManager worldsManager;
+
+    /** 供无人值守自检入口调用（见 SERVER_STARTED 里的 -Dhubsuite.selftest）。 */
+    private HubCommand hubCommand;
     private AuthService authService;
     private AuthManager authManager;
     private cn.dreamgary.hubsuite.npc.NpcManager npcManager;
@@ -146,6 +149,42 @@ public final class HubSuite implements ModInitializer {
             huskHomes.logReport();
             placeholders.logReport();
             commandGuard.logPolicy();
+
+            /*
+             * 无人值守自检入口：加 -Dhubsuite.selftest=<延迟秒> 启动即可，
+             * 服务端起来后自动跑一次 /hub selftest 并把结果写进日志。
+             *
+             * 为什么需要它：脚本里想让服务端"起来就自检"时，走 stdin 会被
+             * Gradle 包装层抢走命令行、走 RCON 在 26.1.2 上又只在极窄时序下回包，
+             * 两条路都实测过、都不可靠。这个入口绕开整条链路，直接调命令实现。
+             */
+            String auto = System.getProperty("hubsuite.selftest");
+            if (auto != null && !auto.isBlank()) {
+                long delayTicks;
+                try {
+                    delayTicks = Math.max(1L, Long.parseLong(auto.trim())) * 20L;
+                } catch (NumberFormatException e) {
+                    delayTicks = 20L * 60L;   // 解析不出来就默认 60 秒
+                }
+                HubSuite.logger().info("已请求无人值守自检：{} tick 后执行 -Dhubsuite.selftest={}",
+                        delayTicks, auto);
+                final long delay = delayTicks;
+                final long[] left = {delay};
+                net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(s -> {
+                    // 只倒计时一次：注册在一个只跑一轮的闭包里
+                    if (left[0] < 0) {
+                        return;
+                    }
+                    if (left[0] > 0) {
+                        left[0]--;
+                        return;
+                    }
+                    left[0] = -1;
+                    if (hubCommand != null) {
+                        hubCommand.runSelfTestProgrammatically();
+                    }
+                });
+            }
         });
 
         // 指令分工：/hub 只管传送，/menu 开界面，/auth 管账号，/island 管空岛
@@ -156,7 +195,10 @@ public final class HubSuite implements ModInitializer {
         // /island 需要 IslandService，而后者要等服务端起来才有 ——
         // 所以这里用 supplier 延迟解析，执行时再去拿。
         new cn.dreamgary.hubsuite.island.IslandCommand(() -> islands, permissions).register();
-        new HubCommand(worldsManager, configManager, authService, authManager).register();
+        hubCommand = new HubCommand(worldsManager, configManager, authService, authManager);
+        hubCommand.register();
+        // 自检里"等世界生成"的项靠每 tick 推进 —— 不能在主线程上等，会卡到看门狗强杀
+        HubCommand.registerSelfTestPump();
         cn.dreamgary.hubsuite.command.MenuCommand.register();
         new cn.dreamgary.hubsuite.command.AuthCommand(worldsManager, authService, authManager).register();
 

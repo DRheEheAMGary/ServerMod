@@ -280,6 +280,19 @@ public final class IslandManager {
      * <p>单点采样不够准：噪声在群系边界会抖动，某些点判成海洋、
      * 实际地表却是别的。采样间距取 48 格，正好覆盖一座岛加上水下缓坡的范围。
      */
+    /**
+     * 区块是否已经到 **FULL** —— 只有 FULL 才能安全读/写方块而不阻塞主线程。
+     *
+     * <p><b>别用 {@code hasChunk} 当这个判据：</b>它对"已加载到任意非空阶段"
+     * 都返回 true，而 {@code getBlockState} / {@code setBlockAndUpdate} 要的是 FULL，
+     * 没到就 {@code getChunk(...).join()} 同步等下去 —— 建岛/铺平台跑在
+     * 每 tick 的重试路径上，这一下就是 60 秒看门狗强杀（实测两次，
+     * 崩溃栈分别落在 SpawnPlatform.build 与岛屿地形清理上）。
+     */
+    private static boolean isChunkFullyLoaded(ServerLevel level, int cx, int cz) {
+        return level.getChunkSource().getChunkNow(cx, cz) != null;
+    }
+
     private boolean isOceanPatch(int x, int z) {
         int span = 48;
         for (int dx = -span; dx <= span; dx += span) {
@@ -631,7 +644,7 @@ public final class IslandManager {
             int cz = center.getZ() >> 4;
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
-                    if (!level.getChunkSource().hasChunk(cx + dx, cz + dz)) {
+                    if (!isChunkFullyLoaded(level, cx + dx, cz + dz)) {
                         HubSuite.logger().info(
                                 "方格({}, {}) 的区块未加载，跳过地形清理（避免阻塞主线程）",
                                 island.plotX, island.plotZ);
@@ -918,7 +931,7 @@ public final class IslandManager {
         boolean chunksReady = true;
         for (int dx = -1; dx <= 1 && chunksReady; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                if (!level.getChunkSource().hasChunk(cx0 + dx, cz0 + dz)) {
+                if (!isChunkFullyLoaded(level, cx0 + dx, cz0 + dz)) {
                     chunksReady = false;
                     break;
                 }

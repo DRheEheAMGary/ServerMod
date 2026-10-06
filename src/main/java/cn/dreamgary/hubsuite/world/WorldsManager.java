@@ -60,6 +60,10 @@ public final class WorldsManager {
         // 海上出生平台要等区块加载，启动时铺不成很正常 —— 每个 tick 补一次
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(
                 server -> SubServer.tickPendingPlatforms());
+        // 原版出生点搜索（最多 121 区块的同步螺旋）在冷存档上会卡死主线程 ——
+        // 加载阶段先跳过，等区块就绪后在这里补算并写回缓存
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(
+                server -> SubServer.tickPendingSpawns());
     }
 
     // ------------------------------------------------------------------
@@ -93,10 +97,19 @@ public final class WorldsManager {
                 if ("skyblock".equals(subConfig.id)) {
                     var hub = sub.addDimension("hub", HubSuiteConfig.WorldKind.VOID, null,
                             subConfig.displayName + " §7大厅");
-                    // 虚空世界没有地面，给大厅铺一块平台，否则玩家一进去就掉虚空
-                    int blocks = SpawnPlatform.build(hub.level(), hub.spawn(),
-                            Math.max(6, config.lobby.platformRadius));
-                    HubSuite.logger().info("空岛服大厅出生平台已生成：{} 个方块", blocks);
+                    // 虚空世界没有地面，给大厅铺一块平台，否则玩家一进去就掉虚空。
+                    // 此刻区块大概率还没加载 —— 绝不能就地同步生成（冷存档上
+                    // SpawnPlatform 里的 getBlockState 会阻塞主线程到看门狗强杀）。
+                    // 没铺成就登记进"待铺"列表，由每 tick 的重试补上。
+                    var hubSpawn = hub.spawn();
+                    int hubRadius = Math.max(6, config.lobby.platformRadius);
+                    int blocks = SpawnPlatform.build(hub.level(), hubSpawn, hubRadius);
+                    if (blocks == SpawnPlatform.CHUNKS_NOT_READY) {
+                        SubServer.queueSpawnPlatform(hub.level(), hubSpawn, hubRadius, "skyblock/hub");
+                        HubSuite.logger().info("空岛服大厅出生平台等区块加载后补铺");
+                    } else {
+                        HubSuite.logger().info("空岛服大厅出生平台已生成：{} 个方块", blocks);
+                    }
                     sub.addDimension("classic", HubSuiteConfig.WorldKind.VOID, null,
                             "§a经典空岛");
                     // 海岛维度：一整片自然生成的海洋（含沉船、海底废墟、珊瑚礁），

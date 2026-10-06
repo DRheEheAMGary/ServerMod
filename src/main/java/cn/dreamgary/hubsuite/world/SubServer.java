@@ -61,6 +61,137 @@ public final class SubServer implements PlayableWorld {
         Entry resolve(ServerPlayer player, SubServer sub);
     }
 
+    /**
+     * 原版出生点搜索的半径（区块）—— {@code MinecraftServer.setInitialSpawn} 里
+     * 是个最多 11×11 = 121 个区块的**同步螺旋**，每个区块都要 {@code getChunk(...).join()}。
+     */
+    private static final int SPAWN_SEARCH_CHUNK_RADIUS = 5;
+
+    /**
+     * 还没算原版出生点的维度：等区块就绪后在 tick 里补算。
+     *
+     * <p><b>为什么必须延迟：</b>冷存档上那 121 个区块全要现生成，
+     * 单次 tick 直接超过 60 秒看门狗上限 —— 服务端被强杀（实测崩溃栈：
+     * {@code calculateVanillaSpawn → MinecraftServer.setInitialSpawn
+     * → PlayerSpawnFinder.getOverworldRespawnPos → ServerChunkCache.getChunk
+     * → BlockableEventLoop.managedBlock}）。
+     *
+     * <p>这也是"出生点缓存"存在的意义（见 {@link #rememberSpawn}）：缓存命中就跳过整个搜索。
+     * 但**缓存只在上次成功启动之后才存在** —— 全新安装 / 清档后的第一次启动必然要算一次，
+     * 那时就是上面这条崩溃路径。所以加载阶段改成"区块没就绪就用配置坐标顶着"，
+     * 等世界跑起来、区块自然加载好之后再补算并写回缓存。
+     */
+    private record PendingSpawnFix(MinecraftServer server, ServerLevel level,
+                                   HubSuiteConfig.SubServerConfig config,
+                                   PlayableWorld.SpawnPoint cachedSpawn) {
+    }
+
+    private static final java.util.List<PendingSpawnFix> pendingSpawnFixes =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** 登记一次"等区块就绪后修出生点"。同一维度只登记一次。 */
+    private static void queuePendingSpawnFix(MinecraftServer server, ServerLevel level,
+                                             HubSuiteConfig.SubServerConfig config,
+                                             PlayableWorld.SpawnPoint cachedSpawn) {
+        for (PendingSpawnFix p : pendingSpawnFixes) {
+            if (p.level() == level) {
+                return;
+            }
+        }
+        pendingSpawnFixes.add(new PendingSpawnFix(server, level, config, cachedSpawn));
+    }
+
+    /**
+     * 等区块就绪后修出生点，每个 tick 调一次。
+     *
+     * <p>两种情况：
+     * <ul>
+     *   <li>{@code cachedSpawn != null}：缓存坐标复检 —— 落到真实地表并写回缓存
+     *       （地图被重置过时缓存会失效）；</li>
+     *   <li>{@code cachedSpawn == null}：加载阶段跳过了原版搜索，这里补算。</li>
+     * </ul>
+     * 两种都会把结果写回配置缓存 —— **下次启动就是缓存命中**，不再走昂贵的搜索。
+     */
+    public static void tickPendingSpawns() {
+        if (pendingSpawnFixes.isEmpty()) {
+            return;
+        }
+        for (PendingSpawnFix pending : new java.util.ArrayList<>(pendingSpawnFixes)) {
+            if (!canRunVanillaSpawnSearch(pending.level())) {
+                continue;   // 还没就绪，下一 tick 再看
+            }
+            HubSuiteConfig.SubServerConfig config = pending.config();
+            PlayableWorld.SpawnPoint resolved;
+            if (pending.cachedSpawn() != null) {
+                // 缓存复检：就地校验能不能站人，不能就落到地表
+                resolved = sanitizeSpawn(pending.level(), config.id, pending.cachedSpawn());
+                boolean moved = Math.abs(resolved.y() - pending.cachedSpawn().y()) > 0.01
+                        || Math.abs(resolved.x() - pending.cachedSpawn().x()) > 0.01
+                        || Math.abs(resolved.z() - pending.cachedSpawn().z()) > 0.01;
+                if (moved) {
+                    HubSuite.logger().info("子服 '{}' 的缓存出生点已失效（地图可能被重置过），"
+                                    + "从 ({}, {}, {}) 修正到 ({}, {}, {})",
+                            config.id, pending.cachedSpawn().x(), pending.cachedSpawn().y(),
+                            pending.cachedSpawn().z(), resolved.x(), resolved.y(), resolved.z());
+                    rememberSpawnAndApply(pending.level(), config, resolved);
+                }
+            } else {
+                resolved = rawVanillaSpawn(pending.server(), pending.level(), config);
+                if (resolved == null) {
+                    HubSuite.logger().warn("子服 '{}' 的原版出生点补算失败，下个 tick 再试", config.id);
+                    continue;
+                }
+                if (!hasGroundBelow(pending.level(), resolved.x(), resolved.y(), resolved.z())) {
+                    HubSuite.logger().warn("子服 '{}' 的原版出生点 ({}, {}, {}) 下方没有地面，保留配置坐标",
+                            config.id, resolved.x(), resolved.y(), resolved.z());
+                    pendingSpawnFixes.remove(pending);
+                    continue;
+                }
+                rememberSpawnAndApply(pending.level(), config, resolved);
+                HubSuite.logger().info("子服 '{}' 的原版出生点已补算并缓存：({}, {}, {})",
+                        config.id, resolved.x(), resolved.y(), resolved.z());
+            }
+            pendingSpawnFixes.remove(pending);
+        }
+    }
+
+    /**
+     * 原版出生点搜索范围内的区块是否都已到 FULL（只有 FULL 才不会阻塞）。
+     *
+     * <p>顺便**挂一个加载票据把这片区域催起来** —— 不催的话没人会主动加载它，
+     * 条件永远不满足，补算就永远等不到（实测：补算一直没发生，出生点一直是配置坐标）。
+     */
+    private static boolean canRunVanillaSpawnSearch(ServerLevel level) {
+        var chunkSource = level.getChunkSource();
+        try {
+            chunkSource.addTicketWithRadius(
+                    net.minecraft.server.level.TicketType.PLAYER_LOADING,
+                    new net.minecraft.world.level.ChunkPos(0, 0), SPAWN_SEARCH_CHUNK_RADIUS);
+        } catch (Throwable t) {
+            HubSuite.logger().warn("出生点搜索区域加载票据失败：{}", t.toString());
+        }
+        for (int cx = -SPAWN_SEARCH_CHUNK_RADIUS; cx <= SPAWN_SEARCH_CHUNK_RADIUS; cx++) {
+            for (int cz = -SPAWN_SEARCH_CHUNK_RADIUS; cz <= SPAWN_SEARCH_CHUNK_RADIUS; cz++) {
+                if (!isChunkReady(level, cx, cz)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 区块是否已到 **FULL** —— 只有 FULL 才能安全读/写方块而不阻塞主线程。
+     *
+     * <p><b>别用 {@code hasChunk} 当这个判据：</b>它对"已加载到任意非空阶段"
+     * 都返回 true，而 {@code getBlockState} / {@code setBlockAndUpdate} 要的是 FULL，
+     * 没到就 {@code getChunk(...).join()} 同步等下去 —— 这些调用都在
+     * 启动/每 tick 的路径上，一下就是 60 秒看门狗强杀。
+     */
+    private static boolean isChunkReady(ServerLevel level, int cx, int cz) {
+        return level.getChunkSource().getChunkNow(cx, cz) != null;
+    }
+
     private SubServer(MinecraftServer server,
                       HubSuiteConfig.SubServerConfig config,
                       ServerRules rules,
@@ -94,6 +225,47 @@ public final class SubServer implements PlayableWorld {
     /** 注册一个额外维度。 */
     public void addEntry(Entry entry) {
         entries.put(entry.id(), entry);
+    }
+
+    /**
+     * 把某个维度的出生点换成新值（延迟补算出生点后调用）。
+     *
+     * <p><b>为什么必须回填：</b>{@code Entry} 是 record，出生点在**启动时**就固化了，
+     * 而补算是等区块就绪后才发生的 —— 不回填的话，
+     * {@code primary().spawn()} 与玩家实际落地用的出生点会长期是旧值
+     * （实测：补算成功但自检仍报"出生点悬空"）。
+     */
+    public void updateEntrySpawn(ServerLevel level, PlayableWorld.SpawnPoint spawn) {
+        for (var e : new java.util.ArrayList<>(entries.entrySet())) {
+            if (e.getValue().level() == level) {
+                entries.put(e.getKey(), new Entry(e.getValue().id(), e.getValue().dimension(),
+                        level, e.getValue().save(), spawn, e.getValue().label()));
+                return;
+            }
+        }
+    }
+
+    /** 找出配置对象与给定实例相同的子服（延迟任务靠它定位）。 */
+    static SubServer findByConfig(HubSuiteConfig.SubServerConfig config) {
+        for (SubServer sub : ALL) {
+            if (sub.config == config) {
+                return sub;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 所有已加载的子服。延迟任务（出生点补算、平台补铺）需要从静态上下文回填 Entry。
+     */
+    private static final java.util.List<SubServer> ALL =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** 供 {@link #load} 登记。 */
+    private static void registerInstance(SubServer sub) {
+        if (!ALL.contains(sub)) {
+            ALL.add(sub);
+        }
     }
 
     public void setEntryResolver(EntryResolver resolver) {
@@ -221,6 +393,15 @@ public final class SubServer implements PlayableWorld {
                             config.resolvedSpawnZ, config.spawnYaw, config.spawnPitch));
             HubSuite.logger().info("子服 '{}' 使用缓存的出生点：({}, {}, {})",
                     config.id, cached.x(), cached.y(), cached.z());
+            /*
+             * 缓存是"上次的世界"算出来的 —— **地图被重置过就会失效**
+             * （实测：清档后缓存还留着旧地形的 Y，新地形该处是空气，
+             * 自检直接报"出生点悬空，玩家会掉下去摔死"）。
+             *
+             * 这里登记一次延迟复检：等区块真的加载好之后，把它落到真实地表并写回缓存。
+             * 加载阶段不能判 —— 区块没加载时 getBlockState 会同步生成并卡死主线程。
+             */
+            queuePendingSpawnFix(server, level, config, cached);
             return cached;
         }
 
@@ -231,7 +412,7 @@ public final class SubServer implements PlayableWorld {
         //    本次刚调过 setInitialSpawn，区块已被它加载，所以这里能拿到确定结果。
         if (vanilla != null && hasGroundBelow(level, vanilla.x(), vanilla.y(), vanilla.z())) {
             PlayableWorld.SpawnPoint finalSpawn = sanitizeSpawn(level, config.id, vanilla);
-            rememberSpawn(config, finalSpawn);
+            rememberSpawnAndApply(level, config, finalSpawn);
             HubSuite.logger().info("子服 '{}' 使用原版出生点：({}, {}, {})",
                     config.id, finalSpawn.x(), finalSpawn.y(), finalSpawn.z());
             return finalSpawn;
@@ -249,7 +430,13 @@ public final class SubServer implements PlayableWorld {
                 config.spawnYaw, config.spawnPitch));
     }
 
-    /** 把算好的出生点写回配置，避免每次启动重算（也避免读到 level.dat 里的坏值）。 */
+    /**
+     * 把算好的出生点写回配置，避免每次启动重算（也避免读到 level.dat 里的坏值）。
+     *
+     * <p>同时：把这个新值**回填到 Entry**（否则 {@code primary().spawn()} 还是启动时那个旧值），
+     * 并再排一次延迟复检 —— 缓存刚写下来时世界可能还没加载好，等区块就绪后
+     * 校验它到底能不能站人（地图被重置过时缓存会失效）。
+     */
     private static void rememberSpawn(HubSuiteConfig.SubServerConfig config,
                                       PlayableWorld.SpawnPoint spawn) {
         config.resolvedSpawnX = spawn.x();
@@ -263,6 +450,17 @@ public final class SubServer implements PlayableWorld {
             }
         } catch (Throwable t) {
             HubSuite.logger().warn("保存出生点缓存失败：{}", t.toString());
+        }
+    }
+
+    /** 写回缓存，并把这个值**回填到对应维度的 Entry**（本次运行立刻生效）。 */
+    private static void rememberSpawnAndApply(ServerLevel level,
+                                              HubSuiteConfig.SubServerConfig config,
+                                              PlayableWorld.SpawnPoint spawn) {
+        rememberSpawn(config, spawn);
+        SubServer owner = findByConfig(config);
+        if (owner != null) {
+            owner.updateEntrySpawn(level, spawn);
         }
     }
 
@@ -315,7 +513,9 @@ public final class SubServer implements PlayableWorld {
         Entry primary = new Entry("main", dimension, level, save, spawn, config.displayName);
         Map<String, Entry> entries = new LinkedHashMap<>();
         entries.put(primary.id(), primary);
-        return new SubServer(server, config, rules, primary, entries);
+        SubServer sub = new SubServer(server, config, rules, primary, entries);
+        registerInstance(sub);   // 延迟任务（出生点补算）要能从静态上下文回填 Entry
+        return sub;
     }
 
     /**
@@ -376,7 +576,7 @@ public final class SubServer implements PlayableWorld {
                 // （往未加载区块写方块要么无效、要么阻塞主线程）。所以这里先试一次，
                 // 没铺成的话登记到"待铺"列表，由 WorldsManager 的 tick 重试。
                 if (!buildOceanPlatform(level, spawn, entryId)) {
-                    pendingPlatforms.add(new PendingPlatform(level, spawn, entryId));
+                    pendingPlatforms.add(new PendingPlatform(level, spawn, entryId, 4));
                     HubSuite.logger().info("海洋维度 '{}' 的出生平台等区块加载后补铺", entryId);
                 }
             } else {
@@ -408,11 +608,28 @@ public final class SubServer implements PlayableWorld {
     }
 
     /** 还没铺成的出生平台（等区块加载）。 */
-    private record PendingPlatform(ServerLevel level, PlayableWorld.SpawnPoint spawn, String label) {
+    private record PendingPlatform(ServerLevel level, PlayableWorld.SpawnPoint spawn,
+                                   String label, int radius) {
     }
 
     private static final java.util.List<PendingPlatform> pendingPlatforms =
             new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /**
+     * 登记一个"等区块就绪再铺"的出生平台。
+     *
+     * <p>给空岛服大厅那种**虚空维度**用：出生点周围一开始没有区块，
+     * 立刻铺会触发同步生成（主线程阻塞到看门狗强杀），所以交给每 tick 的重试。
+     */
+    public static void queueSpawnPlatform(ServerLevel level, PlayableWorld.SpawnPoint spawn,
+                                          int radius, String label) {
+        for (PendingPlatform p : pendingPlatforms) {
+            if (p.level() == level) {
+                return;   // 同一维度只登记一次
+            }
+        }
+        pendingPlatforms.add(new PendingPlatform(level, spawn, label, radius));
+    }
 
     /**
      * 给"海上出生点"铺一小块沙洲。
@@ -423,10 +640,13 @@ public final class SubServer implements PlayableWorld {
                                               String label) {
         int cx = ((int) Math.floor(spawn.x())) >> 4;
         int cz = ((int) Math.floor(spawn.z())) >> 4;
-        if (!level.getChunkSource().hasChunk(cx, cz)) {
+        if (!isChunkReady(level, cx, cz)) {
             return false;
         }
         int blocks = SpawnPlatform.build(level, spawn, 4, net.minecraft.world.level.block.Blocks.SAND);
+        if (blocks == SpawnPlatform.CHUNKS_NOT_READY) {
+            return false;   // 区块没就位，下一 tick 再来（别在这里同步生成）
+        }
         HubSuite.logger().info("海洋维度 '{}' 的海上出生平台已生成：{} 个方块", label, blocks);
         return true;
     }
@@ -441,10 +661,21 @@ public final class SubServer implements PlayableWorld {
             return;
         }
         for (PendingPlatform pending : new java.util.ArrayList<>(pendingPlatforms)) {
-            if (buildOceanPlatform(pending.level(), pending.spawn(), pending.label())) {
+            if (buildPendingPlatform(pending)) {
                 pendingPlatforms.remove(pending);
             }
         }
+    }
+
+    /** 补铺一个待铺平台；true 表示已完成（不必再重试）。 */
+    private static boolean buildPendingPlatform(PendingPlatform pending) {
+        int blocks = SpawnPlatform.build(pending.level(), pending.spawn(), pending.radius(),
+                net.minecraft.world.level.block.Blocks.SAND);
+        if (blocks == SpawnPlatform.CHUNKS_NOT_READY) {
+            return false;   // 区块还没就位，下一 tick 再来
+        }
+        HubSuite.logger().info("出生平台已补铺：维度 '{}'，{} 个方块", pending.label(), blocks);
+        return true;
     }
 
     /**
@@ -461,6 +692,25 @@ public final class SubServer implements PlayableWorld {
      */
     private static PlayableWorld.SpawnPoint calculateVanillaSpawn(MinecraftServer server, ServerLevel level,
                                                                  HubSuiteConfig.SubServerConfig config) {
+        /*
+         * 先确认"现在调它不会把主线程卡死"。
+         *
+         * setInitialSpawn 内部是个同步螺旋，最多 121 个区块，每个都 getChunk(...).join()。
+         * 区块没就绪时这一步在冷存档上要几十秒 → 看门狗强杀。
+         * 这时**先不调**，用配置坐标顶着，并登记"等区块就绪后补算"。
+         */
+        if (!canRunVanillaSpawnSearch(level)) {
+            HubSuite.logger().info("子服 '{}' 的出生点搜索区域尚未加载，本次先用配置坐标，"
+                    + "等世界跑起来后补算并缓存（避免主线程被 121 区块的同步搜索卡死）", config.id);
+            queuePendingSpawnFix(server, level, config, null);
+            return null;
+        }
+        return rawVanillaSpawn(server, level, config);
+    }
+
+    /** 真正去调原版那句（调用方必须先确认区块已就绪）。 */
+    private static PlayableWorld.SpawnPoint rawVanillaSpawn(MinecraftServer server, ServerLevel level,
+                                                            HubSuiteConfig.SubServerConfig config) {
         try {
             net.minecraft.world.level.storage.ServerLevelData data =
                     (net.minecraft.world.level.storage.ServerLevelData) level.getLevelData();
@@ -505,7 +755,7 @@ public final class SubServer implements PlayableWorld {
             // 区块没加载就别判断 —— getBlockState 会同步生成区块并阻塞主线程。
             // 缓存/原版给的坐标本来就来自"区块已加载时"的计算，
             // 这里保守地原样返回，等玩家真落地时区块自然会被加载。
-            if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) {
+            if (!isChunkReady(level, x >> 4, z >> 4)) {
                 HubSuite.logger().debug(
                         "子服 '{}' 出生点校验跳过（区块未加载）：({}, {}, {})", id, x, y, z);
                 return spawn;
@@ -566,7 +816,7 @@ public final class SubServer implements PlayableWorld {
             int bx = (int) Math.floor(x);
             int bz = (int) Math.floor(z);
             int by = (int) Math.floor(y);
-            if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+            if (!isChunkReady(level, bx >> 4, bz >> 4)) {
                 return null;   // 未知：不加载、不下结论
             }
             for (int probe = by; probe >= by - 64 && probe >= level.getMinY(); probe--) {

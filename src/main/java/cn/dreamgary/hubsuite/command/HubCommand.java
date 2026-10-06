@@ -128,20 +128,113 @@ public final class HubCommand {
     // 自检（回归测试入口）
     // ------------------------------------------------------------------
 
+    /**
+     * 供程序化调用（无人值守跑自检）：执行一次自检，结果进日志与控制台。
+     *
+     * <p>存在的理由：脚本想让服务端"起来就自己跑一次自检"时，走 stdin 或 RCON
+     * 都不稳 —— 26.1.2 的 RCON 只在极窄时序下回包，而 Gradle 包装层会抢走 stdin
+     * （实测命令行被吃掉）。直接调这个方法最可靠。
+     */
+    public boolean runSelfTestProgrammatically() {
+        var server = worlds.server();
+        if (server == null) {
+            HubSuite.logger().error("自检无法运行：服务端尚未就绪");
+            return false;
+        }
+        try {
+            selfTest(server.createCommandSourceStack());
+            return true;
+        } catch (Throwable t) {
+            HubSuite.logger().error("自检执行失败", t);
+            return false;
+        }
+    }
+
     private int selfTest(CommandSourceStack source) {
         if (!worlds.isReady()) {
             source.sendFailure(Component.literal("\u00A7cHubSuite 尚未就绪。"));
             return 0;
         }
+        if (runningSelfTest != null && !runningSelfTest.done) {
+            source.sendFailure(Component.literal("\u00A7c自检正在运行中，请稍候（等待世界生成的部分可能要点时间）。"));
+            return 0;
+        }
         var test = new SelfTest(worlds.server(), worlds, auth, authManager);
         test.run();
+        if (test.pendingCount() > 0) {
+            // 有"等世界生成"的项：**不能阻塞主线程**（那样区块永远生成不完，
+            // 就是早先被看门狗强杀的原因）。交给 tick 泵逐帧推进，完成后自动出报告。
+            var job = new SelfTestJob(test, source);
+            runningSelfTest = job;
+            source.sendSuccess(() -> Component.literal("\u00A77自检已跑到需要世界生成的部分（"
+                    + test.pendingCount() + " 项等待中）—— 生成完会自动出完整报告，其间服务器正常运行。"), false);
+            return 1;
+        }
+        reportSelfTest(test, source);
+        return test.failed() == 0 ? 1 : 0;
+    }
+
+    /** 把自检结果发给命令来源（控制台也会走这里）。 */
+    private void reportSelfTest(SelfTest test, CommandSourceStack source) {
         boolean allPassed = test.logSummary();
         source.sendSuccess(() -> Component.literal("\u00A78\u00A7m------\u00A7r \u00A7bHubSuite 自检报告 \u00A78\u00A7m------"), false);
         test.results().forEach(row -> source.sendSuccess(() -> Component.literal(row), false));
         source.sendSuccess(() -> Component.literal(allPassed
                 ? "\u00A7a全部通过（" + test.passed() + " 项）"
                 : "\u00A7c存在失败项：通过 " + test.passed() + "，失败 " + test.failed()), false);
-        return allPassed ? 1 : 0;
+    }
+
+    /**
+     * 一次跨 tick 的自检任务。
+     *
+     * <p>存在的理由：自检里有几项要等世界生成（冷存档上区块要现生成），
+     * 而**不能**在主线程上等 —— 区块生成要主线程参与，占着不放就永远等不到，
+     * 实测直接把服务端卡到看门狗强杀。所以跑完同步部分后把结果挂起，
+     * 由 {@link #registerSelfTestPump()} 注册的 tick 回调逐帧推进。
+     */
+    private static final class SelfTestJob {
+        final SelfTest test;
+        final CommandSourceStack source;
+        volatile boolean done;
+
+        SelfTestJob(SelfTest test, CommandSourceStack source) {
+            this.test = test;
+            this.source = source;
+        }
+    }
+
+    private static SelfTestJob runningSelfTest;
+
+    /**
+     * 注册自检的 tick 泵。在模组初始化时调一次即可。
+     *
+     * <p>每 tick 推进少量等待项（一次处理太多又会变成"一个 tick 干太多"，
+     * 绕回看门狗那个坑）。
+     */
+    public static void registerSelfTestPump() {
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(server -> {
+            SelfTestJob job = runningSelfTest;
+            if (job == null || job.done) {
+                return;
+            }
+            job.test.pumpDeferred();
+            if (job.test.pendingCount() > 0) {
+                return;
+            }
+            job.done = true;
+            runningSelfTest = null;
+            try {
+                boolean allPassed = job.test.logSummary();
+                HubSuite.logger().info("自检（跨 tick 部分）结束：通过 {} 项，失败 {} 项。",
+                        job.test.passed(), job.test.failed());
+                job.source.sendSuccess(() -> Component.literal(
+                        allPassed ? "\u00A7a自检全部通过（" + job.test.passed() + " 项）"
+                                  : "\u00A7c自检存在失败项：通过 " + job.test.passed()
+                                    + "，失败 " + job.test.failed()), false);
+            } catch (Throwable t) {
+                HubSuite.logger().error("自检收尾失败", t);
+            }
+        });
     }
 
     // ------------------------------------------------------------------
