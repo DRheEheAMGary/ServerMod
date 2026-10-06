@@ -589,7 +589,8 @@ public final class SubServer implements PlayableWorld {
                 // （往未加载区块写方块要么无效、要么阻塞主线程）。所以这里先试一次，
                 // 没铺成的话登记到"待铺"列表，由 WorldsManager 的 tick 重试。
                 if (!buildOceanPlatform(level, spawn, entryId)) {
-                    pendingPlatforms.add(new PendingPlatform(level, spawn, entryId, 4));
+                    queueSpawnPlatform(level, spawn, 4, entryId,
+                            net.minecraft.world.level.block.Blocks.SAND);
                     HubSuite.logger().info("海洋维度 '{}' 的出生平台等区块加载后补铺", entryId);
                 }
             } else {
@@ -622,7 +623,8 @@ public final class SubServer implements PlayableWorld {
 
     /** 还没铺成的出生平台（等区块加载）。 */
     private record PendingPlatform(ServerLevel level, PlayableWorld.SpawnPoint spawn,
-                                   String label, int radius) {
+                                   String label, int radius,
+                                   net.minecraft.world.level.block.Block block) {
     }
 
     private static final java.util.List<PendingPlatform> pendingPlatforms =
@@ -631,17 +633,30 @@ public final class SubServer implements PlayableWorld {
     /**
      * 登记一个"等区块就绪再铺"的出生平台。
      *
-     * <p>给空岛服大厅那种**虚空维度**用：出生点周围一开始没有区块，
-     * 立刻铺会触发同步生成（主线程阻塞到看门狗强杀），所以交给每 tick 的重试。
+     * <p><b>踩过的坑：</b>这个方法以前没有任何调用点 —— 各处都是"试一次，
+     * 失败就只打一行日志"，于是**待铺队列永远是空的**，{@link #tickPendingPlatforms}
+     * 每 tick 直接 return。表现就是"新存档大厅不生成平台，玩家进服掉虚空"。
+     *
+     * @param block 平台方块。传 {@code Blocks.STONE} 表示"装饰版"（石英地面 +
+     *              海晶灯 + 隐形屏障护栏），与 {@link SpawnPlatform#build} 的语义一致；
+     *              传别的方块（例如沙子）则是朴素版、不加护栏。
      */
     public static void queueSpawnPlatform(ServerLevel level, PlayableWorld.SpawnPoint spawn,
-                                          int radius, String label) {
+                                          int radius, String label,
+                                          net.minecraft.world.level.block.Block block) {
         for (PendingPlatform p : pendingPlatforms) {
             if (p.level() == level) {
                 return;   // 同一维度只登记一次
             }
         }
-        pendingPlatforms.add(new PendingPlatform(level, spawn, label, radius));
+        pendingPlatforms.add(new PendingPlatform(level, spawn, label, radius, block));
+    }
+
+    /** 装饰版平台的快捷登记（大厅用）。 */
+    public static void queueSpawnPlatform(ServerLevel level, PlayableWorld.SpawnPoint spawn,
+                                          int radius, String label) {
+        queueSpawnPlatform(level, spawn, radius, label,
+                net.minecraft.world.level.block.Blocks.STONE);
     }
 
     /**
@@ -683,7 +698,7 @@ public final class SubServer implements PlayableWorld {
     /** 补铺一个待铺平台；true 表示已完成（不必再重试）。 */
     private static boolean buildPendingPlatform(PendingPlatform pending) {
         int blocks = SpawnPlatform.build(pending.level(), pending.spawn(), pending.radius(),
-                net.minecraft.world.level.block.Blocks.SAND);
+                pending.block());
         if (blocks == SpawnPlatform.CHUNKS_NOT_READY) {
             return false;   // 区块还没就位，下一 tick 再来
         }
@@ -794,8 +809,27 @@ public final class SubServer implements PlayableWorld {
                             x + 0.5, up, z + 0.5, spawn.yaw(), spawn.pitch());
                 }
             }
-            HubSuite.logger().warn("子服 '{}' 在 ({}, {}) 附近 24 格内找不到可站立的出生点，"
-                    + "沿用原值 Y={}（请检查世界生成或坐标配置）", id, x, z, y);
+            /*
+             * 就近 24 格没找到 → 再**一路向上扫到世界顶层**。
+             *
+             * 为什么必须有这一步：配置里的 spawnY 是"写死的兜底值"（默认 64），
+             * 而正常地形世界的地表通常在它之上（实测 70）。被埋在这一列实心方块里时，
+             * 向下找不到、向上又超出 24 格窗口，就会走到"沿用原值"——
+             * 玩家一进服**卡在地里**（用户实测反馈："生存/创造服又卡在地里了"）。
+             *
+             * 只向上、不向下：向上一定能到地表，向下会钻进矿洞（早期版本就是这么错的）。
+             * 这一列所在区块此时已确认加载，读方块不会触发同步生成。
+             */
+            for (int up = y + 1; up <= level.getMaxY(); up++) {
+                if (isStandable(level, x, up, z)) {
+                    HubSuite.logger().info("子服 '{}' 出生点 Y={} 被埋在地下，"
+                            + "向上找到地表 Y={}（配置坐标只是兜底值，地表在它之上）", id, y, up);
+                    return new PlayableWorld.SpawnPoint(
+                            x + 0.5, up, z + 0.5, spawn.yaw(), spawn.pitch());
+                }
+            }
+            HubSuite.logger().warn("子服 '{}' 在 ({}, {}) 这一列从 Y={} 到顶层都站不住，"
+                    + "沿用原值 Y={}（请检查世界生成或坐标配置）", id, x, z, y, y);
         } catch (Throwable t) {
             HubSuite.logger().warn("修正子服 '{}' 出生点失败：{}", id, t.toString());
         }

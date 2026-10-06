@@ -20,6 +20,8 @@
     "ServerGamePacketListenerMenuMixin",
     "ServerGamePacketListenerCommandMixin",
     "ServerLevelGameRulesMixin",
+    "ServerLevelSeedMixin",
+    "StructureTemplatePaletteCacheMixin",
     "BlockItemPlaceMixin"
   ],
   "injectors": {

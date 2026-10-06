@@ -14,6 +14,21 @@ import java.util.Map;
 public final class IslandConfig {
 
     /**
+     * 海岛岛型**改动前**的默认物资表。
+     *
+     * <p>只用来识别"老存档里没被人动过的海岛物资"，好把后来新增的树苗补进去
+     * （见 {@link #normalize()}）。管理员自己改过物资的话不会命中这个集合，也就不动它。
+     */
+    private static final java.util.List<String> OLD_OCEAN_LOOT = java.util.List.of(
+            "minecraft:fishing_rod*1",
+            "minecraft:oak_boat*1",
+            "minecraft:kelp*8",
+            "minecraft:bone_meal*8",
+            "minecraft:bread*4",
+            "minecraft:torch*8",
+            "minecraft:sugar_cane*4");
+
+    /**
      * 空岛服大厅里"选择岛屿"假人的外观。
      *
      * <p>它点的开箱子界面见 {@link IslandMenu}。坐标是**相对大厅出生点**的偏移，
@@ -156,6 +171,18 @@ public final class IslandConfig {
                 // null = 配置里没有这个键（老配置文件）→ 用默认沙滩。
                 // 想关掉沙滩要显式写 "none" 或空串。
                 type.beach = "minecraft:sand";
+            }
+            /*
+             * 老存档的**海岛物资**补齐树苗。
+             *
+             * 海岛默认不种树（preset 里 tree = false），所以箱子必须给树苗，
+             * 否则玩家在岛上拿不到木头 —— 最基础的生存线是断的。
+             * 这里按"未改动过的老默认表"精确匹配，只给没动过物资的老档补；
+             * 管理员自己改过的物资表不会被覆盖。
+             */
+            if ("ocean".equals(type.id) && type.loot.containsAll(OLD_OCEAN_LOOT)
+                    && !type.loot.contains("minecraft:oak_sapling*2")) {
+                type.loot.add("minecraft:oak_sapling*2");
             }
             byId.putIfAbsent(type.id, type);
         }

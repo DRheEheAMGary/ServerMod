@@ -37,7 +37,7 @@ public final class WorldBuilder {
                                      LevelStem stem,
                                      long seed,
                                      boolean tickTime) {
-        return new ServerLevel(
+        ServerLevel level = new ServerLevel(
                 server,
                 ServerInternals.executor(server),
                 save.access(),
@@ -48,5 +48,15 @@ public final class WorldBuilder {
                 BiomeManager.obfuscateSeed(seed),
                 List.of(),
                 tickTime);
+        /*
+         * 登记这个维度自己的**地形种子**。
+         *
+         * 上面那个 seed 只喂给了 BiomeManager（**群系分布**）；地形种子在
+         * ServerLevel.getSeed() 里是"全服一份"的，于是所有维度会生成同一张地形。
+         * 这里把它登记下来，由 ServerLevelSeedMixin 让 getSeed() 返回它 ——
+         * ChunkMap 建 RandomState 用的正是 getSeed()，噪声/矿脉/结构就都跟着各自种子走了。
+         */
+        LevelSeeds.register(level, seed);
+        return level;
     }
 }

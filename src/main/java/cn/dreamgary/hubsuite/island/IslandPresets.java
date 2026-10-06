@@ -67,6 +67,9 @@ public final class IslandPresets {
         type.loot = List.of(
                 "minecraft:fishing_rod*1",
                 "minecraft:oak_boat*1",
+                // 海岛默认不种树（type.tree = false），但得让玩家能自己种一棵 ——
+                // 否则"木头"这条最基础的生存线是断的（用户反馈要加树苗）。
+                "minecraft:oak_sapling*2",
                 "minecraft:kelp*8",
                 "minecraft:bone_meal*8",
                 "minecraft:bread*4",

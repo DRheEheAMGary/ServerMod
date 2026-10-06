@@ -110,8 +110,19 @@ public final class Lobby implements PlayableWorld {
         RulesManager.register(dimension, rules);
 
         // 纯虚空世界没有地面，必须自己铺平台，否则玩家一进来就掉下去
+        //
+        // 注意**必须看返回值**：没加载时 SpawnPlatform 会返回 CHUNKS_NOT_READY
+        // （它不再去同步生成区块），这时只打日志是没用的 —— 平台就永远不铺了。
+        // 实测现象：新存档进大厅直接掉虚空、脚下什么都没有。
+        // 所以要登记进"待铺"列表，由 WorldsManager 的每 tick 重试补上。
         if (config.buildPlatform) {
-            SpawnPlatform.build(level, spawn, config.platformRadius);
+            int blocks = SpawnPlatform.build(level, spawn, config.platformRadius);
+            if (blocks == SpawnPlatform.CHUNKS_NOT_READY) {
+                SubServer.queueSpawnPlatform(level, spawn, config.platformRadius, "lobby");
+                HubSuite.logger().info("大厅出生平台等区块加载后补铺");
+            } else {
+                HubSuite.logger().info("大厅出生平台已生成：{} 个方块", blocks);
+            }
         }
 
         // 大厅继承主世界的昼夜与天气，必须压成"永昼 + 晴朗"

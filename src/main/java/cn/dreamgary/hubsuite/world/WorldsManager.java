@@ -165,6 +165,8 @@ public final class WorldsManager {
         cn.dreamgary.hubsuite.world.PlayerStateStash.clear();
         RulesManager.clear();
         PlayerDataRouter.clear();
+        // 维度 → 地形种子的登记同理：维度对象已经关了，别把上一局的引用留着
+        LevelSeeds.clear();
         this.server = null;
         HubSuite.logger().info("多世界引擎已关闭，全部子服已保存。");
     }
