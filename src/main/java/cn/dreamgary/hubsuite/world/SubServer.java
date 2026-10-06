@@ -453,14 +453,27 @@ public final class SubServer implements PlayableWorld {
         }
     }
 
-    /** 写回缓存，并把这个值**回填到对应维度的 Entry**（本次运行立刻生效）。 */
+    /** 写回缓存，并把这个值**回填到 Entry、世界边界与重生点**（本次运行立刻生效）。 */
     private static void rememberSpawnAndApply(ServerLevel level,
                                               HubSuiteConfig.SubServerConfig config,
                                               PlayableWorld.SpawnPoint spawn) {
         rememberSpawn(config, spawn);
         SubServer owner = findByConfig(config);
-        if (owner != null) {
-            owner.updateEntrySpawn(level, spawn);
+        if (owner == null) {
+            return;
+        }
+        owner.updateEntrySpawn(level, spawn);
+        /*
+         * 边界圆心跟着出生点走 —— 启动时是用**当时的**出生点设的，
+         * 补算改了出生点就必须重设。不重设的话边界圆心会停在旧坐标上，
+         * 自检"边界圆心跟着算出来的出生点"那条会红（实测就是这个）。
+         * 用 owner.rules（该子服自己的规则）取半径，语义与启动时一致。
+         */
+        try {
+            applySpawn(level, spawn);
+            applyWorldBorder(level, owner.rules, spawn);
+        } catch (Throwable t) {
+            HubSuite.logger().warn("出生点补算后重新套用边界/重生点失败：{}", t.toString());
         }
     }
 

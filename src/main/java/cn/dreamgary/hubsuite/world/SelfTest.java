@@ -1960,6 +1960,20 @@ public final class SelfTest {
                 ok("放置计数检查跳过（目标位置已被占用，无法验证放置）");
                 return;
             }
+            /*
+             * 还要确认**下方那块是实心**：方块放置要有一个可依附的面。
+             *
+             * SpawnPlatform 会把出生点正上方清空 5 格（给玩家落脚用），
+             * 于是"配置坐标 +2 格"处很可能是空气 —— 那里放方块会直接失败，
+             * 进度自然不动。这不是产品问题，是这条检查挑的位置本身站不住。
+             * （实测冷存档上就报了这条假失败。）
+             */
+            var support = blockIfLoaded(level, platformPos);
+            if (support == null || support.isAir() || !support.getFluidState().isEmpty()) {
+                server.getPlayerList().remove(probe);
+                ok("放置计数检查跳过（目标下方没有可依附的实心面）");
+                return;
+            }
 
             // 临时任务：只存在于内存，测完移除（绝不调用 save()）
             injected = new cn.dreamgary.hubsuite.quest.Quest();
