@@ -47,6 +47,17 @@ public final class PortalLinks {
     private static final Map<ResourceKey<Level>, ResourceKey<Level>> END_BACK =
             new ConcurrentHashMap<>();
 
+    /**
+     * 本模组托管的**子服主维度**集合（不限有没有下界/末地）。
+     *
+     * <p>用途：原版 {@code BaseFireBlock.inPortalDimension} 写死只认
+     * {@code minecraft:overworld} 与 {@code minecraft:the_nether}，
+     * 而我们的子服主维度是 {@code hubsuite:server_survival} 这种自有 key ——
+     * 不认就会导致"火在框架里也点不出传送门"（用户实测）。
+     */
+    private static final java.util.Set<ResourceKey<Level>> SUB_DIMENSIONS =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /** 登记"子服主维度 ↔ 它的下界/末地"。两个都可为 null（表示没造）。 */
     public static void register(ResourceKey<Level> subDimension,
                                 ResourceKey<Level> nether,
@@ -54,6 +65,7 @@ public final class PortalLinks {
         if (subDimension == null) {
             return;
         }
+        SUB_DIMENSIONS.add(subDimension);
         if (nether != null) {
             NETHER_OF.put(subDimension, nether);
             NETHER_BACK.put(nether, subDimension);
@@ -123,11 +135,22 @@ public final class PortalLinks {
                 && (NETHER_BACK.containsKey(dimension) || END_BACK.containsKey(dimension));
     }
 
+    /**
+     * 这个维度是不是本模组托管的**子服主维度**。
+     *
+     * <p>给"火能不能点出传送门"用 —— 原版那个判据只认
+     * {@code minecraft:overworld} / {@code minecraft:the_nether}。
+     */
+    public static boolean isSubServerDimension(ResourceKey<Level> dimension) {
+        return dimension != null && SUB_DIMENSIONS.contains(dimension);
+    }
+
     /** 停服时清掉，别把上一局的维度 key 留着。 */
     public static void clear() {
         NETHER_OF.clear();
         NETHER_BACK.clear();
         END_OF.clear();
         END_BACK.clear();
+        SUB_DIMENSIONS.clear();
     }
 }

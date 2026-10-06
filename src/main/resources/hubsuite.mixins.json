@@ -4,6 +4,7 @@
   "package": "cn.dreamgary.hubsuite.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [
+    "BaseFireBlockPortalMixin",
     "ConnectionChannelAccessor",
     "DistanceManagerAccessor",
     "DistanceManagerRemovePlayerMixin",

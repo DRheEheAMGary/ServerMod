@@ -161,6 +161,77 @@ public final class SelfTest {
         step("虚空维度里没有任何结构（不会长出村庄）", this::checkVoidHasNoStructures);
         step("退出服务器不会丢成就（退出→重登仍读得回来）", this::checkAdvancementsSurviveRelogin);
         step("切服会真的放掉成就/统计缓存（隔离的前提）", this::checkAuxCacheEvictedOnSwitch);
+        step("火能在本模组的维度里点燃传送门", this::checkFireCanIgnitePortal);
+    }
+
+    /**
+     * 火必须能在**我们自己的维度**里被识别成"框架里的火"，否则传送门点不着。
+     *
+     * <p>锁住用户实测的 "我激活不了地狱传送门"：原版
+     * {@code BaseFireBlock.isPortal(...)} 在检查黑曜石框架之前，先调
+     * {@code inPortalDimension(Level)}，而它的判据是**写死的两个维度 key** ——
+     * {@code minecraft:overworld} 或 {@code minecraft:the_nether}。
+     *
+     * <p>本模组的子服主维度是 {@code hubsuite:server_survival} 这类自有 key
+     * （三个子服不能都用 {@code minecraft:overworld}，因为
+     * {@code MinecraftServer.levels} 按 key 唯一），下界也是
+     * {@code hubsuite:survival_nether} —— 两个都不匹配，火就永远点不出传送门。
+     *
+     * <p>检查方式：直接反射调 {@code BaseFireBlock.inPortalDimension(Level)}
+     * （私有静态），断言它对我们托管的维度返回 true，并且**没有破坏原版行为**。
+     */
+    private void checkFireCanIgnitePortal() {
+        try {
+            var worlds = HubSuite.worlds();
+            if (worlds == null) {
+                ok("传送门点火检查跳过（多世界引擎还没就绪）");
+                return;
+            }
+            var method = net.minecraft.world.level.block.BaseFireBlock.class
+                    .getDeclaredMethod("inPortalDimension", net.minecraft.world.level.Level.class);
+            method.setAccessible(true);
+
+            var bad = new StringBuilder();
+            int checked = 0;
+            var levels = new java.util.ArrayList<ServerLevel>();
+            for (SubServer sub : worlds.subServers()) {
+                if (!"normal".equalsIgnoreCase(sub.config().worldKind)) {
+                    continue;
+                }
+                levels.add(sub.primaryEntry().level());
+                sub.entry("nether").ifPresent(e -> levels.add(e.level()));
+            }
+            for (ServerLevel level : levels) {
+                checked++;
+                boolean allowed = (Boolean) method.invoke(null, level);
+                if (!allowed) {
+                    if (bad.length() < 200) {
+                        bad.append(level.dimension().identifier()).append(' ');
+                    }
+                }
+            }
+            if (checked == 0) {
+                ok("传送门点火检查跳过（没有普通地形子服）");
+                return;
+            }
+            if (bad.length() > 0) {
+                fail("这些维度里火点不出传送门（原版只认 overworld/the_nether）："
+                        + bad.toString().trim());
+                return;
+            }
+
+            // 不能把原版行为改坏：主世界仍然是 true，无关维度仍然是 false
+            ServerLevel overworld = server.overworld();
+            boolean ow = (Boolean) method.invoke(null, overworld);
+            if (!ow) {
+                fail("原版行为被改坏了：主世界 inPortalDimension 变成 false");
+                return;
+            }
+            ok("火能在本模组的维度里点燃传送门（检查了 " + checked
+                    + " 个维度；主世界行为保持不变）");
+        } catch (Throwable t) {
+            fail("传送门点火检查异常：" + t);
+        }
     }
 
     /**

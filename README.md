@@ -27,10 +27,10 @@
 ```bash
 # 1. 编译
 ./gradlew build
-# 产物：build/libs/hubsuite-0.2.3.jar
+# 产物：build/libs/hubsuite-0.2.4.jar
 
 # 2. 把 jar 和以下依赖放进服务端 mods/
-#    hubsuite-0.2.3.jar                 （必需）
+#    hubsuite-0.2.4.jar                 （必需）
 #    fabric-api-0.155.3+26.1.2.jar      （必需）
 #    HuskHomes-Fabric-4.11+mc.26.1.2.jar（建议：家/传送指令）
 #    placeholder-api-3.0.0+26.1.jar     （建议）

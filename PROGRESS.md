@@ -20,7 +20,7 @@
 | Phase 5 | HuskHomes / 占位符 / LuckPerms 适配 | ✅ |
 | Phase 6 | 中文文档 + 全流程自测 | ✅ |
 
-**产物**：`build/libs/hubsuite-0.2.3.jar`（约 406 KB，131 个类；源码 86 个 Java 文件 / 17 个 Mixin）
+**产物**：`build/libs/hubsuite-0.2.4.jar`（约 406 KB，131 个类；源码 86 个 Java 文件 / 17 个 Mixin）
 
 > ⚠️ 体积和类数只当**粗看**：它们随每次构建变化，别拿去当核对标准。
 > 要核对就跑 `hub selftest`，它才是真正的验收门。
@@ -194,7 +194,7 @@ Java 25 / 官方 Mojang 名（无 mappings、无 remapJar）
 ## 2. 已完成
 
 ### Phase 0 —— 工程骨架 ✅
-- Gradle 工程可构建：`./gradlew build` → `build/libs/hubsuite-0.2.3.jar`
+- Gradle 工程可构建：`./gradlew build` → `build/libs/hubsuite-0.2.4.jar`
 - Gradle wrapper 9.7.1（`gradlew` / `gradlew.bat` / `gradle/wrapper/*`）
 - `fabric.mod.json`：`environment: "*"`、mixin 配置、软依赖 `suggests`
 - 软依赖声明为 `compileOnly`，运行期用 `FabricLoader.isModLoaded` 探测
@@ -280,7 +280,7 @@ Java 25 / 官方 Mojang 名（无 mappings、无 remapJar）
 
 ```bash
 # 构建
-./gradlew build                     # 产物 build/libs/hubsuite-0.2.3.jar
+./gradlew build                     # 产物 build/libs/hubsuite-0.2.4.jar
 
 # 无人值守跑服务端 + 执行命令（RCON 驱动，脚本会自动等就绪并 stop）
 ./scripts/dev-server.sh "hub info" "hub selftest"
