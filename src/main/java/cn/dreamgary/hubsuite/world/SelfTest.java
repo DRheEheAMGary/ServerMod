@@ -3599,6 +3599,67 @@ public final class SelfTest {
     }
 
     /**
+     * 铺开 {@code (2r+1)²} 个区块，但**绝不阻塞主线程**。
+     *
+     * <p><b>为什么不能用 {@code level.getChunk(...)}：</b>那是同步加载 ——
+     * 未生成的区块会在主线程上现生成。自检跑在主线程，一个 19×19 的循环
+     * （361 个区块）在**全新存档**上必然超过 60 秒看门狗上限，服务端被强杀。
+     * 实测崩溃栈：
+     * {@code SelfTest.checkOceanStructures} → {@code ServerChunkCache.getChunk}
+     * → {@code BlockableEventLoop.managedBlock}。
+     * 这个坑项目里累计踩过多次，只是前几次是 {@code getBlockState}，这次是 {@code getChunk} 本身。
+     *
+     * <p><b>也不能"原地等"：</b>第一版改法是加票据后在主线程 {@code Thread.sleep}
+     * 轮询 {@code hasChunk}。同样会卡死 —— 区块生成要主线程参与，
+     * 主线程占着不放，区块就永远不会就位，白等到看门狗开火（实测第二次踩）。
+     *
+     * <p><b>所以：</b>票据挂上去（区块由服务端异步生成），这里只**数一眼**
+     * 当前已就位的数量就返回。冷存档上会少覆盖，如实少报；
+     * 等这些区块被异步生成完之后再跑一次自检，就是满覆盖。
+     *
+     * @return 已就位的区块数
+     */
+    private int loadRegionAsync(net.minecraft.server.level.ServerLevel level,
+                                int cx, int cz, int r) {
+        var chunkSource = level.getChunkSource();
+        var center = new net.minecraft.world.level.ChunkPos(cx, cz);
+        try {
+            // addTicketWithRadius（不是 *AndLoad*）：只登记票据，不等加载完成
+            chunkSource.addTicketWithRadius(
+                    net.minecraft.server.level.TicketType.PLAYER_LOADING, center, r);
+        } catch (Throwable t) {
+            HubSuite.logger().warn("添加区块加载票据失败，只能检查已加载的部分：{}", t.toString());
+        }
+
+        int total = (2 * r + 1) * (2 * r + 1);
+        int ready = 0;
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dz = -r; dz <= r; dz++) {
+                if (chunkSource.hasChunk(cx + dx, cz + dz)) {
+                    ready++;
+                }
+            }
+        }
+        HubSuite.logger().info("  [自检] 结构检查区域内已就位区块 {}/{}（半径 {}，其余交由服务端异步生成）",
+                ready, total, r);
+        return ready;
+    }
+
+    /**
+     * 取**已经就位**的区块，没就位返回 null。
+     *
+     * <p>与 {@link #blockIfLoaded} 同一个思路：查询式检查绝不能顺手把区块生成出来。
+     */
+    private static net.minecraft.world.level.chunk.LevelChunk chunkSourceNow(
+            net.minecraft.server.level.ServerLevel level, int cx, int cz) {
+        try {
+            return level.getChunkSource().getChunkNow(cx, cz);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
      * 海里应当有**原版天然**的海洋结构（沉船 / 海底废墟）。
      *
      * <p>需求是"海岛 = 真海洋群系 + 原版沉船结构"。因为整个维度都是海洋群系，
@@ -3628,15 +3689,13 @@ public final class SelfTest {
                     probe.getUUID(), probe.getName().getString(), "ocean");
             var anchor = ocean.manager().anchorOf(island);
 
-            // 先把岛周围一大片区块加载出来：天然结构的间距是几十个区块，
-            // 不铺开一片就看不到（正式游玩时玩家游过去，区块会自然加载）
+            // 先把岛周围一大片区块**异步**加载出来：天然结构的间距是几十个区块，
+            // 不铺开一片就看不到（正式游玩时玩家游过去，区块会自然加载）。
+            // 注意必须走票据（异步），绝不能用 level.getChunk 同步拉 361 个区块 ——
+            // 全新存档上那一下就是 60 秒看门狗强杀（本文件 loadRegionAsync 的注释里有崩溃栈）。
             int cx = anchor.getX() >> 4;
             int cz = anchor.getZ() >> 4;
-            for (int dx = -9; dx <= 9; dx++) {
-                for (int dz = -9; dz <= 9; dz++) {
-                    level.getChunk(cx + dx, cz + dz);
-                }
-            }
+            int have = loadRegionAsync(level, cx, cz, 9);
             if (!ocean.manager().ensureTerrain(island)) {
                 ok("结构检查跳过（地形未铺好）");
                 return;
@@ -3650,7 +3709,10 @@ public final class SelfTest {
             StringBuilder names = new StringBuilder();
             for (int dx = -9; dx <= 9; dx++) {
                 for (int dz = -9; dz <= 9; dz++) {
-                    var chunk = level.getChunk(cx + dx, cz + dz);
+                    var chunk = chunkSourceNow(level, cx + dx, cz + dz);
+                    if (chunk == null) {
+                        continue;   // 还没就位就跳过，不为了它同步生成
+                    }
                     for (var start : chunk.getAllStarts().values()) {
                         if (!start.isValid()) {
                             continue;
@@ -3672,6 +3734,12 @@ public final class SelfTest {
             if (found > 0) {
                 ok("岛附近 19×19 区块内有 " + found + " 个**天然**海洋结构"
                         + "（沉船 " + shipwreck + " 个）：" + names.toString().trim());
+            } else if (have < 361) {
+                // 冷存档上区块来不及生成完就超了等待预算。
+                // 这时**不能判失败** —— 一个结构都没看到只是因为没看全，
+                // 而不是"群系源没让结构通过"。少报比误报好。
+                ok("结构检查跳过（区域内只就位 " + have + "/361 个区块，"
+                        + "冷存档首次生成较慢；地图生成过一遍后重跑即可）");
             } else {
                 fail("岛附近 19×19 区块内一个结构都没有 —— 海洋群系源没让原版结构通过检查");
             }

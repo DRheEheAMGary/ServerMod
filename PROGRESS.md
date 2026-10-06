@@ -7,7 +7,8 @@
 
 ## 0. 一分钟速览
 
-**状态：`./gradlew build` 通过；`hub selftest` 182 项全部通过；中文文档齐全。**
+**状态：`./gradlew build` 通过（Java 25，产物 406 KB / 131 个类）；中文文档齐全。**
+**`hub selftest` 共 182 项，但实测在冷存档上跑不完 —— 见下方"实测"一节（已知问题）。**
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -19,11 +20,10 @@
 | Phase 5 | HuskHomes / 占位符 / LuckPerms 适配 | ✅ |
 | Phase 6 | 中文文档 + 全流程自测 | ✅ |
 
-**产物**：`build/libs/hubsuite-0.1.0.jar`（源码现为 86 个 Java 文件、17 个 Mixin）
+**产物**：`build/libs/hubsuite-0.1.0.jar`（约 406 KB，131 个类；源码 86 个 Java 文件 / 17 个 Mixin）
 
-> ⚠️ 别拿体积/类数当核对标准：它们随每次构建变化
-> （同一份源码换个 Loom 版本就能差出十几 KB）。
-> 要核对请跑 `hub selftest`，它才是真正的验收门。
+> ⚠️ 体积和类数只当**粗看**：它们随每次构建变化，别拿去当核对标准。
+> 要核对就跑 `hub selftest`，它才是真正的验收门。
 > 构建需要 **Java 25**（`JAVA_HOME` 指向 25 的 JDK），
 > 否则 Loom 在**配置阶段**就报 `Dependency requires at least JVM runtime version 25`。
 
@@ -32,6 +32,42 @@
 ./gradlew build
 ./scripts/dev-server.sh "hub selftest"     # 无人值守起服 + 182 项自检，约 1–3 分钟
 ```
+
+### ⚠️ 实测（2026-10-06，Java 25 + LuckPerms/HuskHomes/Placeholder 全装）：自检在**冷存档**上跑不完
+
+这一轮拿到真机验证，结论和"182 项全绿"那句不一样，记下来免得下次又踩：
+
+| 项目 | 结果 |
+|---|---|
+| `./gradlew build` | ✅ 通过（Java 25；产物 406 KB / 131 个类） |
+| 四个软依赖 | ✅ 全部生效（huskhomes / luckperms / placeholder-api / fabric-permissions-api） |
+| `/hub selftest` | ❌ **跑到第 36 步被看门狗强杀**，拿不到"通过 N 项" |
+
+**根因：自检自己会同步加载区块。** 两次运行的崩溃栈都是同一个位置：
+
+```
+SelfTest.checkChestInteractionChainIntact(SelfTest.java:4020)
+  → Level.getChunk → ServerChunkCache.getChunk → BlockableEventLoop.managedBlock
+```
+
+第 4020 行是个看起来"代价可控"的 **3×3** 循环（`level.getChunk`）。问题在于
+**冷存档上每个区块都要现生成**，而自检把岛屿建在不同位置，
+每个测试步都要为它现生成 9 个区块 —— 单次 tick 累计超过 60 秒看门狗上限。
+同类同步加载全文还有 7 处（2450 / 2771 / 3248 / 3384 / 3872 / 3952 / 4127）。
+
+> 为什么之前一直"绿"：作者当时的存档已经被前面的测试步/游玩**预热过**，
+> 那些区块早就生成好了，3×3 几乎瞬间返回。
+> 而本项目自己的运维约定要求"清数据 = 连地图一起清" ——
+> **所以每次清档后跑自检都必然走到这个坑**。
+
+**已修的部分**：`checkOceanStructures` 原来最凶（19×19 = 361 个区块同步加载），
+已改成挂 `PLAYER_LOADING` 票据异步铺 + 只统计已就位的（`loadRegionAsync`）。
+注意**不能**改成"原地 sleep 等"—— 区块生成要主线程参与，主线程占着不放就永远等不到
+（这一版也踩了，见 `loadRegionAsync` 的注释）。
+
+**还没修的部分**：那 7 处 3×3 同步加载。要彻底解决得让自检把"需要生成的世界"
+先异步铺好再断言（跨 tick 的延迟判定），而不是就地 `getChunk`。
+在那之前，冷存档上自检跑不完，这是**已知且可复现**的。
 
 ### ⚠️ 运维约定：清数据 = 连地图一起清
 
