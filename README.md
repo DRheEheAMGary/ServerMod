@@ -7,6 +7,42 @@
 
 ---
 
+## AI 参与声明
+
+本项目的**代码与文档由人类作者与 AI Agent 协作完成**。如实说明如下：
+
+**AI 参与的部分**
+
+- 大部分 Java 实现、Mixin、自检用例与中文文档，由 AI Agent 在人类作者指导下编写
+- 根因排查：多个 bug 是通过阅读**字节码**定位的（例如 `ChunkMap` 在
+  `ServerLevel` 构造内部就取走地形种子、`BaseFireBlock` 写死只认两个原版维度 key、
+  `PlayerList.remove` 不清成就缓存）
+
+**人类作者负责的部分**
+
+- 需求定义、架构决策、验收标准
+- **亲手在真实服务器上实测**每个修复 —— 包括建传送门走一趟、切服看成就、
+  删档看地形这类 AI 无法自行确认的行为
+- 多次纠正 AI 的错误方向（例如"虚空世界不能换成 `the_void` 群系，
+  否则大厅不刷生物了"）
+
+**关于质量**
+
+- 项目带**内置自检**（`hub selftest`，当前 194 项），覆盖存档隔离、规则隔离、
+  玩家数据隔离、空岛生成与保护、入口分流、指令注册等
+- 但 **AI 生成的代码不能只靠自检背书**。自检是"AI 自己出的题"，
+  历史上出现过好几例"自检全绿、实机仍然不对"的情况（自检覆盖不到的路径）
+- 因此：**每个版本都有人类实测确认**，未实测的项在发布说明里明确标注为"未验证"
+
+**给使用者的话**
+
+- 请把本项目当作"人类作者对结果负责的协作产物"。发现问题请提 issue，
+  作者会实测复现后再修
+- 如果你想继续用 AI 开发本项目，请先读 [`AGENT.md`](AGENT.md)（工作约定）
+  与 [`HANDOFF.md`](HANDOFF.md)（当前进度与未验证清单）
+
+---
+
 ## 特性
 
 | 模块 | 说明 |
@@ -89,12 +125,14 @@ hub selftest
 
 ```
 MinecraftSeverMod/
-├─ src/main/java/cn/dreamgary/hubsuite/   源码（86 个 Java 文件 / 17 个 Mixin）
+├─ src/main/java/cn/dreamgary/hubsuite/   源码（93 个 Java 文件 / 22 个 Mixin）
 ├─ src/main/resources/                    fabric.mod.json / mixin 配置 / 图标
 ├─ docs/                                  中文文档
 ├─ mods/                                  依赖 jar（归档，不入版本库）
 ├─ run/                                   开发用服务端（含 eula、rcon 配置）
 ├─ scripts/dev-server.sh                  无人值守起服 + 跑命令的测试脚本
+├─ AGENT.md                               给 AI Agent 的工作约定
+├─ HANDOFF.md                             当前进度、已验证/未验证清单、踩坑表
 ├─ PROGRESS.md                            开发进度与踩坑记录
 └─ build.gradle / gradle.properties       构建配置
 ```
@@ -115,6 +153,13 @@ MinecraftSeverMod/
 ```
 
 **改完代码请务必跑一次 `hub selftest`** —— 多世界隔离这类东西光看代码确认不了。
+
+> ⚠️ 起测试服务端时**改 `run\server.properties` 的 `server-port`**，
+> 别用 `-Pport=`（`build.gradle` 没接线，传了也无效，会在 25565 上起、把你自己踢下线）。
+> 端口与自检细节见 [`AGENT.md`](AGENT.md)。
+
+用 AI 协作开发请先读 **[`AGENT.md`](AGENT.md)**（工作约定与踩坑表）
+与 **[`HANDOFF.md`](HANDOFF.md)**（当前进度、已验证/未验证清单）。
 
 ---
 
