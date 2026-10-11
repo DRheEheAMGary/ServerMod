@@ -311,7 +311,7 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 1. 改 gradle.properties 的 mod_version
 2. 同步文档里的产物文件名（README.md / docs/**）
 3. 跑一次自检确认 失败 0 项
-4. git commit（信息写文件，用 git commit -F）
+4. git commit（**面向使用者**写信息，见下；信息写文件，用 git commit -F）
 5. git tag -a v<版本> -m "HubSuite v<版本>"
 6. git push origin main && git push origin v<版本>
 7. gh release create v<版本> --title "..." --notes-file <说明.md> <jar> <sources.jar>
@@ -319,6 +319,29 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 ```
 
 **发布说明必须如实写**：哪些已验证、哪些没有、升级要不要删存档。不要为了让 release 好看而省略「未验证」。
+
+### 面向使用者写（重要）
+
+release 的**提交信息、tag message、release notes** 都是给**使用者（玩家 / 服主）**看的，
+不是写给作者或未来的 AI 的：
+
+- ✅ 写：这个版本对使用者**有什么变化**、怎么升级、要不要删存档、有哪些已知问题
+- ✅ 用玩家能懂的话；必要的技术原因可以留一小段，但不要整篇堆字节码分析
+- ❌ 不要出现「你观察到的…」「发我」这类**直接对作者说话**的措辞
+- ❌ 不要把内部排查过程、重构细节、自检项数当成主要内容
+- ❌ 不要拿只有开发者才关心的文件名 / 方法名当标题（可放进「技术细节」段）
+- 未验证的项必须**明确标注**（例：「实机未验证」）—— 这是如实，不是丢脸
+
+推荐结构：
+
+```markdown
+## 这个版本改了什么    使用者能感知的变化，每条一句话
+## 升级注意            要不要删存档 / 迁移数据 / 重启
+## 已知问题            未验证项、暂未修复
+```
+
+> 反面教材：把「你观察到的对比正好印证了这一点」「请把当时坐标发我」写进 release notes ——
+> 那是给作者看的，不是给使用者看的。
 
 ---
 
