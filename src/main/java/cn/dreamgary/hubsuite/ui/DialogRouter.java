@@ -194,20 +194,6 @@ public final class DialogRouter {
     // ------------------------------------------------------------------
 
     private static void registerAuthActions() {
-        register(AuthGui.ACTION_OPEN_LOGIN, (player, payload) -> {
-            if (authService == null) {
-                return;
-            }
-            AuthGui.openLogin(player, authService, null);
-        });
-
-        register(AuthGui.ACTION_OPEN_REGISTER, (player, payload) -> {
-            if (authService == null) {
-                return;
-            }
-            AuthGui.openRegister(player, authService, null);
-        });
-
         register("auth/quit", (player, payload) -> {
             DialogKit.close(player);
             player.sendSystemMessage(net.minecraft.network.chat.Component.literal(

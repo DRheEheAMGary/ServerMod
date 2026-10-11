@@ -12,10 +12,10 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 登录 / 注册对话框。
  *
- * <p>两个表单：
+ * <p><b>账号与游戏名一一对应</b>，所以表单完全由是否注册决定，不提供互相切换：
  * <ul>
- *   <li><b>登录</b>：一个密码框 + [登录] [去注册] [退出]</li>
- *   <li><b>注册</b>：确认名字、密码、确认密码 + [注册] [返回登录]</li>
+ *   <li><b>已注册</b> → 只弹登录（密码 + [登录] [退出]）；</li>
+ *   <li><b>未注册</b> → 只弹注册（密码、确认密码 + [注册] [退出]）。</li>
  * </ul>
  *
  * <p>点击按钮后，客户端会把输入框的值按 key 塞进 NBT 负载，
@@ -28,8 +28,6 @@ public final class AuthGui {
     /** 动作 id。 */
     public static final String ACTION_LOGIN = "auth/login";
     public static final String ACTION_REGISTER = "auth/register";
-    public static final String ACTION_OPEN_LOGIN = "auth/open_login";
-    public static final String ACTION_OPEN_REGISTER = "auth/open_register";
 
     /** 输入框 key（客户端回传 NBT 里的字段名）。 */
     public static final String KEY_USERNAME = "username";
@@ -69,12 +67,14 @@ public final class AuthGui {
     /** 打开登录表单；{@code error} 非空时显示为提示文字。 */
     public static void openLogin(ServerPlayer player, AuthService service, String error) {
         var body = new java.util.ArrayList<net.minecraft.server.dialog.body.DialogBody>();
+        // 能走到登录表单 = 这个名字已注册，所以不提供"去注册"。
+        // 账号与游戏名绑定，忘记密码只能找管理员重置，不能自己重开一个同名账号。
+        body.add(DialogKit.text(Component.literal(
+                "\u00A78忘记密码？请联系管理员重置。")));
         body.add(DialogKit.text(Component.literal("\u00A77请输入密码完成登录。")));
         if (error != null && !error.isBlank()) {
             body.add(DialogKit.text(Component.literal("\u00A7c" + error)));
         }
-        body.add(DialogKit.text(Component.literal(
-                "\u00A78若忘记密码，请联系管理员重置。")));
 
         var inputs = java.util.List.of(
                 DialogKit.textInput(KEY_PASSWORD,
@@ -83,9 +83,7 @@ public final class AuthGui {
                         service.config().maxPasswordLength));
 
         var actions = java.util.List.of(
-                DialogKit.submitButton(Component.literal("\u00A7a登 录"), DialogKit.action(ACTION_LOGIN)),
-                DialogKit.customButton(Component.literal("\u00A7e去注册"), DialogKit.action(ACTION_OPEN_REGISTER),
-                        java.util.Optional.empty()));
+                DialogKit.submitButton(Component.literal("\u00A7a登 录"), DialogKit.action(ACTION_LOGIN)));
 
         DialogKit.open(player, DialogKit.form(
                 Component.literal("\u00A7bHubSuite \u00A77登录"),
@@ -100,6 +98,10 @@ public final class AuthGui {
     /** 打开注册表单。 */
     public static void openRegister(ServerPlayer player, AuthService service, String error) {
         var body = new java.util.ArrayList<net.minecraft.server.dialog.body.DialogBody>();
+        // 能走到注册表单 = 这个名字没有账号。如果玩家其实已有账号，
+        // 说明他连的游戏名不对 —— 只能换一个用户名重新进入。
+        body.add(DialogKit.text(Component.literal(
+                "\u00A78这个名字还没有账号；若你已有账号，请换用注册时的用户名重新进入。")));
         body.add(DialogKit.text(Component.literal("\u00A77首次进入请设置密码完成注册。")));
         body.add(DialogKit.text(Component.literal("\u00A77用户名固定为你的游戏名：\u00A7f" + player.getName().getString())));
         if (error != null && !error.isBlank()) {
@@ -117,9 +119,7 @@ public final class AuthGui {
                         service.config().maxPasswordLength));
 
         var actions = java.util.List.of(
-                DialogKit.submitButton(Component.literal("\u00A7a注 册"), DialogKit.action(ACTION_REGISTER)),
-                DialogKit.customButton(Component.literal("\u00A7e已有账号，去登录"), DialogKit.action(ACTION_OPEN_LOGIN),
-                        java.util.Optional.empty()));
+                DialogKit.submitButton(Component.literal("\u00A7a注 册"), DialogKit.action(ACTION_REGISTER)));
 
         DialogKit.open(player, DialogKit.form(
                 Component.literal("\u00A7bHubSuite \u00A77注册"),
