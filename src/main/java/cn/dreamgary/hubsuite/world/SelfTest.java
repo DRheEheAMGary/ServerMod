@@ -602,6 +602,20 @@ public final class SelfTest {
                                 + scaled.getX() + "," + scaled.getZ() + ")，应为 (100,-200)");
                         return;
                     }
+                    // 发给客户端的 key 必须是原版那一界（否则光影会把下界当主世界）
+                    if (!Level.NETHER.equals(
+                            cn.dreamgary.hubsuite.world.PortalLinks.clientFacing(nether))) {
+                        fail("子服 '" + sub.id() + "' 的下界发给客户端的 key 是 "
+                                + cn.dreamgary.hubsuite.world.PortalLinks.clientFacing(nether)
+                                + "，不是 minecraft:the_nether —— 光影会当成主世界");
+                        return;
+                    }
+                    if (!main.equals(
+                            cn.dreamgary.hubsuite.world.PortalLinks.clientFacing(main))) {
+                        fail("子服 '" + sub.id() + "' 的主维度 key 被改动了："
+                                + cn.dreamgary.hubsuite.world.PortalLinks.clientFacing(main));
+                        return;
+                    }
                     checked++;
                 }
                 if (sub.config().ownEnd) {
@@ -617,6 +631,11 @@ public final class SelfTest {
                     var back = cn.dreamgary.hubsuite.world.PortalLinks.redirect(end, Level.END);
                     if (!main.equals(back)) {
                         fail("从子服 '" + sub.id() + "' 的末地回来会到 " + back + "，而不是 " + main);
+                        return;
+                    }
+                    if (!Level.END.equals(
+                            cn.dreamgary.hubsuite.world.PortalLinks.clientFacing(end))) {
+                        fail("子服 '" + sub.id() + "' 的末地发给客户端的 key 不是 minecraft:the_end");
                         return;
                     }
                     checked += 2;
