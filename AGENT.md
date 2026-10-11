@@ -305,19 +305,45 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 
 ---
 
-## 十、发布流程
+## 十、分支模型与发布流程
+
+### 分支
+
+| 分支 | 用途 |
+|---|---|
+| `main` | **正式版线**：只保留已发布的正式版状态，不直接在上面开发 |
+| `dev` | **日常开发**：所有「未加入正式版」的修改都提交到这里（默认工作分支） |
+| `next` | **测试版线**：预发布（rc / beta）通道 |
+
+三个分支同源（都从 `main` 切出）。`dev` 领先，`next` 用来发测试版，`main` 只在发正式版时合并。
+
+> **发版由人类作者通知 AI 触发**，AI 负责合并、打 tag、写 release。
+
+### 发测试版（预发布）
+
+```text
+1. 把 dev 合并到 next
+2. 在 next 上打 tag：v<版本>-rc.N
+3. gh release create v<版本>-rc.N --prerelease --notes-file <说明.md> <jar> <sources.jar>
+```
+
+### 发正式版
+
+```text
+1. 把 dev（或 next）合并回 main
+2. 在 main 上打 tag：v<版本>
+3. gh release create v<版本> --notes-file <说明.md> <jar> <sources.jar>
+4. 把 main 同步回 dev / next（避免下次合并冲突）
+```
+
+### 发版前固定步骤
 
 ```text
 1. 改 gradle.properties 的 mod_version
 2. 同步文档里的产物文件名（README.md / docs/**）
 3. 跑一次自检确认 失败 0 项
-4. git commit（**面向使用者**写信息，见下；信息写文件，用 git commit -F）
-5. git tag -a v<版本> -m "HubSuite v<版本>"
-6. git push origin main && git push origin v<版本>
-7. gh release create v<版本> --title "..." --notes-file <说明.md> <jar> <sources.jar>
-8. 从 GitHub 真实下载校验：zip 有效、fabric.mod.json 的 version 对、类数对
+4. 从 GitHub 真实下载校验：zip 有效、fabric.mod.json 的 version 对、类数对
 ```
-
 **发布说明必须如实写**：哪些已验证、哪些没有、升级要不要删存档。不要为了让 release 好看而省略「未验证」。
 
 ### 面向使用者写（重要）
