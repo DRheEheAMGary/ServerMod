@@ -33,6 +33,22 @@ public final class HubSuiteConfig {
     public cn.dreamgary.hubsuite.quest.QuestPresets.QuestConfig quests =
             cn.dreamgary.hubsuite.quest.QuestPresets.defaults();
 
+    /** 更新检查（启动时查一次，有新版本时提示管理员）。 */
+    public UpdateConfig update = new UpdateConfig();
+
+    /**
+     * 更新检查配置。
+     *
+     * <p>只查询 GitHub Releases，**不会自动下载或替换 jar**；请求异步、失败静默，
+     * 不影响服务端启动。见 {@code integration/UpdateChecker}。
+     */
+    public static final class UpdateConfig {
+        /** 是否检查更新（总开关）。 */
+        public boolean check = true;
+        /** 是否也检查测试版（预发布）。{@link #check} 为 false 时本项无效。 */
+        public boolean checkBeta = false;
+    }
+
     public static final class LobbyConfig {
 
         /**
@@ -353,6 +369,9 @@ public final class HubSuiteConfig {
         }
         if (auth == null) {
             auth = new AuthConfig();
+        }
+        if (update == null) {
+            update = new UpdateConfig();
         }
         if (island == null) {
             island = cn.dreamgary.hubsuite.island.IslandPresets.defaults();

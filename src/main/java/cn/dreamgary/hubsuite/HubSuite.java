@@ -53,6 +53,7 @@ public final class HubSuite implements ModInitializer {
     private cn.dreamgary.hubsuite.integration.PlaceholderService placeholders;
     private cn.dreamgary.hubsuite.feature.CommandGuard commandGuard;
     private cn.dreamgary.hubsuite.island.IslandService islands;
+    private cn.dreamgary.hubsuite.integration.UpdateChecker updateChecker;
 
     @Override
     public void onInitialize() {
@@ -81,6 +82,10 @@ public final class HubSuite implements ModInitializer {
         authManager = new AuthManager(authService, worldsManager);
         authManager.register();
         DialogRouter.bind(authManager, authService, worldsManager);
+
+        // 更新检查：服务端启动后异步查一次，管理员上线时收到提示
+        updateChecker = new cn.dreamgary.hubsuite.integration.UpdateChecker(configManager);
+        authManager.onAuthenticated(updateChecker::onPlayerAuthenticated);
 
         npcManager = new cn.dreamgary.hubsuite.npc.NpcManager(worldsManager, authManager);
         npcManager.register();
@@ -149,6 +154,7 @@ public final class HubSuite implements ModInitializer {
             huskHomes.logReport();
             placeholders.logReport();
             commandGuard.logPolicy();
+            updateChecker.onServerStarted(server);
 
             /*
              * 无人值守自检入口：加 -Dhubsuite.selftest=<延迟秒> 启动即可，

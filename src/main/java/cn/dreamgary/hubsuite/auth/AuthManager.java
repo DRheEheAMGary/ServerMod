@@ -61,6 +61,9 @@ public final class AuthManager {
     private final HubSuiteConfig.AuthConfig config;
     private final WorldsManager worlds;
     private final Map<UUID, AuthState> states = new ConcurrentHashMap<>();
+    /** 认证成功后的回调（更新提示等旁路功能订阅）。 */
+    private final java.util.List<java.util.function.Consumer<ServerPlayer>> authenticatedListeners =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
 
     public AuthManager(AuthService service, WorldsManager worlds) {
         this.service = service;
@@ -338,6 +341,21 @@ public final class AuthManager {
         }
         player.sendSystemMessage(Component.literal("\u00A7a✔ 认证成功，欢迎回来，\u00A7f" + player.getName().getString() + "\u00A7a！"));
         player.sendSystemMessage(Component.literal("\u00A77使用 \u00A7f/hub list \u00A77查看可用服务器，或直接点击大厅里的假人。"));
+        // 认证成功才算"上线"，此时回调（更新提示等）最自然，也不会打扰登录表单
+        for (java.util.function.Consumer<ServerPlayer> listener : authenticatedListeners) {
+            try {
+                listener.accept(player);
+            } catch (Throwable t) {
+                HubSuite.logger().debug("认证后回调失败：{}", t.toString());
+            }
+        }
+    }
+
+    /** 订阅"认证成功"事件（更新提示等旁路功能用）。 */
+    public void onAuthenticated(java.util.function.Consumer<ServerPlayer> listener) {
+        if (listener != null) {
+            authenticatedListeners.add(listener);
+        }
     }
 
     private ServerPlayer playerOf(UUID uuid) {

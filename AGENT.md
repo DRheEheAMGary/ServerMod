@@ -235,6 +235,7 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 | `rules/<子服>.json` | 各子服 gamerule 快照 |
 | `skyblock/islands.json` | **岛屿归属**（键是玩家 UUID） |
 | `skyblock/quests.json` | 任务进度 |
+| `update-check.json` | 更新检查缓存（ETag + 最近查到的版本，24h） |
 
 **`run/hubsuite_<子服>/`**（每子服一份独立存档）
 
