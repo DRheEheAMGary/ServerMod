@@ -153,10 +153,10 @@ public final class ChestMenuScreen {
         });
     }
 
-    /** 外圈用的淡灰色染色玻璃板（名字置空格，悬浮时不显示物品名）。 */
+    /** 外圈用的灰色染色玻璃板（名字置空格，悬浮时不显示物品名）。 */
     private static ItemStack borderPane() {
         ItemStack pane = new ItemStack(
-                net.minecraft.world.item.Items.LIGHT_GRAY_STAINED_GLASS_PANE);
+                net.minecraft.world.item.Items.GRAY_STAINED_GLASS_PANE);
         pane.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME, Text.of(" "));
         return pane;
     }
