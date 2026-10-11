@@ -550,6 +550,7 @@ public final class SelfTest {
                     continue;   // 虚空/超平坦不配下界末地
                 }
                 var main = sub.primaryEntry().dimension();
+                var mainLevel = sub.primaryEntry().level();
                 var nether = sub.entry("nether").map(e -> e.dimension()).orElse(null);
                 var end = sub.entry("end").map(e -> e.dimension()).orElse(null);
 
@@ -580,7 +581,6 @@ public final class SelfTest {
                      * key 不等于 minecraft:the_nether，于是原版把回程的缩放算成了 1:1。
                      * 一旦下界维度类型回落成 overworld（coordinate_scale=1），这条就会红。
                      */
-                    var mainLevel = sub.primaryEntry().level();
                     var netherLevel = sub.entry("nether").map(e -> e.level()).orElse(null);
                     if (netherLevel == null) {
                         fail("子服 '" + sub.id() + "' 拿不到下界关卡对象");
@@ -600,6 +600,12 @@ public final class SelfTest {
                     if (scaled.getX() != 100 || scaled.getZ() != -200) {
                         fail("子服 '" + sub.id() + "' 的传送门坐标换算错误：(800,-1600) → ("
                                 + scaled.getX() + "," + scaled.getZ() + ")，应为 (100,-200)");
+                        return;
+                    }
+                    // 下界必须和主维度共用同一个种子（原版语义：/seed 到处都一样）
+                    if (mainLevel.getSeed() != netherLevel.getSeed()) {
+                        fail("子服 '" + sub.id() + "' 的下界种子(" + netherLevel.getSeed()
+                                + ")和主维度(" + mainLevel.getSeed() + ")不一致 —— /seed 会对不上");
                         return;
                     }
                     // 发给客户端的 key 必须是原版那一界（否则光影会把下界当主世界）
@@ -636,6 +642,11 @@ public final class SelfTest {
                     if (!Level.END.equals(
                             cn.dreamgary.hubsuite.world.PortalLinks.clientFacing(end))) {
                         fail("子服 '" + sub.id() + "' 的末地发给客户端的 key 不是 minecraft:the_end");
+                        return;
+                    }
+                    var endLevel = sub.entry("end").map(e -> e.level()).orElse(null);
+                    if (endLevel == null || mainLevel.getSeed() != endLevel.getSeed()) {
+                        fail("子服 '" + sub.id() + "' 的末地种子和主维度不一致 —— /seed 会对不上");
                         return;
                     }
                     checked += 2;
