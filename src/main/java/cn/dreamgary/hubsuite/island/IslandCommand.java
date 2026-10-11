@@ -130,7 +130,12 @@ public final class IslandCommand {
         if (inSkyblock(player)) {
             return 1;
         }
-        source.sendFailure(Component.literal("\u00A7c请先进入空岛服：\u00A7f/hub " + service().server().id()));
+        var svc = service();
+        if (svc == null) {
+            requireService(source);   // 提示"空岛系统还没准备好"
+            return 0;
+        }
+        source.sendFailure(Component.literal("\u00A7c请先进入空岛服：\u00A7f/hub " + svc.server().id()));
         return 0;
     }
 
@@ -176,6 +181,10 @@ public final class IslandCommand {
         if (svc == null) {
             return 0;
         }
+        // 箱子界面（含"空岛任务"入口）只在空岛服里能开
+        if (requireSkyblock(source, player) == 0) {
+            return 0;
+        }
         var worlds = cn.dreamgary.hubsuite.HubSuite.worlds();
         cn.dreamgary.hubsuite.island.IslandMenu.open(player, svc, worlds);
         return 1;
@@ -207,6 +216,9 @@ public final class IslandCommand {
             player = player(source);
         } catch (Exception e) {
             source.sendFailure(Component.literal("该命令只能由玩家执行。"));
+            return 0;
+        }
+        if (requireSkyblock(source, player) == 0) {
             return 0;
         }
         var service = service();
@@ -243,6 +255,16 @@ public final class IslandCommand {
 
     /** 列出所有岛型。 */
     private int types(CommandSourceStack source) {
+        ServerPlayer player;
+        try {
+            player = player(source);
+        } catch (Exception e) {
+            source.sendFailure(Component.literal("该命令只能由玩家执行。"));
+            return 0;
+        }
+        if (requireSkyblock(source, player) == 0) {
+            return 0;
+        }
         var service = service();
         source.sendSuccess(() -> Component.literal(
                 "\u00A78\u00A7m------\u00A7r \u00A7b可用岛型 \u00A78\u00A7m------"), false);

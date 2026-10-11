@@ -223,7 +223,7 @@ public final class ServerRulesEngine {
      * @param dimension 这次要进入的**具体维度**；坐标记忆是按它存的
      *                  （多维度子服必须区分，见 {@link #remember}）
      */
-    public cn.dreamgary.hubsuite.world.PlayableWorld.SpawnPoint resolveEntry(
+    public cn.dreamgary.hubsuite.world.PlayableWorld.SpawnPoint memorySpawn(
             ServerPlayer player, SubServer sub,
             net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {
         if (sub.config().rememberLastLocation && dimension != null) {
@@ -233,7 +233,9 @@ public final class ServerRulesEngine {
                         spot[0], spot[1], spot[2], (float) spot[3], (float) spot[4]);
             }
         }
-        return sub.spawn();
+        // 没有记忆 → null（由调用方回落到场所出生点）。不要再返回 sub.spawn()，
+        // 那样调用方分不清"记忆"和"出生点"，又会把重生点绑到错误的值上。
+        return null;
     }
 
     // ------------------------------------------------------------------

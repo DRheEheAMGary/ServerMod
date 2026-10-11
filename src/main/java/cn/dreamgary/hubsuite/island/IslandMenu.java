@@ -58,7 +58,7 @@ public final class IslandMenu {
                     }
                 }));
 
-        ChestMenuScreen.open(player, "\u00A78\u00A7l选择岛屿", entries);
+        ChestMenuScreen.open(player, "\u00A78\u00A7l选择岛屿", entries, true);
     }
 
     /** 组装一个岛型的条目。 */

@@ -55,7 +55,7 @@ public final class ServerMenu {
             return;
         }
 
-        ChestMenuScreen.open(player, "\u00A78\u00A7l点击传送", entries);
+        ChestMenuScreen.open(player, "\u00A78\u00A7l点击传送", entries, true);
     }
 
     /** 组装一个子服的条目。 */

@@ -62,6 +62,24 @@ public final class PlayerRouter {
         addSpawnResolver(resolver);
     }
 
+    /**
+     * 位置记忆（"回到上次位置"）。
+     *
+     * <p><b>它只用于传送落点，绝不能当重生点</b> —— 否则玩家死后会重生在
+     * 上次退出的坐标上，而不是子服出生点（用户实测反馈）。
+     */
+    @FunctionalInterface
+    public interface MemoryResolver {
+        /** @return 记忆的位置；没有则返回 null。 */
+        PlayableWorld.SpawnPoint recall(ServerPlayer player, PlayableWorld target, ServerLevel level);
+    }
+
+    private static volatile MemoryResolver memoryResolver;
+
+    public static void setMemoryResolver(MemoryResolver resolver) {
+        memoryResolver = resolver;
+    }
+
     /** 入场监听器：玩家落地后调用（例如空岛服要为首次进入的玩家建岛）。 */
     @FunctionalInterface
     public interface EntryListener {
@@ -165,8 +183,22 @@ public final class PlayerRouter {
             //          首次进入该场所会得到一份全新状态。
             PlayerStateStash.apply(player, level.dimension());
 
-            // 步骤 2b：解析这个玩家在该场所的实际出生点
-            PlayableWorld.SpawnPoint spawn = spawnFor(player, target, level);
+            // 步骤 2b：解析这个玩家在该场所的**出生点**（不含"回到上次位置"）
+            PlayableWorld.SpawnPoint placeSpawn = spawnFor(player, target, level);
+
+            // 本次传送的落点：开启位置记忆时优先回到上次退出的位置。
+            // 记忆只影响"这次把人放哪"，不影响重生点（见步骤 5）。
+            PlayableWorld.SpawnPoint spawn = placeSpawn;
+            if (memoryResolver != null) {
+                try {
+                    PlayableWorld.SpawnPoint remembered = memoryResolver.recall(player, target, level);
+                    if (remembered != null) {
+                        spawn = remembered;
+                    }
+                } catch (Throwable t) {
+                    HubSuite.logger().debug("位置记忆解析失败（改用场所出生点）：{}", t.toString());
+                }
+            }
 
             // 步骤 3：用票据加载目标区块（比手动强载安全，见 addLoadingTicket）
             addLoadingTicket(level, spawn.x(), spawn.z());
@@ -195,7 +227,10 @@ public final class PlayerRouter {
             // 必须带上 level：多维度子服的主维度不是玩家要去的地方。
             // 不带的话，在空岛服的岛屿维度里绑出来的重生点是**虚空主维度**，
             // 一死就一直往下掉（用户实测："kill 一下自己就卡住了"）。
-            RespawnPoints.bind(player, target, true, spawn, level);
+            // 必须绑**场所出生点**而不是本次落点：开启位置记忆时 spawn 是
+            // "上次退出的坐标"，拿它当重生点就会死在原地（用户实测反馈：
+            // "死亡后不是重生到出生点，而是重生到上次退出该子服务器的位置"）。
+            RespawnPoints.bind(player, target, true, placeSpawn, level);
 
             /*
              * 成就/统计：把玩家身上那两个 final 引用换成按**新维度**解析的新对象。

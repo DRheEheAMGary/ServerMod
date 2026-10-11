@@ -33,8 +33,14 @@ public final class SubServer implements PlayableWorld {
     private final HubSuiteConfig.SubServerConfig config;
     private final ServerRules rules;
 
-    /** 主维度（玩家默认进这个）。 */
-    private final Entry primary;
+    /**
+     * 主维度（玩家默认进这个）。
+     *
+     * <p><b>不是 final：</b>出生点延迟补算后要把这个引用换成新 Entry。
+     * 只更新 {@link #entries} 里的那一份是不够的 —— {@link #spawn()} 读的是
+     * 这个字段，漏掉它就会出现「缓存已写成新 Y、玩家进服还落在旧 Y 卡地里」。
+     */
+    private volatile Entry primary;
 
     /** 全部维度，按"入口 id"索引。主维度的入口 id 就是 {@code "main"}。 */
     private final Map<String, Entry> entries;
@@ -160,6 +166,9 @@ public final class SubServer implements PlayableWorld {
                     pendingSpawnFixes.remove(pending);
                     continue;
                 }
+                // 原版给的 Y 不一定真能站人（实测有埋在地里的），走和 resolveSpawn
+                // 同一条站立校验 —— 以前补算路径漏了这步，会缓存下一个站不住的点。
+                resolved = sanitizeSpawn(pending.level(), config.id, resolved);
                 rememberSpawnAndApply(pending.level(), config, resolved);
                 HubSuite.logger().info("子服 '{}' 的原版出生点已补算并缓存：({}, {}, {})",
                         config.id, resolved.x(), resolved.y(), resolved.z());
@@ -251,8 +260,15 @@ public final class SubServer implements PlayableWorld {
     public void updateEntrySpawn(ServerLevel level, PlayableWorld.SpawnPoint spawn) {
         for (var e : new java.util.ArrayList<>(entries.entrySet())) {
             if (e.getValue().level() == level) {
-                entries.put(e.getKey(), new Entry(e.getValue().id(), e.getValue().dimension(),
-                        level, e.getValue().save(), spawn, e.getValue().label()));
+                Entry updated = new Entry(e.getValue().id(), e.getValue().dimension(),
+                        level, e.getValue().save(), spawn, e.getValue().label());
+                entries.put(e.getKey(), updated);
+                // 主维度必须同时回填 primary 字段 —— spawn() 返回的是 primary.spawn()。
+                // 只改 entries 的话字段还指向旧对象：实测"补算成功、配置写的是 Y=80，
+                // 玩家进服却还被埋在兜底坐标 Y=64"。
+                if (e.getKey().equals(primary.id())) {
+                    primary = updated;
+                }
                 return;
             }
         }
@@ -693,16 +709,16 @@ public final class SubServer implements PlayableWorld {
             if (oceanSpot != null) {
                 spawn = new PlayableWorld.SpawnPoint(
                         oceanSpot.getX() + 0.5, oceanSpot.getY(), oceanSpot.getZ() + 0.5, 0.0F, 0.0F);
-                // 海上没有落脚点，铺一块小沙洲；玩家一进来就面朝大海。
+                // **故意不铺"海上沙洲"。**
                 //
-                // 注意：此刻区块**大概率还没加载**，而 setBlockAndUpdate 会静默失败
-                // （往未加载区块写方块要么无效、要么阻塞主线程）。所以这里先试一次，
-                // 没铺成的话登记到"待铺"列表，由 WorldsManager 的 tick 重试。
-                if (!buildOceanPlatform(level, spawn)) {
-                    queueSpawnPlatform(level, spawn, 4, entryId,
-                            net.minecraft.world.level.block.Blocks.SAND);
-                    HubSuite.logger().info("海洋维度 '{}' 的出生平台等区块加载后补铺", entryId);
-                }
+                // 原实现在这个维度出生点铺一块半径 4 的沙子平台，但：
+                //   1. 沙子是**重力方块** —— 它被铺在水面上方一格（下方是水，不是固体），
+                //      一收到方块更新就整片变成下落沙沉到海底，在海床上留下一块突兀的沙斑
+                //      （用户实测："我看着它沉下去的"）；
+                //   2. 玩家进海岛服**总是落到自己的岛上** —— IslandService 的入场监听器
+                //      在 PlayerRouter 解析落点**之前**就建好/选好了岛，这个维度出生点
+                //      玩家根本用不到。
+                // 结论：这块沙洲既没必要、又会自己沉掉，直接不要。
             } else {
                 spawn = new PlayableWorld.SpawnPoint(config.spawnX, config.spawnY, config.spawnZ,
                         config.spawnYaw, config.spawnPitch);
@@ -767,25 +783,6 @@ public final class SubServer implements PlayableWorld {
                                           int radius, String label) {
         queueSpawnPlatform(level, spawn, radius, label,
                 net.minecraft.world.level.block.Blocks.STONE);
-    }
-
-    /**
-     * 给"海上出生点"铺一小块沙洲。
-     *
-     * @return true 表示铺成功；false 表示区块没加载，需要稍后重试
-     */
-    private static boolean buildOceanPlatform(ServerLevel level, PlayableWorld.SpawnPoint spawn) {
-        int cx = ((int) Math.floor(spawn.x())) >> 4;
-        int cz = ((int) Math.floor(spawn.z())) >> 4;
-        if (!isChunkReady(level, cx, cz)) {
-            return false;
-        }
-        int blocks = SpawnPlatform.build(level, spawn, 4, net.minecraft.world.level.block.Blocks.SAND);
-        if (blocks == SpawnPlatform.CHUNKS_NOT_READY) {
-            return false;   // 区块没就位，下一 tick 再来（别在这里同步生成）
-        }
-        // SpawnPlatform 内部已按 debug 记录，这里不再重复打一条
-        return true;
     }
 
     /**

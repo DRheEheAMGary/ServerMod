@@ -40,10 +40,16 @@ public final class ChestMenuScreen {
         }
     }
 
-    /** 一个玩家当前打开的菜单：容器 + 条目表。 */
+    /** 一个玩家当前打开的菜单：容器 + 槽位 → 条目。 */
     private static final class Open {
         final SimpleContainer container;
-        final List<Entry> entries;
+        /**
+         * 槽位 → 条目。
+         *
+         * <p><b>不能用"下标 = 槽位"</b>：带边框的布局里条目是居中散开的，
+         * 槽位顺序与条目顺序不再一致。
+         */
+        final Map<Integer, Entry> slotEntries;
         final String title;
 
         /** 这个菜单在服务端的容器 id —— 用来判断收到的点击包是不是打给它的。 */
@@ -52,9 +58,9 @@ public final class ChestMenuScreen {
         /** 打开时间，用于超时自动关闭。 */
         final long openedAt = System.currentTimeMillis();
 
-        Open(SimpleContainer container, List<Entry> entries, String title) {
+        Open(SimpleContainer container, Map<Integer, Entry> slotEntries, String title) {
             this.container = container;
-            this.entries = entries;
+            this.slotEntries = slotEntries;
             this.title = title;
         }
     }
@@ -71,24 +77,64 @@ public final class ChestMenuScreen {
      * @param entries 条目（按槽位顺序，最多 54 个）
      */
     public static void open(ServerPlayer player, String title, List<Entry> entries) {
-        int slots = Math.max(9, Math.min(54, ((entries.size() + 8) / 9) * 9));
+        open(player, title, entries, false);
+    }
+
+    /**
+     * 打开一个箱子菜单。
+     *
+     * @param decorated true = **外圈铺淡灰色玻璃板**，条目在内部**居中散开**；
+     *                  false = 紧凑排布（条目从左上角开始占格）
+     */
+    public static void open(ServerPlayer player, String title, List<Entry> entries, boolean decorated) {
+        int count = entries.size();
+        Map<Integer, Entry> slotEntries = new java.util.LinkedHashMap<>();
+
+        // 带边框时内部可用 7 列，每多一行加 7 个容量；放不下就退回紧凑排布，
+        // 免得条目被挤到边框上。
+        boolean border = decorated && count > 0 && count <= 28;
+        int rows;
+        if (border) {
+            rows = Math.max(1, (count + 6) / 7) + 2;   // 内部行数 + 上下两条边框
+        } else {
+            rows = Math.max(1, Math.min(6, (count + 8) / 9));
+        }
+        int slots = rows * 9;
         SimpleContainer container = new SimpleContainer(slots);
 
-        for (int i = 0; i < entries.size() && i < slots; i++) {
-            container.setItem(i, decorate(entries.get(i)));
+        if (border) {
+            ItemStack pane = borderPane();
+            for (int i = 0; i < slots; i++) {
+                if (isBorderSlot(i, rows)) {
+                    container.setItem(i, pane.copy());
+                }
+            }
+            int interiorRows = rows - 2;
+            int usedRows = Math.max(1, (count + 6) / 7);
+            int base = count / usedRows;
+            int extra = count % usedRows;
+            int startRow = (interiorRows - usedRows) / 2;   // 垂直居中
+            int index = 0;
+            for (int r = 0; r < usedRows; r++) {
+                int inRow = base + (r < extra ? 1 : 0);
+                for (int j = 0; j < inRow; j++) {
+                    int slot = (startRow + r + 1) * 9 + (spreadColumn(j, inRow, 7) + 1);
+                    Entry entry = entries.get(index++);
+                    container.setItem(slot, decorate(entry));
+                    slotEntries.put(slot, entry);
+                }
+            }
+        } else {
+            for (int i = 0; i < count && i < slots; i++) {
+                container.setItem(i, decorate(entries.get(i)));
+                slotEntries.put(i, entries.get(i));
+            }
         }
 
-        Open open = new Open(container, new ArrayList<>(entries), title);
+        Open open = new Open(container, slotEntries, title);
         OPEN.put(player.getUUID(), open);
 
-        MenuType<?> type = switch (slots / 9) {
-            case 1 -> MenuType.GENERIC_9x1;
-            case 2 -> MenuType.GENERIC_9x2;
-            case 3 -> MenuType.GENERIC_9x3;
-            case 4 -> MenuType.GENERIC_9x4;
-            case 5 -> MenuType.GENERIC_9x5;
-            default -> MenuType.GENERIC_9x6;
-        };
+        MenuType<?> type = menuType(rows);
 
         player.openMenu(new net.minecraft.world.MenuProvider() {
             @Override
@@ -105,6 +151,41 @@ public final class ChestMenuScreen {
                 return new ChestMenu(type, syncId, inventory, container, slots / 9);
             }
         });
+    }
+
+    /** 外圈用的淡灰色染色玻璃板（名字置空格，悬浮时不显示物品名）。 */
+    private static ItemStack borderPane() {
+        ItemStack pane = new ItemStack(
+                net.minecraft.world.item.Items.LIGHT_GRAY_STAINED_GLASS_PANE);
+        pane.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME, Text.of(" "));
+        return pane;
+    }
+
+    /** 槽位是否在外圈边框上。 */
+    private static boolean isBorderSlot(int slot, int rows) {
+        int row = slot / 9;
+        int col = slot % 9;
+        return row == 0 || row == rows - 1 || col == 0 || col == 8;
+    }
+
+    /** 把 count 个点**均匀、居中**地分布到 width 列上。 */
+    private static int spreadColumn(int index, int count, int width) {
+        if (count >= width) {
+            return Math.min(index, width - 1);
+        }
+        int col = Math.round((index + 0.5F) * width / count - 0.5F);
+        return Math.max(0, Math.min(width - 1, col));
+    }
+
+    private static MenuType<?> menuType(int rows) {
+        return switch (rows) {
+            case 1 -> MenuType.GENERIC_9x1;
+            case 2 -> MenuType.GENERIC_9x2;
+            case 3 -> MenuType.GENERIC_9x3;
+            case 4 -> MenuType.GENERIC_9x4;
+            case 5 -> MenuType.GENERIC_9x5;
+            default -> MenuType.GENERIC_9x6;
+        };
     }
 
     /** 给图标套上名字与描述。 */
@@ -154,12 +235,14 @@ public final class ChestMenuScreen {
             return false;
         }
 
-        // 只要点的是箱子区域内的槽位就算我方菜单（负数是界面外，忽略）
-        if (slot < 0 || slot >= open.entries.size()) {
-            return true;   // 点空白格：吞掉，不做任何事
+        if (slot < 0) {
+            return true;   // 界面外
         }
-
-        Entry entry = open.entries.get(slot);
+        // 边框 / 空格没有条目 → 吞掉，不做任何事
+        Entry entry = open.slotEntries.get(slot);
+        if (entry == null) {
+            return true;
+        }
         // 先关界面再执行动作：动作可能会传送玩家/打开新界面
         player.closeContainer();
         OPEN.remove(player.getUUID());
