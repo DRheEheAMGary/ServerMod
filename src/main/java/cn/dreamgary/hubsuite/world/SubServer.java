@@ -586,13 +586,20 @@ public final class SubServer implements PlayableWorld {
         }
         ResourceKey<Level> nether = null;
         ResourceKey<Level> end = null;
+        /*
+         * 下界/末地与主维度**共用同一个种子** —— 这是原版语义：
+         * 同一存档所有维度的 getSeed() 都是那一个世界种子，所以 /seed 在
+         * 主世界、下界、末地必须给出同一个值。
+         *
+         * 以前这里对种子做了异或派生（seed ^ "NETHER"），导致同一存档的
+         * 下界 /seed 和主世界对不上（用户实测抓到）。地形不会因此变一样：
+         * 下界用 NoiseGeneratorSettings.NETHER、末地用 END，噪声设置本来就不同。
+         */
         if (config.ownNether) {
-            nether = createVanillaSideDimension("nether", "下界", true,
-                    config.seed ^ 0x4E45544845524CL);
+            nether = createVanillaSideDimension("nether", "下界", true, config.seed);
         }
         if (config.ownEnd) {
-            end = createVanillaSideDimension("end", "末地", false,
-                    config.seed ^ 0x454E4421212121L);
+            end = createVanillaSideDimension("end", "末地", false, config.seed);
         }
         if (nether != null || end != null) {
             // 正反两个方向都要登记：从子服过去、以及从那边回来
