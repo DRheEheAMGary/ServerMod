@@ -300,7 +300,18 @@ public final class UpdateChecker {
         }
         String[] ta = pa.split("[.-]");
         String[] tb = pb.split("[.-]");
-        for (int i = 0; i < Math.max(ta.length, tb.length); i++) {
+        // 四档预发布按内定顺序排：alpha < beta < pre < rc；
+        // 同一档再比后面的 N；未知标识符（如 SNAPSHOT）rank=0，排在最前。
+        int rankA = prereleaseRank(ta[0]);
+        int rankB = prereleaseRank(tb[0]);
+        int start = 0;
+        if (rankA != 0 || rankB != 0) {
+            if (rankA != rankB) {
+                return Integer.compare(rankA, rankB);
+            }
+            start = 1;
+        }
+        for (int i = start; i < Math.max(ta.length, tb.length); i++) {
             String x = i < ta.length ? ta[i] : "0";
             String y = i < tb.length ? tb[i] : "0";
             boolean xn = x.matches("\\d+");
@@ -311,6 +322,17 @@ public final class UpdateChecker {
             }
         }
         return 0;
+    }
+
+    /** 四档预发布的内定顺序：alpha &lt; beta &lt; pre &lt; rc；未识别的返回 0。 */
+    private static int prereleaseRank(String label) {
+        return switch (label.toLowerCase(java.util.Locale.ROOT)) {
+            case "alpha" -> 1;
+            case "beta" -> 2;
+            case "pre", "preview" -> 3;
+            case "rc" -> 4;
+            default -> 0;
+        };
     }
 
     private static String stripV(String s) {
