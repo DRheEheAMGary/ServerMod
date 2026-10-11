@@ -571,6 +571,38 @@ public final class SelfTest {
                         return;
                     }
                     checked += 2;
+
+                    /*
+                     * 坐标缩放必须是 1:8。
+                     *
+                     * 这里锁的是"回主世界又给开了一扇门"的根因：原版靠
+                     * level.dimension() == Level.NETHER 选方向，而我们的自定义下界
+                     * key 不等于 minecraft:the_nether，于是原版把回程的缩放算成了 1:1。
+                     * 一旦下界维度类型回落成 overworld（coordinate_scale=1），这条就会红。
+                     */
+                    var mainLevel = sub.primaryEntry().level();
+                    var netherLevel = sub.entry("nether").map(e -> e.level()).orElse(null);
+                    if (netherLevel == null) {
+                        fail("子服 '" + sub.id() + "' 拿不到下界关卡对象");
+                        return;
+                    }
+                    double down = net.minecraft.world.level.dimension.DimensionType
+                            .getTeleportationScale(mainLevel.dimensionType(), netherLevel.dimensionType());
+                    double up = net.minecraft.world.level.dimension.DimensionType
+                            .getTeleportationScale(netherLevel.dimensionType(), mainLevel.dimensionType());
+                    if (Math.abs(down - 0.125) > 1e-6 || Math.abs(up - 8.0) > 1e-6) {
+                        fail("子服 '" + sub.id() + "' 的传送门缩放不是 1:8（进=" + down + "，回=" + up
+                                + "）—— 下界维度类型可能回落成了 overworld，回家会多建一扇门");
+                        return;
+                    }
+                    var scaled = cn.dreamgary.hubsuite.world.PortalLinks
+                            .scaledPortalPos(mainLevel, netherLevel, 800.0, 64.0, -1600.0);
+                    if (scaled.getX() != 100 || scaled.getZ() != -200) {
+                        fail("子服 '" + sub.id() + "' 的传送门坐标换算错误：(800,-1600) → ("
+                                + scaled.getX() + "," + scaled.getZ() + ")，应为 (100,-200)");
+                        return;
+                    }
+                    checked++;
                 }
                 if (sub.config().ownEnd) {
                     if (end == null) {

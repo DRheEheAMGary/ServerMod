@@ -74,7 +74,7 @@ public abstract class PortalBlockDestinationMixin {
             if (!Level.NETHER.equals(targetKey) && !Level.END.equals(targetKey)) {
                 return original;
             }
-            boolean isNether = Level.NETHER.equals(targetKey);
+            boolean targetIsNether = Level.NETHER.equals(targetKey);
             ResourceKey<Level> redirected = PortalLinks.redirect(fromLevel.dimension(), targetKey);
             if (redirected == null || redirected.equals(targetKey)) {
                 return original;   // 没登记 / 不需要改
@@ -87,17 +87,37 @@ public abstract class PortalBlockDestinationMixin {
             }
 
             /*
-             * 坐标换算：原版已按"当前维度 ↔ 原版目标维度"算过（下界 1:8），
-             * 而我们的下界维度与子服主维度同样是 1:8 关系，直接用原版算出的位置。
+             * 坐标换算：**必须自己按"当前维度 ↔ 实际目标维度"重算**，
+             * 不能直接信 original.position()。
              *
-             * 回到原版的算法：position() 就是 getPortalDestination 里
-             * clampToBounds(x*scale, y, z*scale) 的结果。
+             * 原因：原版判"我在不在下界"用的是 level.dimension() == Level.NETHER，
+             * 而我们的自定义下界 key 是 hubsuite:server_<id>_nether，**不等于**
+             * minecraft:the_nether。于是从自定义下界返回时，原版以为你在主世界，
+             * 目标选了"下界"、缩放按"下界→下界"算成 **1:1** —— 拿它去主世界找门
+             * 就会在没缩放的坐标上找，找不到就多建一扇
+             * （用户实测：主世界建好门、过去下界、回来又给开了一扇）。
              */
-            Vec3 originalPos = original.position();
-            BlockPos scaledPos = BlockPos.containing(originalPos.x, originalPos.y, originalPos.z);
+            BlockPos scaledPos;
+            if (targetIsNether) {
+                scaledPos = PortalLinks.scaledPortalPos(fromLevel, destination,
+                        entity.getX(), entity.getY(), entity.getZ());
+            } else {
+                // 末地传送门原版走的是固定平台坐标，不做缩放，保持原样
+                Vec3 originalPos = original.position();
+                scaledPos = BlockPos.containing(originalPos.x, originalPos.y, originalPos.z);
+            }
+
+            /*
+             * 搜索半径的判据也要用**实际目标维度**。
+             *
+             * 原版是 destLevel.dimension() == NETHER（下界 16 格 / 其它 128 格），
+             * 但我们的返回目标是子服主维度；沿用原版 targetKey 会在"回主世界"时
+             * 错用 16 格半径。只有下界那种维度 coordinate_scale > 1，按它判更稳。
+             */
+            boolean destinationIsNether = destination.dimensionType().coordinateScale() > 1.0;
 
             Vec3 landPos = this.hubsuite$findOrCreateExit(destination, entity, fromPos,
-                    scaledPos, isNether);
+                    scaledPos, destinationIsNether);
             if (landPos == null) {
                 return original;   // 建门失败（例如超出世界边界）→ 不改变原版行为
             }
