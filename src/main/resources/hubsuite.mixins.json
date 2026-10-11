@@ -5,6 +5,7 @@
   "compatibilityLevel": "JAVA_25",
   "mixins": [
     "BaseFireBlockPortalMixin",
+    "CommonPlayerSpawnInfoMixin",
     "ConnectionChannelAccessor",
     "DistanceManagerAccessor",
     "DistanceManagerRemovePlayerMixin",

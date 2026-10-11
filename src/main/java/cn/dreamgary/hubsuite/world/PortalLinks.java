@@ -121,6 +121,47 @@ public final class PortalLinks {
         return vanillaTarget;
     }
 
+    /**
+     * 传送门落点换算：把出发维度里的坐标按**出发 / 目标两个维度类型的坐标缩放**
+     * 换算到目标维度（下界 1:8）。
+     *
+     * <p>原版 {@code NetherPortalBlock} 内部用的就是这个
+     * （{@code DimensionType.getTeleportationScale(from, to)}），但它靠
+     * {@code level.dimension() == Level.NETHER} 选方向；我们的自定义下界 key
+     * 不等于 {@code minecraft:the_nether}，所以**必须显式传两个维度自己算** ——
+     * 这正是"回主世界又给开一扇门"的根因（详见 PortalBlockDestinationMixin）。
+     */
+    public static net.minecraft.core.BlockPos scaledPortalPos(ServerLevel from, ServerLevel to,
+                                                              double x, double y, double z) {
+        double scale = net.minecraft.world.level.dimension.DimensionType
+                .getTeleportationScale(from.dimensionType(), to.dimensionType());
+        return net.minecraft.core.BlockPos.containing(x * scale, y, z * scale);
+    }
+
+    /**
+     * 客户端侧"应该看到"的维度 key。
+     *
+     * <p><b>为什么需要：</b>光影（Iris / OptiFine 等）判断维度是拿维度
+     * **key** 跟 {@code Level.NETHER} / {@code Level.END} 比的（不看
+     * {@code DimensionType.effects}）。我们的自定义下界/末地 key 不等于原版
+     * key，于是光影会把下界当成主世界（用户实测："开了光影它把地狱识别成主世界"）。
+     *
+     * <p>这里把**发给客户端**的那份 key 换成原版的 —— 只骗客户端，服务端内部
+     * 一切不变（子服之间仍然是各自的独立维度）。
+     */
+    public static ResourceKey<Level> clientFacing(ResourceKey<Level> dimension) {
+        if (dimension == null) {
+            return null;
+        }
+        if (NETHER_BACK.containsKey(dimension)) {
+            return Level.NETHER;
+        }
+        if (END_BACK.containsKey(dimension)) {
+            return Level.END;
+        }
+        return dimension;
+    }
+
     /** 取目标维度对应的 {@link ServerLevel}；没有就返回 null（调用方保留原版目标）。 */
     public static ServerLevel levelOf(MinecraftServer server, ResourceKey<Level> dimension) {
         if (server == null || dimension == null) {
