@@ -69,6 +69,13 @@ public final class IslandCommand {
     public void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registry, environment) ->
                 dispatcher.register(Commands.literal("island")
+                        // 只在空岛服存在：Brigadier 的 requires 同时管**补全**与**执行**，
+                        // 所以在别的子服里连 /island 都补不出来，而不是"补出来再拒绝"。
+                        // 控制台（没有玩家）保留，方便 help / 调试。
+                        .requires(source -> {
+                            var p = source.getPlayer();
+                            return p == null || inSkyblock(p);
+                        })
                         // 玩家直接执行 /island → 打开箱子式岛屿界面
                         // （控制台没有界面，列帮助）
                         .executes(ctx -> {
