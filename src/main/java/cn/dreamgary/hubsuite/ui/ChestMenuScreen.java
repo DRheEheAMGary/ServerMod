@@ -328,6 +328,26 @@ public final class ChestMenuScreen {
         return OPEN.containsKey(uuid);
     }
 
+    /**
+     * 第 {@code index} 个条目所在的槽位（按槽位升序）；没有返回 -1。
+     *
+     * <p>带边框布局里条目是居中散开的，槽位与下标不再相等 —— 自检要点某个条目
+     * 必须用它，不能假设"第 0 个条目在槽位 0"。
+     */
+    public static int entrySlot(UUID uuid, int index) {
+        Open open = OPEN.get(uuid);
+        if (open == null) {
+            return -1;
+        }
+        int i = 0;
+        for (int slot : new java.util.TreeSet<>(open.slotEntries.keySet())) {
+            if (i++ == index) {
+                return slot;
+            }
+        }
+        return -1;
+    }
+
     /** 拖拽/快捷移动等操作也要吞掉，避免物品被搬走。 */
     public static boolean shouldBlockInteraction(ServerPlayer player, int containerId) {
         Open open = OPEN.get(player.getUUID());

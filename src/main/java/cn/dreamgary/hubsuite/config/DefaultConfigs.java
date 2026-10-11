@@ -111,7 +111,8 @@ public final class DefaultConfigs {
         s.allowGameModeCommand = true;
         s.rememberLastLocation = true;
         s.permissionGroup = "hubsuite.creative";
-        s.huskhomesTeleport = false;   // 创造服不让 /home 之类的指令把人传走
+        // 传送指令开启；"家"按子服隔离（见 integration/HuskHomesHomeIsolation）
+        s.huskhomesTeleport = true;
 
         s.gameRules.put("KEEP_INVENTORY", "true");
         s.gameRules.put("SPAWN_MOBS", "false");
@@ -159,7 +160,8 @@ public final class DefaultConfigs {
         s.allowGameModeCommand = false;
         s.rememberLastLocation = true;
         s.permissionGroup = "hubsuite.skyblock";
-        s.huskhomesTeleport = false;   // 空岛服必须关，否则 /home 会把人传出自己的岛
+        // 同上：/home 可用，但只能回本子服（本维度所属子服）的家
+        s.huskhomesTeleport = true;
 
         s.gameRules.put("KEEP_INVENTORY", "false");
         s.gameRules.put("SPAWN_MOBS", "false");

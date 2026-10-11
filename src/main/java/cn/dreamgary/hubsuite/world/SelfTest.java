@@ -1730,9 +1730,15 @@ public final class SelfTest {
 
             // 模拟点击"生存服"那一格。
             // 界面里第一个条目就是第一个启用的子服（survival 排在最前）。
+            // 注意：界面现在带边框、条目居中散开，**不能再假设条目在槽位 0**。
             int containerId = menu.containerId;
+            int firstSlot = cn.dreamgary.hubsuite.ui.ChestMenuScreen.entrySlot(probe.getUUID(), 0);
+            if (firstSlot < 0) {
+                fail("服务器选择界面里找不到可点击的条目槽位");
+                return;
+            }
             boolean handled = cn.dreamgary.hubsuite.ui.ChestMenuScreen.handleClick(
-                    probe, containerId, 0);
+                    probe, containerId, firstSlot);
             if (!handled) {
                 fail("点击没有被菜单接管（会漏给原版逻辑，物品可能被拿走）");
                 return;
@@ -1760,7 +1766,7 @@ public final class SelfTest {
             // 回到大厅，确认界面关掉后不再接管
             cn.dreamgary.hubsuite.world.PlayerRouter.sendTo(probe, lobby);
             boolean handledAfterClose = cn.dreamgary.hubsuite.ui.ChestMenuScreen.handleClick(
-                    probe, containerId, 0);
+                    probe, containerId, firstSlot);
             if (!handledAfterClose) {
                 ok("界面关闭后点击不再被接管（不会误伤正常游戏操作）");
             } else {

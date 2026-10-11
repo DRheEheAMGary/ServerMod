@@ -183,13 +183,18 @@ public final class PlayerRouter {
             //          首次进入该场所会得到一份全新状态。
             PlayerStateStash.apply(player, level.dimension());
 
-            // 步骤 2b：解析这个玩家在该场所的**出生点**（不含"回到上次位置"）
-            PlayableWorld.SpawnPoint placeSpawn = spawnFor(player, target, level);
+            // 步骤 2b：解析这个玩家在该场所的**出生点**。
+            //   优先级必须保持：解析器结果（空岛服=自己的岛）> 位置记忆 > 入口出生点。
+            //   以前把记忆提到解析器前面，结果"从海岛切经典空岛"会落到记忆里的
+            //   另一个岛型坐标上（自检抓到："离自己的经典岛 288 格"）。
+            java.util.Optional<PlayableWorld.SpawnPoint> custom =
+                    customSpawnFor(player, target, level);
+            PlayableWorld.SpawnPoint placeSpawn = custom.orElse(entrySpawn(target, level));
 
-            // 本次传送的落点：开启位置记忆时优先回到上次退出的位置。
+            // 本次传送的落点：没有自定义出生点、且开启位置记忆时，才回到上次退出的位置。
             // 记忆只影响"这次把人放哪"，不影响重生点（见步骤 5）。
             PlayableWorld.SpawnPoint spawn = placeSpawn;
-            if (memoryResolver != null) {
+            if (custom.isEmpty() && memoryResolver != null) {
                 try {
                     PlayableWorld.SpawnPoint remembered = memoryResolver.recall(player, target, level);
                     if (remembered != null) {
@@ -333,18 +338,33 @@ public final class PlayerRouter {
      * <p>默认就是场所自己的出生点；但像空岛服这种"玩家站在自己的岛上"的地方，
      * 需要由 {@link #setSpawnResolver} 注入的解析器换成岛上的位置。
      */
-    private static PlayableWorld.SpawnPoint spawnFor(ServerPlayer player, PlayableWorld target,
-                                                     ServerLevel level) {
+    private static java.util.Optional<PlayableWorld.SpawnPoint> customSpawnFor(
+            ServerPlayer player, PlayableWorld target, ServerLevel level) {
         for (int i = spawnResolvers.size() - 1; i >= 0; i--) {
             try {
                 PlayableWorld.SpawnPoint custom =
                         spawnResolvers.get(i).resolve(player, target, level);
                 if (custom != null) {
-                    return custom;
+                    return java.util.Optional.of(custom);
                 }
             } catch (Throwable t) {
                 HubSuite.logger().debug("出生点解析器执行失败，继续问下一个：{}", t.toString());
             }
+        }
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * 该维度的**场所出生点**。
+     *
+     * <p>多维度子服（空岛）必须用"玩家要进的那个维度"的入口出生点，
+     * 不能用 {@code target.spawn()}（那恒是 primary —— 空岛服是虚空主维度）。
+     */
+    private static PlayableWorld.SpawnPoint entrySpawn(PlayableWorld target, ServerLevel level) {
+        if (target instanceof SubServer sub) {
+            return sub.entryOf(level.dimension())
+                    .map(SubServer.Entry::spawn)
+                    .orElseGet(target::spawn);
         }
         return target.spawn();
     }

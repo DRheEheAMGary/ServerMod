@@ -109,6 +109,7 @@ public final class HubSuite implements ModInitializer {
 
         // 集成：HuskHomes 与占位符
         huskHomes = new cn.dreamgary.hubsuite.integration.HuskHomesIntegration(worldsManager);
+        huskHomes.registerHomeIsolation();
         placeholders = new cn.dreamgary.hubsuite.integration.PlaceholderService(worldsManager, huskHomes);
 
         // 任务系统不依赖世界，初始化阶段就能建好

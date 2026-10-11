@@ -64,8 +64,11 @@
 
 ## 6. 与 HuskHomes 的关系
 
-`servers[].huskhomesTeleport` 控制某子服是否允许 HuskHomes 传送。
-设 `false` 后在该子服里 `/home` / `/tpa` 会被拦，HuskHomes 自己的 `huskhomes.*` 节点照常工作。
+`servers[].huskhomesTeleport` 控制某子服是否允许 HuskHomes 传送（默认全开）。
+设 `false` 后在该子服里 `/home` `/tpa` 等会被拦，HuskHomes 自己的 `huskhomes.*` 节点照常工作。
+
+**家（`/home`）按子服隔离**：只能看到并使用设在本子服的家；在生存服设的家，
+到创造服/空岛服既不在列表里、也传送不过去。
 
 ---
 

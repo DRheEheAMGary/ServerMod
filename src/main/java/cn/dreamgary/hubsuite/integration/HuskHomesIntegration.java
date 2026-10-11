@@ -127,6 +127,25 @@ public final class HuskHomesIntegration {
         return sub != null && sub.config().huskhomesTeleport;
     }
 
+    /**
+     * 注册「家按子服隔离」。
+     *
+     * <p>用 {@code Class.forName} 反射加载：那个类直接引用 HuskHomes 的类型，
+     * 没装 HuskHomes 时绝不能触碰它。
+     */
+    public void registerHomeIsolation() {
+        if (!apiReady()) {
+            return;
+        }
+        try {
+            Class.forName("cn.dreamgary.hubsuite.integration.HuskHomesHomeIsolation")
+                    .getMethod("register", WorldsManager.class)
+                    .invoke(null, worlds);
+        } catch (Throwable t) {
+            HubSuite.logger().warn("注册 HuskHomes 家隔离失败：{}", t.toString());
+        }
+    }
+
     /** 启动时打印适配报告。 */
     public void logReport() {
         if (!present) {
