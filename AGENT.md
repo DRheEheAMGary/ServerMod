@@ -25,7 +25,7 @@
 | 项 | 值 |
 |---|---|
 | 模组 id / 组 | `hubsuite` / `cn.dreamgary` |
-| 版本 | `gradle.properties` 的 `mod_version` = **0.2.5** |
+| 版本 | `gradle.properties` 的 `mod_version` = **0.3.0-SNAPSHOT** |
 | 构建 | Gradle 9.7.1 + Loom 1.18-SNAPSHOT |
 | 映射 | **官方 Mojang 名，不 remap**（26.1 起官方不再混淆；build.gradle 无 mappings、无 remapJar） |
 | 产物 | `build/libs/hubsuite-<版本>.jar`（另有 `-sources.jar`） |
