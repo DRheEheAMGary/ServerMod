@@ -246,6 +246,23 @@ public final class PlayerRouter {
              */
             AuxDataRouter.rebindAfterTeleport(player);
 
+            /*
+             * 重发命令树。
+             *
+             * 命令树是**按玩家**过滤后发的（原版 fillUsableCommands 会看每个节点的
+             * requires），但只在登录 / /reload 时发一次 —— 切子服不会重发。
+             * 不补这一次的话，客户端一直拿着上一个子服的树：典型表现就是
+             * "/island 在大厅也能补全"（用户实测反馈）。
+             */
+            try {
+                var server = player.level().getServer();
+                if (server != null) {
+                    server.getCommands().sendCommands(player);
+                }
+            } catch (Throwable t) {
+                HubSuite.logger().debug("重发命令树失败：{}", t.toString());
+            }
+
             HubSuite.logger().info("切服完成：{} 现在位于 {}（{}，{} 人）",
                     player.getName().getString(), target.id(),
                     level.dimension().identifier(), level.players().size());

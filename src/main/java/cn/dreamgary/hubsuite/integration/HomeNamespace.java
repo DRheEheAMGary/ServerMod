@@ -98,8 +98,13 @@ public final class HomeNamespace {
     }
 
     private static String commandName(String rawCommand) {
-        int space = rawCommand.indexOf(' ');
-        String head = space < 0 ? rawCommand : rawCommand.substring(0, space);
+        String trimmed = rawCommand.strip();
+        // 补全包里命令**带前导 /**（执行包不一定带），两种都要认
+        if (trimmed.startsWith("/")) {
+            trimmed = trimmed.substring(1);
+        }
+        int space = trimmed.indexOf(' ');
+        String head = space < 0 ? trimmed : trimmed.substring(0, space);
         String name = head.toLowerCase(Locale.ROOT);
         return name.startsWith("huskhomes:") ? name.substring("huskhomes:".length()) : name;
     }
@@ -110,16 +115,17 @@ public final class HomeNamespace {
      * @return 改写后的命令；不是家命令 / 没参数 / 不在任何场所时**原样返回**
      */
     public static String rewrite(ServerPlayer player, String rawCommand) {
-        if (rawCommand == null || rawCommand.isBlank()) {
+        if (rawCommand == null || rawCommand.isBlank() || !isHomeCommand(rawCommand)) {
             return rawCommand;
         }
-        String name = commandName(rawCommand);
-        if (!HOME_COMMANDS.contains(name)) {
-            return rawCommand;
+        // 重新派发时用**不带 / 的 head**（performPrefixedCommand 自己会加）
+        String withoutSlash = rawCommand.strip();
+        if (withoutSlash.startsWith("/")) {
+            withoutSlash = withoutSlash.substring(1);
         }
-        int space = rawCommand.indexOf(' ');
-        String head = space < 0 ? rawCommand : rawCommand.substring(0, space);
-        String rest = space < 0 ? "" : rawCommand.substring(space + 1).trim();
+        int space = withoutSlash.indexOf(' ');
+        String head = space < 0 ? withoutSlash : withoutSlash.substring(0, space);
+        String rest = space < 0 ? "" : withoutSlash.substring(space + 1).trim();
         if (rest.isEmpty()) {
             return rawCommand;
         }
@@ -127,16 +133,20 @@ public final class HomeNamespace {
         if (place.isEmpty()) {
             return rawCommand;
         }
+        String prefix = prefixFor(place.get());
         String[] args = rest.split("\\s+");
         // 名字是第一个参数；/edithome 的第二个参数（新名字）也要带上，否则改名后会掉出命名空间
-        int count = "edithome".equals(name) ? Math.min(2, args.length) : 1;
+        int count = "edithome".equals(commandName(rawCommand)) ? Math.min(2, args.length) : 1;
+        boolean changed = false;
         for (int i = 0; i < count; i++) {
-            if (!args[i].isBlank() && !args[i].startsWith(place.get().isEmpty() ? "" : prefixFor(place.get()))) {
-                args[i] = apply(place.get(), args[i]);
+            // 幂等：已经带着前缀（比如从补全里选的 1_1）就不再叠加
+            if (!args[i].isBlank() && !args[i].startsWith(prefix)) {
+                args[i] = prefix + args[i];
+                changed = true;
             }
         }
-        String rewritten = head + " " + String.join(" ", args);
-        return rewritten.equals(rawCommand) ? rawCommand : rewritten;
+        // 没改名字就原样返回 → 走原版路径（比如玩家手输 1_1 时别重派发）
+        return changed ? head + " " + String.join(" ", args) : rawCommand;
     }
 
     /**
