@@ -131,7 +131,7 @@ public final class HuskHomesHomeIsolation {
             Optional<String> owner = placeOfHome(home);
             // 解析不出来就保留（宁可多显示，也别把玩家自己的家藏了）
             if (owner.isEmpty() || owner.get().equals(here.get())) {
-                kept.add(home);
+                kept.add(stripPrefix(home, here.get()));
             }
         }
         Method setHomes = Class.forName("net.william278.huskhomes.event.IHomeListEvent")
@@ -257,6 +257,46 @@ public final class HuskHomesHomeIsolation {
             }
         }
         return api;
+    }
+
+    /**
+     * 去掉家名前的子服前缀（`1_s1` → `s1`），只影响**显示**。
+     *
+     * <p>{@code Home} 没有 setter，所以按原坐标/所有者重新造一个改名的 Home；
+     * 失败就照原样显示（宁可多俩字符，也不能让列表空掉）。
+     */
+    private static Object stripPrefix(Object home, String placeId) {
+        try {
+            String name = (String) call(home, "getName");
+            String stripped = HomeNamespace.strip(placeId, name);
+            if (stripped == null || stripped.equals(name)) {
+                return home;
+            }
+            double x = (Double) call(home, "getX");
+            double y = (Double) call(home, "getY");
+            double z = (Double) call(home, "getZ");
+            float yaw = (Float) call(home, "getYaw");
+            float pitch = (Float) call(home, "getPitch");
+            Object world = call(home, "getWorld");
+            Object meta = call(home, "getMeta");
+            Object owner = call(home, "getOwner");
+            Object uuid = call(home, "getUuid");
+            boolean isPublic = (Boolean) call(home, "isPublic");
+            String description = meta == null ? "" : (String) call(meta, "getDescription");
+
+            Class<?> metaClass = Class.forName("net.william278.huskhomes.position.PositionMeta");
+            Object newMeta = metaClass.getMethod("create", String.class, String.class)
+                    .invoke(null, stripped, description);
+            Class<?> userClass = Class.forName("net.william278.huskhomes.user.User");
+            Class<?> homeClass = Class.forName("net.william278.huskhomes.position.Home");
+            Method from = homeClass.getMethod("from", double.class, double.class, double.class,
+                    float.class, float.class, worldClass, String.class, metaClass,
+                    java.util.UUID.class, userClass, boolean.class);
+            return from.invoke(null, x, y, z, yaw, pitch, world, stripped, newMeta, uuid, owner, isPublic);
+        } catch (Throwable t) {
+            HubSuite.logger().debug("去掉家名前缀失败（照原样显示）：{}", t.toString());
+            return home;
+        }
     }
 
     private static void cancel(Object event) throws Exception {

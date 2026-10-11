@@ -132,6 +132,10 @@ rm -f run/*/session.lock run/usercache.json run/ops.json
 - **加子服 / 岛型 / 任务不写代码** —— 那是配置驱动的，别硬编码
 - **指令必须在模组初始化阶段注册**（`CommandRegistrationCallback` 在服务端启动前就触发完；
   放 `SERVER_STARTED` 里注册的指令进不了 dispatcher —— 实测踩过）
+- **0.x 阶段不做数据迁移（重要）**：现在不是正式版，**一律不写迁移 / 兼容代码**。
+  配置字段改了就直接改、存档格式不兼容就让用户删档、旧数据（家 / 岛屿 / 账号 / 成就）
+  一律不管 —— 在文档和 release 里写清「要删档」即可。
+  别为了「老存档还能用」加一堆分支：那是 1.0 以后才需要考虑的事。
 - **关服两阶段**：`SERVER_STOPPING` 只主动落盘，`SERVER_STOPPED` 才清路由 / 关存档
   （清理全放 STOPPING 会让随后的 `playerList.saveAll()` 把在线玩家最终状态写进主世界）
 
