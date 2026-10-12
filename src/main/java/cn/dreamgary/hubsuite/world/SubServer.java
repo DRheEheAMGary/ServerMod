@@ -654,6 +654,18 @@ public final class SubServer implements PlayableWorld {
             applyWorldBorder(level, rules, sideSpawn);
 
             sideSave.register(level);
+            /*
+             * 必须把**玩家数据**也绑到这个存档上，和主维度、岛屿维度一样。
+             *
+             * 漏掉这一步的后果（用户实测："从创造服地狱退出游戏再重进，
+             * 背包被带进了大厅"）：PlayerDataRouter 里没有这个维度 →
+             * 玩家在下界里时 resolveFor() 回落到兜底存档（= 大厅），
+             * 于是**下界里保存的背包被写进了大厅的玩家数据文件**，
+             * 下次登录（读的正是大厅那份）就把下界那身东西带进了大厅；
+             * 而 hubsuite_<子服>_nether/players/data 一直是空的（实测）。
+             * 末地同理。
+             */
+            sideSave.bindPlayerStorage(dimension);
             RulesManager.register(dimension, rules);
             entries.put(suffix, new Entry(suffix, dimension, level, sideSave, sideSpawn, label));
             return dimension;

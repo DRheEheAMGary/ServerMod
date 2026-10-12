@@ -156,6 +156,9 @@ public final class SelfTest {
         step("菜单不会误吞真实容器的点击", this::checkMenuDoesNotEatRealContainers);
         step("开箱链路没有被事件处理器破坏", this::checkChestInteractionChainIntact);
         step("岛型之间切换不会落错坐标", this::checkIslandSwitchLandsCorrectly);
+        step("每个托管维度都有玩家数据存档（下界/末地不漏）", this::checkManagedDimensionPlayerData);
+        step("回空岛服会回到上次退出的位置", this::checkIslandReturnKeepsLocation);
+        step("重登后坐骑还在、海岛重生落点在自己的岛上", this::checkMountAndIslandRespawn);
         step("空岛的树（原版橡树地物，且不堵落脚点）", this::checkIslandTree);
         step("传送门进的是本子服自己的下界/末地（且能回来）", this::checkPortalRedirect);
         step("虚空维度里没有任何结构（不会长出村庄）", this::checkVoidHasNoStructures);
@@ -1704,7 +1707,7 @@ public final class SelfTest {
         java.util.List<String> probeNames = java.util.List.of(
                 "hubsuite_selftest", "hubsuite_islandtest", "hubsuite_spawntest",
                 "hubsuite_statetest", "hubsuite_spawnprobe", "hubsuite_menutest",
-                "hubsuite_persist");
+                "hubsuite_persist", "hubsuite_memtest", "hubsuite_mount");
         int removedFiles = 0;
         for (String name : probeNames) {
             // 必须用与 FakePlayers.spawn **同一个**规整函数算 UUID。
@@ -4803,6 +4806,235 @@ public final class SelfTest {
         } finally {
             try {
                 classic.manager().delete(probe.getUUID());
+                ocean.manager().delete(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 每个托管维度都必须绑定**自己的**玩家数据存档。
+     *
+     * <p>锁住用户实测："从创造服地狱退出游戏再重进，背包被带进了大厅"
+     * （末地同样）。根因是 {@code SubServer#createVanillaSideDimension} 只调了
+     * {@code sideSave.register(level)}，漏了 {@code bindPlayerStorage(dimension)} ——
+     * {@code PlayerDataRouter} 里没有这个维度，玩家在里面时数据读写会回落到
+     * **兜底存档（大厅）**：下界里存的东西被写进大厅的玩家数据文件，而
+     * {@code hubsuite_<子服>_nether/players/data} 一直是空的（实机目录可以佐证）。
+     *
+     * <p>这条检查覆盖**所有**托管维度：子服主维度、子服的下界/末地、
+     * 空岛服的每个岛屿维度、大厅。少绑任何一个都会串包。
+     */
+    private void checkManagedDimensionPlayerData() {
+        if (worlds == null) {
+            fail("多世界引擎未就绪，跳过玩家数据绑定检查");
+            return;
+        }
+        var missing = new StringBuilder();
+        int checked = 0;
+        for (PlayableWorld w : worlds.allWorlds()) {
+            var levels = new java.util.ArrayList<ServerLevel>();
+            if (w instanceof SubServer sub) {
+                for (SubServer.Entry entry : sub.entries()) {
+                    levels.add(entry.level());
+                }
+            } else if (w.level() != null) {
+                levels.add(w.level());
+            }
+            for (ServerLevel level : levels) {
+                checked++;
+                if (cn.dreamgary.hubsuite.world.PlayerDataRouter
+                        .storageForDimension(level.dimension()) == null) {
+                    missing.append(level.dimension().identifier()).append(' ');
+                }
+            }
+        }
+        if (missing.length() == 0) {
+            ok("全部 " + checked + " 个托管维度都绑定了自己的玩家数据存档（下界/末地不漏）");
+        } else {
+            fail("这些维度没有绑定玩家数据存档，在里面存的东西会被写进大厅兜底存档："
+                    + missing.toString().trim());
+        }
+    }
+
+    /**
+     * 用户实测："我在海岛服 /hub 之后回空岛服，给我传回海岛上了，但不保留坐标"。
+     *
+     * <p>入口分流是对的（有岛就回岛上，见 {@code checkIslandRouting}），毛病出在
+     * **落点**：出生点解析器（"落到自己的岛上"）以前会完全顶掉位置记忆，
+     * 于是每次都落在岛的出生点。现在两者各管一段 —— 解析器决定维度与重生点，
+     * 位置记忆决定这次的坐标（记忆是按**目标维度**存的，所以切岛型不会用错坐标）。
+     */
+    private void checkIslandReturnKeepsLocation() {
+        var islands = HubSuite.islands();
+        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
+        var lobby = worlds.lobby().orElse(null);
+        if (islands == null || ocean == null || lobby == null) {
+            fail("缺少空岛服务 / 海岛岛型 / 大厅，跳过落点记忆检查");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_memtest", lobby.level(), false);
+        if (probe == null) {
+            fail("落点记忆检查用假玩家创建失败");
+            return;
+        }
+        try {
+            ocean.manager().getOrCreate(probe.getUUID(), probe.getName().getString(), "ocean");
+            if (!islands.visit(probe, "ocean")) {
+                fail("落点记忆检查：进不去海岛维度");
+                return;
+            }
+            var level = ocean.entry().level();
+            // 挪到离岛出生点 40 格远的地方，好区分"记忆的位置"和"岛的出生点"
+            double x = probe.getX() + 40.0;
+            double z = probe.getZ();
+            probe.teleportTo(level, x, probe.getY(), z,
+                    java.util.Set.of(), 0.0F, 0.0F, false);
+
+            // 回大厅：离场监听器会把"海岛维度 + 当前坐标"记下来
+            if (!PlayerRouter.sendTo(probe, lobby)) {
+                fail("落点记忆检查：回大厅失败");
+                return;
+            }
+            // 再进空岛服：应当回到刚才那个坐标，而不是岛的出生点
+            islands.visit(probe, "ocean");
+            double d = Math.hypot(probe.getX() - x, probe.getZ() - z);
+            if (d <= 8.0) {
+                ok(String.format("回空岛服回到了上次退出的位置（偏差 %.1f 格）", d));
+            } else {
+                fail(String.format(
+                        "回空岛服落在了 (%.0f, %.0f, %.0f)，离上次退出位置 %.1f 格 —— "
+                                + "位置记忆又被出生点解析器顶掉了",
+                        probe.getX(), probe.getY(), probe.getZ(), d));
+            }
+        } catch (Throwable t) {
+            fail("落点记忆检查异常：" + t);
+        } finally {
+            try {
+                ocean.manager().delete(probe.getUUID());
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+    }
+
+    /**
+     * 海岛服的两条实测反馈，一起验：
+     * <ol>
+     *   <li><b>"坐在船上退出重进，船不见了"</b> —— 登录时玩家先落大厅
+     *       （{@code PrepareSpawnTaskMixin}），玩家数据又按维度分开读，
+     *       原版那套 {@code RootVehicle} 恢复没人处理；现在由
+     *       {@code PlayerStateStash} 记下坐骑 UUID，进那一界时按 UUID 骑回来；</li>
+     *   <li><b>"重生点不在自己的岛上"</b> —— 兜底重生落点以前取的是该维度的
+     *       世界出生点（海岛 = 海中央），而不是玩家自己的岛。</li>
+     * </ol>
+     */
+    private void checkMountAndIslandRespawn() {
+        var islands = HubSuite.islands();
+        var ocean = islands == null ? null : islands.type("ocean").orElse(null);
+        var lobby = worlds.lobby().orElse(null);
+        if (islands == null || ocean == null || lobby == null) {
+            fail("缺少空岛服务 / 海岛岛型 / 大厅，跳过坐骑与重生检查");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_mount", lobby.level(), false);
+        if (probe == null) {
+            fail("坐骑/重生检查用假玩家创建失败");
+            return;
+        }
+        net.minecraft.world.entity.vehicle.boat.Boat boat = null;
+        try {
+            var island = ocean.manager().getOrCreate(
+                    probe.getUUID(), probe.getName().getString(), "ocean");
+            if (!islands.visit(probe, "ocean")) {
+                fail("坐骑/重生检查：进不去海岛维度");
+                return;
+            }
+            var level = ocean.entry().level();
+
+            // ---- ① 重生落点：故意把"维度的世界出生点（海中央）"当兜底传进去 ----
+            var islandSpawn = ocean.manager().spawnOf(island);
+            var worldSpawnData = level.getRespawnData();
+            var worldSpawn = new net.minecraft.world.phys.Vec3(
+                    worldSpawnData.pos().getX() + 0.5,
+                    worldSpawnData.pos().getY(),
+                    worldSpawnData.pos().getZ() + 0.5);
+            var picked = RespawnPoints.pickSafePos(probe, level, worldSpawn);
+            double dResp = Math.hypot(picked.x - islandSpawn.x, picked.z - islandSpawn.z);
+            if (dResp <= 2.0) {
+                ok(String.format("海岛重生落点优先用自己的岛（距岛中心 %.1f 格），而不是世界出生点", dResp));
+            } else {
+                fail(String.format(
+                        "海岛重生落点被选成了 (%.0f, %.0f, %.0f)，离自己的岛 %.1f 格 —— "
+                                + "用了维度的世界出生点（海中央）",
+                        picked.x, picked.y, picked.z, dResp));
+            }
+
+            // ---- ② 坐骑：capture 落盘 → 断线（清内存）→ 重新读档 → 骑回来 ----
+            boat = new net.minecraft.world.entity.vehicle.boat.Boat(
+                    net.minecraft.world.entity.EntityType.OAK_BOAT, level,
+                    () -> net.minecraft.world.item.Items.OAK_BOAT);
+            if (!level.addFreshEntity(boat)) {
+                fail("坐骑检查：船没能放进世界里");
+                return;
+            }
+            boat.setPos(probe.getX(), probe.getY(), probe.getZ());
+            probe.startRiding(boat, true, false);
+            boolean started = probe.getVehicle() == boat;
+            java.util.UUID uuid = probe.getUUID();
+            // 等价于"登出"：先落盘（数据里会带 RootVehicle），再清掉内存暂存
+            cn.dreamgary.hubsuite.world.PlayerStateStash.capture(probe, level.dimension());
+            // 落盘里必须有 RootVehicle —— 断线时原版会把载具清掉，只剩这份 NBT 能重建
+            boolean hasRoot = false;
+            try {
+                var storage = cn.dreamgary.hubsuite.world.PlayerDataRouter
+                        .storageForDimension(level.dimension());
+                if (storage != null) {
+                    hasRoot = storage.load(new net.minecraft.server.players.NameAndId(
+                                    uuid, probe.getName().getString()))
+                            .map(tag -> tag.contains("RootVehicle")).orElse(false);
+                }
+            } catch (Throwable ignored) {
+                // 诊断信息，拿不到就当 false
+            }
+            probe.stopRiding();
+            cn.dreamgary.hubsuite.world.PlayerStateStash.forget(uuid);
+            // 等价于"重新登录并进到这一界"：从该维度的存档读回，再骑上
+            cn.dreamgary.hubsuite.world.PlayerStateStash.apply(probe, level.dimension());
+            cn.dreamgary.hubsuite.world.PlayerStateStash.restoreMount(probe, level.dimension());
+            /*
+             * 同一 tick 内刚 addFreshEntity 的实体可能还没进"可见实体集合"
+             * （实体管理器要到下一个 tick 才把它挪进去），所以这一条**不能当断言**，
+             * 只记下来当诊断：真实服务器上它是跨 tick 的，不会是这个样子。
+             */
+            boolean mountedAlive = probe.getVehicle() != null;
+            /*
+             * 模拟**原版断线时**发生的事：PlayerList.remove 会丢掉
+             * "只有一个玩家乘客"的载具（只把它的 NBT 存进玩家数据）。
+             * 玩家重登能骑回船，靠的就是这里恢复得回来。
+             */
+            probe.stopRiding();
+            boat.discard();
+            cn.dreamgary.hubsuite.world.PlayerStateStash.restoreMount(probe, level.dimension());
+            boolean mountedRecreated = probe.getVehicle() != null;
+            if (started && hasRoot && mountedRecreated) {
+                ok("重登后能骑回原来的船（落盘带 RootVehicle，载具被原版清掉后能恢复）");
+            } else {
+                fail("坐骑恢复不对：startRiding=" + started + " 落盘含RootVehicle=" + hasRoot
+                        + " 载具被清后=" + mountedRecreated + " 同tick可见=" + mountedAlive
+                        + " getVehicle=" + probe.getVehicle());
+            }
+        } catch (Throwable t) {
+            fail("坐骑/重生检查异常：" + t);
+        } finally {
+            try {
+                probe.stopRiding();
+                if (boat != null) {
+                    boat.discard();
+                }
                 ocean.manager().delete(probe.getUUID());
                 server.getPlayerList().remove(probe);
             } catch (Throwable ignored) {

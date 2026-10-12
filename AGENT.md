@@ -25,11 +25,11 @@
 | 项 | 值 |
 |---|---|
 | 模组 id / 组 | `hubsuite` / `cn.dreamgary` |
-| 版本 | `gradle.properties` 的 `mod_version` = **0.3.0-rc.3** |
+| 版本 | `gradle.properties` 的 `mod_version` = **0.3.0** |
 | 构建 | Gradle 9.7.1 + Loom 1.18-SNAPSHOT |
 | 映射 | **官方 Mojang 名，不 remap**（26.1 起官方不再混淆；build.gradle 无 mappings、无 remapJar） |
 | 产物 | `build/libs/hubsuite-<版本>.jar`（另有 `-sources.jar`） |
-| 规模 | 93 个 Java 文件 / 22 个 Mixin / 自检 194 项 |
+| 规模 | 93 个 Java 文件 / 22 个 Mixin / 自检 196 项 |
 
 ### 架构要点（改之前必须理解）
 
@@ -81,7 +81,7 @@ $env:JAVA_HOME = $j; $env:PATH = "$j\bin;$env:PATH"
 ```
 
 - 服务端是 `online-mode=false`，机器人可直连。
-- 自检结果看 `run/logs/latest.log` 里的 `通过 194 项，失败 0 项`。
+- 自检结果看 `run/logs/latest.log` 里的 `通过 196 项，失败 0 项`。
 - 控制台命令：`hub selftest`（也可在游戏内 `/hub selftest`）。
 
 ### 清档（改了地形 / 生成器才需要）
@@ -221,7 +221,7 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 | `world/PlayerDataRouter.java` + `world/PlayerStateStash.java` + `mixin/PlayerListStorageMixin.java` | 背包 / 经验按子服隔离（内存暂存 + 磁盘两份） |
 | `world/PlayerRouter.java` | 切服主流程（`sendTo`） |
 | `world/ServerInternals.java` / `ServerLevelsAccess.java` / `PlayerListAccess.java` | 访问原版内部字段的唯一出口（放业务包，见「十」） |
-| `world/SelfTest.java` | **全部自检**（194 项）。加检查看这里 |
+| `world/SelfTest.java` | **全部自检**（196 项）。加检查看这里 |
 | `island/IslandService.java` + `island/IslandManager.java` | 空岛：建岛、归属、保护、出生点 |
 | `feature/CommandGuard.java` | 命令闸门（创造服屏蔽 40+ 条作弊指令） |
 | `feature/PermissionService.java` | 三级权限降级 |
@@ -446,7 +446,7 @@ release 的**提交信息、tag message、release notes** 都是给**使用者�
 - 大厅 NPC 用真 `ServerPlayer` 假人；空岛只做 classic + ocean，不做单方块
 - 扩展性要求：新增子服尽量只改配置
 
-**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 当前 **194**。
+**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 当前 **196**。
 
 **已修复且经作者实测的关键问题**：
 

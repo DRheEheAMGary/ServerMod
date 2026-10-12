@@ -26,7 +26,7 @@
 
 **关于质量**
 
-- 项目带**内置自检**（`/hub selftest`，当前 194 项），覆盖存档隔离、规则隔离、玩家数据隔离、
+- 项目带**内置自检**（`/hub selftest`，当前 196 项），覆盖存档隔离、规则隔离、玩家数据隔离、
   账号安全、空岛生成与保护、入口分流、集成适配、指令注册等
 - 但 **AI 生成的代码不能只靠自检背书**。自检是「AI 自己出的题」，
   历史上出现过「自检全绿、实机仍然不对」的情况（自检覆盖不到的路径）
@@ -51,7 +51,7 @@
 | **空岛系统** | 空岛服 = **1 个大厅 + 2 个岛屿维度**：经典空岛用网格方格，海岛是**自然生成的海洋世界**；两种岛可同时拥有，归属与地形完全独立 |
 | **内置任务** | 里程碑 / 物资交付 / 每日三类任务，配置驱动；进度按玩家存 |
 | **权限分级** | LuckPerms → fabric-permissions-api → 原版 OP 三级降级；创造服屏蔽 40+ 条作弊指令 |
-| **内置自检** | `/hub selftest` 跑 **194 项**验证，是项目的主要回归门 |
+| **内置自检** | `/hub selftest` 跑 **196 项**验证，是项目的主要回归门 |
 
 ---
 
@@ -75,14 +75,14 @@
 ```bash
 # 1. 编译（需要 JDK 25）
 ./gradlew build
-# 产物：build/libs/hubsuite-0.3.0-rc.3.jar
+# 产物：build/libs/hubsuite-0.3.0.jar
 ```
 
 把 jar 和依赖放进服务端 `mods/`：
 
 | jar | 必需 | 用途 |
 |---|---|---|
-| `hubsuite-0.3.0-rc.3.jar` | 必需 | 本模组 |
+| `hubsuite-0.3.0.jar` | 必需 | 本模组 |
 | `fabric-api-0.155.3+26.1.2.jar` | 必需 | Fabric API |
 | `HuskHomes-Fabric-4.11+mc.26.1.2.jar` | 建议 | 家 / 传送点 / Tpa / Warp 指令 |
 | `placeholder-api-3.0.0+26.1.jar` | 建议 | 让其它模组读到 `%hubsuite_...%` |
@@ -98,7 +98,7 @@
 #    服务端根目录下：hubsuite_lobby/、hubsuite_survival/、hubsuite_creative/、hubsuite_skyblock/
 # 4. 控制台验证（无需客户端）
 hub selftest
-# 全部通过会打印：通过 194 项，失败 0 项。
+# 全部通过会打印：通过 196 项，失败 0 项。
 ```
 
 > `server.properties` 里不要写任何非 ASCII 字符（Java Properties 按 ISO-8859-1 读，会启动失败）。
@@ -114,7 +114,7 @@ hub selftest
 /hub <子服>                 直达某个子服，如 /hub survival
 /hub list                   列出所有子服与在线人数
 /hub where                  我现在在哪个维度、坐标多少
-/hub selftest               运行 194 项内置自检（管理/控制台）
+/hub selftest               运行 196 项内置自检（管理/控制台）
 
 /island                     空岛帮助（需在空岛服相关维度）
 /island menu                打开选岛界面
