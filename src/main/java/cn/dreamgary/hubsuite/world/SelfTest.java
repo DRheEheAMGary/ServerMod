@@ -1724,7 +1724,7 @@ public final class SelfTest {
         java.util.List<String> probeNames = java.util.List.of(
                 "hubsuite_selftest", "hubsuite_islandtest", "hubsuite_spawntest",
                 "hubsuite_statetest", "hubsuite_spawnprobe", "hubsuite_menutest",
-                "hubsuite_persist", "hubsuite_memtest", "hubsuite_mount");
+                "hubsuite_persist", "hubsuite_memtest", "hubsuite_mount", "hubsuite_switch");
         int removedFiles = 0;
         for (String name : probeNames) {
             // 必须用与 FakePlayers.spawn **同一个**规整函数算 UUID。

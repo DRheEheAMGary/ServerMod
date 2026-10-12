@@ -201,11 +201,16 @@ public final class PlayerRouter {
 
             // 本次传送的落点：有记忆就回记忆位置，没有才用场所出生点。
             // 记忆只影响"这次把人放哪"，不影响重生点（见步骤 5）。
+            //
+            // ★ 但有"该去哪座岛"的解析结果（custom）时，**记忆必须落在岛附近才算有效**。
+            //   换岛 / 切岛型 / 上一次会话残留的旧坐标可能离岛很远 —— 实测：
+            //   从海岛切经典空岛时，一条陈旧的经典坐标（离岛 288 格）把解析器
+            //   给出的正确落点顶掉了（checkIslandSwitchLandsCorrectly 盯着这条）。
             PlayableWorld.SpawnPoint spawn = placeSpawn;
             if (memoryResolver != null) {
                 try {
                     PlayableWorld.SpawnPoint remembered = memoryResolver.recall(player, target, level);
-                    if (remembered != null) {
+                    if (remembered != null && (!custom.isPresent() || hubsuite$nearIsland(remembered, placeSpawn))) {
                         spawn = remembered;
                     }
                 } catch (Throwable t) {
@@ -367,6 +372,20 @@ public final class PlayerRouter {
      * <p>默认就是场所自己的出生点；但像空岛服这种"玩家站在自己的岛上"的地方，
      * 需要由 {@link #setSpawnResolver} 注入的解析器换成岛上的位置。
      */
+    /**
+     * 记忆位置离岛出生点超过这个水平距离，就当成**无效记忆**（换岛 / 切岛型 /
+     * 上次会话残留），回落到解析器给出的岛出生点。
+     *
+     * <p>岛都不大（经典岛一整格才 288 格），而残留坐标往往离得很远 —— 实测那条
+     * 陈旧记忆离岛正好 288 格。
+     */
+    private static final double MEMORY_KEEP_RADIUS = 128.0;
+
+    private static boolean hubsuite$nearIsland(PlayableWorld.SpawnPoint memory,
+                                               PlayableWorld.SpawnPoint island) {
+        return Math.hypot(memory.x() - island.x(), memory.z() - island.z()) <= MEMORY_KEEP_RADIUS;
+    }
+
     private static java.util.Optional<PlayableWorld.SpawnPoint> customSpawnFor(
             ServerPlayer player, PlayableWorld target, ServerLevel level) {
         for (int i = spawnResolvers.size() - 1; i >= 0; i--) {
