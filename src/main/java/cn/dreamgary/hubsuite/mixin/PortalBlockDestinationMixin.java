@@ -176,6 +176,17 @@ public abstract class PortalBlockDestinationMixin {
             rect = created.get();
         }
 
+        /*
+         * 特殊下界（空岛/海岛那两座）：在门下面补一座**全下界岩**的小岛。
+         *
+         * 用户要求："在地狱门的生成位置下面生成一个小岛屿，全部都是地狱岩"。
+         * 空岛式的下界是纯虚空，没有这座小岛玩家一出门就往下掉；
+         * 岩浆海下界也一样，出门就是岩浆。
+         */
+        if (isNether && PortalLinks.isIslandNether(level.dimension())) {
+            this.hubsuite$buildNetherIsland(level, rect.minCorner);
+        }
+
         BlockPos min = rect.minCorner;
         BlockState minState = level.getBlockState(min);
         Direction.Axis portalAxis = minState
@@ -195,5 +206,46 @@ public abstract class PortalBlockDestinationMixin {
                 min.getZ() + (alongIsX ? offset : along));
 
         return PortalShape.findCollisionFreePosition(guess, level, entity, dim);
+    }
+
+    /**
+     * 在传送门脚下铺一座下界岩小岛。
+     *
+     * <p>只做"能站人"这一件事：以门的最下角为中心，半径 3 的圆盘，
+     * 往下一共 3 层全铺下界岩。**不做地形噪声** —— 小岛就该是规整的，
+     * 玩家一眼就能看出这是落脚点。
+     *
+     * <p>遇到没加载的区块**直接跳过那一列**：{@code setBlock} 会同步把区块拉起来，
+     * 在主线程上就是看门狗风险（本项目踩过）。
+     */
+    private void hubsuite$buildNetherIsland(ServerLevel level, BlockPos portalMin) {
+        try {
+            int radius = 3;
+            int baseY = portalMin.getY() - 1;
+            int placed = 0;
+            int skipped = 0;
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    if (dx * dx + dz * dz > radius * radius) {
+                        continue;
+                    }
+                    int x = portalMin.getX() + dx;
+                    int z = portalMin.getZ() + dz;
+                    if (level.getChunkSource().getChunkNow(x >> 4, z >> 4) == null) {
+                        skipped++;
+                        continue;
+                    }
+                    for (int dy = 0; dy >= -2; dy--) {
+                        level.setBlock(new BlockPos(x, baseY + dy, z),
+                                net.minecraft.world.level.block.Blocks.NETHERRACK.defaultBlockState(), 3);
+                        placed++;
+                    }
+                }
+            }
+            HubSuite.logger().debug("已为传送门落点补下界岩小岛：{} 个方块（跳过未加载列 {}）",
+                    placed, skipped);
+        } catch (Throwable t) {
+            HubSuite.logger().debug("补下界岩小岛失败：{}", t.toString());
+        }
     }
 }

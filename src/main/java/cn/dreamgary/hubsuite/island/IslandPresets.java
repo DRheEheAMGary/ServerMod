@@ -20,6 +20,7 @@ public final class IslandPresets {
     public static IslandConfig defaults() {
         IslandConfig config = new IslandConfig();
         config.types = List.of(classic(), ocean());
+        // 自然岛的默认位置/物资/刷怪笼/村庄模板都由 IslandConfig.normalize() 提供
         config.normalize();
         return config;
     }
@@ -38,6 +39,10 @@ public final class IslandPresets {
         // 换成海洋维度才会生效 —— 这样预设和"老配置升级补上的默认值"完全一致）
         type.tree = true;
         type.chest = true;
+        // v0.4.0：经典空岛的下界是"虚空 + 落点下界岩小岛"
+        type.netherPreset = "skyblock";
+        type.ownNether = true;
+        type.ownEnd = true;
         type.loot = List.of(
                 "minecraft:ice*2",
                 "minecraft:lava_bucket*1",
@@ -64,6 +69,10 @@ public final class IslandPresets {
         type.beach = "minecraft:sand";
         type.tree = false;
         type.chest = true;
+        // v0.4.0：海岛的下界是岩浆海（液面 Y=96）
+        type.netherPreset = "lava_sea";
+        type.ownNether = true;
+        type.ownEnd = true;
         type.loot = List.of(
                 "minecraft:fishing_rod*1",
                 "minecraft:oak_boat*1",

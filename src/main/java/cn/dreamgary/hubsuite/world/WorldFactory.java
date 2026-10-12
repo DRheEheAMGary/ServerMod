@@ -121,6 +121,35 @@ public final class WorldFactory {
         return OceanWorldGenerator.create(server);
     }
 
+    /**
+     * 用**原版下界维度类型** + 自定义方块生成器造一个下界维度。
+     *
+     * <p>给空岛服/海岛服的特殊下界用（虚空式 / 岩浆海）：维度类型必须是
+     * {@code minecraft:the_nether}，否则 1:8 坐标缩放、雾效、光影识别全都不对。
+     */
+    public static LevelStem netherStem(MinecraftServer server,
+                                      net.minecraft.world.level.chunk.ChunkGenerator generator) {
+        return new LevelStem(resolveDimensionType(server, "minecraft:the_nether"), generator);
+    }
+
+    /** 纯虚空（指定群系）：空岛式下界用它，群系给下界荒原才会刷怪。 */
+    public static net.minecraft.world.level.chunk.ChunkGenerator voidGenerator(
+            MinecraftServer server, net.minecraft.resources.ResourceKey<Biome> biome) {
+        return buildFlat(server, List.of(new FlatLayerInfo(1, Blocks.AIR)), true, biome, null);
+    }
+
+    /**
+     * 纯虚空 + **放行指定的结构集**。
+     *
+     * <p>空岛式下界要能在虚空里长出下界要塞/猪灵堡垒 —— 那片地形本来是"什么都没有"，
+     * 所以必须显式把结构集放行（默认的显式空集合会把它们全挡掉，见 {@link #buildFlat}）。
+     */
+    public static net.minecraft.world.level.chunk.ChunkGenerator voidGenerator(
+            MinecraftServer server, net.minecraft.resources.ResourceKey<Biome> biome,
+            List<net.minecraft.resources.ResourceKey<StructureSet>> structureSets) {
+        return buildFlat(server, List.of(new FlatLayerInfo(1, Blocks.AIR)), true, biome, structureSets);
+    }
+
     /** 供外部构造 LevelStem 时复用维度类型解析。 */
     public static Holder<DimensionType> dimensionType(MinecraftServer server, String id) {
         return resolveDimensionType(server, id);
@@ -192,7 +221,7 @@ public final class WorldFactory {
      * </ol>
      */
     private static ChunkGenerator voidGenerator(MinecraftServer server) {
-        return buildFlat(server, List.of(new FlatLayerInfo(1, Blocks.AIR)), true);
+        return buildFlat(server, List.of(new FlatLayerInfo(1, Blocks.AIR)), true, Biomes.PLAINS, null);
     }
 
     /** 超平坦：从配置解析层定义，解析不了就用一层基岩兜底。保留原版的结构与地物行为。 */
@@ -221,6 +250,13 @@ public final class WorldFactory {
      */
     private static ChunkGenerator buildFlat(MinecraftServer server, List<FlatLayerInfo> layers,
                                             boolean empty) {
+        return buildFlat(server, layers, empty, Biomes.PLAINS, null);
+    }
+
+    private static ChunkGenerator buildFlat(MinecraftServer server, List<FlatLayerInfo> layers,
+                                            boolean empty,
+                                            net.minecraft.resources.ResourceKey<Biome> emptyBiome,
+                                            List<net.minecraft.resources.ResourceKey<StructureSet>> allowedStructureSets) {
         var biomes = server.registryAccess().lookupOrThrow(Registries.BIOME);
         if (empty) {
             /*
@@ -239,10 +275,21 @@ public final class WorldFactory {
              * 群系保持平原：不能换 minecraft:the_void，那个群系没有刷怪表，
              * 换了大厅就不刷生物了。
              */
+            java.util.Optional<net.minecraft.core.HolderSet<StructureSet>> overrides;
+            if (allowedStructureSets == null || allowedStructureSets.isEmpty()) {
+                // 显式空集合：一个结构都不放行（大厅/经典空岛的虚空必须"空就是空"）
+                overrides = java.util.Optional.of(net.minecraft.core.HolderSet.<StructureSet>empty());
+            } else {
+                var structureLookup = server.registryAccess().lookupOrThrow(Registries.STRUCTURE_SET);
+                List<Holder<StructureSet>> holders = new ArrayList<>();
+                for (var key : allowedStructureSets) {
+                    structureLookup.get(key).ifPresent(holders::add);
+                }
+                overrides = java.util.Optional.of(net.minecraft.core.HolderSet.direct(holders));
+            }
             FlatLevelGeneratorSettings voidSettings = new FlatLevelGeneratorSettings(
-                    java.util.Optional.of(net.minecraft.core.HolderSet
-                            .<StructureSet>empty()),
-                    biomes.getOrThrow(Biomes.PLAINS),
+                    overrides,
+                    biomes.getOrThrow(emptyBiome),
                     java.util.List.<Holder<PlacedFeature>>of());
             voidSettings.getLayersInfo().clear();
             voidSettings.getLayersInfo().addAll(layers);

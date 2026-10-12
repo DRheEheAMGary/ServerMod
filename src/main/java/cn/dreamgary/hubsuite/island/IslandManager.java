@@ -713,45 +713,6 @@ public final class IslandManager {
     // ------------------------------------------------------------------
 
     /**
-     * 以某个玩家的身份扫描他岛上"可建造"的实际范围。
-     *
-     * <p>直接回答"为什么岛上的某些方块说不是我的区域" ——
-     * 把每个相对坐标的判定结果列出来，一看就知道边界在哪、和预期差多少。
-     */
-    public void auditBuildArea(ServerPlayer player, Island island) {
-        BlockPos center = plotCenter(island.plotX, island.plotZ);
-        HubSuite.logger().info("=== 建造权限审计：{} 的岛（方格 {},{}，中心 {}）===",
-                player.getName().getString(), island.plotX, island.plotZ, center);
-
-        int radius = Math.max(2, Math.min(6, config.plotSize / 64));
-        StringBuilder allowed = new StringBuilder();
-        StringBuilder denied = new StringBuilder();
-        for (int dx = -radius - 1; dx <= radius + 1; dx++) {
-            for (int dz = -radius - 1; dz <= radius + 1; dz++) {
-                var pos = center.offset(dx, 1, dz);
-                boolean ok = canBuild(player, pos);
-                String cell = String.format("(%d,%d)", dx, dz);
-                if (ok) {
-                    allowed.append(cell).append(' ');
-                } else {
-                    denied.append(cell).append(' ');
-                }
-            }
-        }
-        HubSuite.logger().info("  可建造：{}", allowed);
-        HubSuite.logger().info("  被拒绝：{}", denied);
-
-        // 关键点单独确认
-        int[][] key = {{0, 0}, {2, -2}, {2, -1}, {3, -2}, {1, -2}, {-2, -2}, {-1, -2}, {-2, -1}};
-        for (int[] k : key) {
-            boolean ok = canBuild(player, center.offset(k[0], 1, k[1]));
-            HubSuite.logger().info("    关键点 ({},{}) 相对中心 → {} （世界坐标 {},{},{}）",
-                    k[0], k[1], ok ? "可建造" : "\u00A7c拒绝",
-                    center.getX() + k[0], center.getY() + 1, center.getZ() + k[1]);
-        }
-    }
-
-    /**
      * 建岛的时间预算（毫秒）。
      *
      * <p>为什么需要：在海里建岛要先让那片区块生成出来，而海洋地形的生成很重
@@ -1507,62 +1468,6 @@ public final class IslandManager {
             result.add(new ItemStack(item, Math.min(amount, item.getDefaultMaxStackSize() * 4)));
         }
         return result;
-    }
-
-    // ------------------------------------------------------------------
-    // 保护
-    // ------------------------------------------------------------------
-
-    /** 判断某玩家能否在某位置动方块。 */
-    public boolean canBuild(ServerPlayer player, BlockPos pos) {
-        if (!config.protectPlots) {
-            return true;
-        }
-        if (player.isCreative()
-                || player.permissions().hasPermission(
-                        net.minecraft.server.permissions.Permissions.COMMANDS_GAMEMASTER)) {
-            return true;
-        }
-
-        Optional<Island> mineIsland = islandOf(player.getUUID());
-        boolean mine;
-
-        if (isOceanPlacement()) {
-            // 海岛：岛是海里点上去的，没有方格 —— 按"离我的岛够不够近"判定，
-            // 而且海面（岛之外）是公共区域，谁都不能圈。
-            mine = mineIsland.isPresent()
-                    && islandAt(pos.getX(), pos.getZ())
-                    .map(a -> a.player.equals(player.getUUID().toString()))
-                    .orElse(false);
-        } else {
-            // 经典空岛：归属按"玩家自己的方格"判断，而不是按地形范围。
-            //
-            // 原因：岛的地形只有半径几格，但它所在的方格有几百格宽。
-            // 如果按地形判断，玩家在自己方格内稍微往外走一点就会被拒绝建造 ——
-            // 实测出现过"箱子半边提示不是我的空岛区域"。方格内的整片区域都属于岛主。
-            int[] plot = plotOf(pos.getX(), pos.getZ());
-            mine = mineIsland.isPresent()
-                    && mineIsland.get().plotX == plot[0]
-                    && mineIsland.get().plotZ == plot[1];
-        }
-        boolean member = false;
-        if (!mine) {
-            Optional<Island> at = islandAt(pos.getX(), pos.getZ());
-            member = at.isPresent()
-                    && at.get().members.contains(player.getName().getString().toLowerCase(java.util.Locale.ROOT));
-        }
-
-        boolean allowed = mine || member;
-        if (!allowed) {
-            // 降到 debug：正常游玩时不该刷屏，排查时开 debug 就能看到
-            HubSuite.logger().debug(
-                    "拒绝建造：{} 在 ({}, {}) → 归属={}，本人岛={}",
-                    player.getName().getString(), pos.getX(), pos.getZ(),
-                    islandAt(pos.getX(), pos.getZ())
-                            .map(i -> i.name).orElse("公共区域/无主"),
-                    mineIsland.map(i -> "方格 " + i.plotX + "," + i.plotZ).orElse("无岛"));
-        }
-        return allowed;
     }
 
     /** 加入成员（{@code /island invite} 用）。 */

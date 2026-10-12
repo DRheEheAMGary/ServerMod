@@ -612,6 +612,48 @@ public final class SubServer implements PlayableWorld {
     }
 
     /**
+     * 用一个**现成的 LevelStem** 造侧维度（下界/末地），落点自己给。
+     *
+     * <p>与 {@link #createVanillaSideDimension} 的区别：那个只造"和原版一模一样"的
+     * 下界/末地；这个允许传自定义生成器（空岛式虚空下界、岩浆海），
+     * 专门给空岛服/海岛服的岛屿维度用。
+     *
+     * @param entryId 入口 id，同时进存档名与维度 key
+     * @param label   显示名（日志/界面用）
+     * @param spawn   这个维度的落点（重生点）
+     * @return 维度 key；失败返回 null
+     */
+    public ResourceKey<Level> createSideDimension(String entryId, String label,
+                                                  LevelStem stem, long seed,
+                                                  PlayableWorld.SpawnPoint spawn) {
+        String saveName = "hubsuite_" + config.id + "_" + entryId;
+        try {
+            IsolatedSave sideSave = IsolatedSave.open(server, saveName,
+                    config.displayName + " §7" + label, GameType.SURVIVAL,
+                    Difficulty.NORMAL, false);
+            ResourceKey<Level> dimension = WorldBuilder.dimensionKey(config.id + "_" + entryId);
+            ServerLevel level = WorldBuilder.create(server, sideSave, dimension, stem, seed, true);
+            level.getWorldBorder().setAbsoluteMaxSize(server.getAbsoluteMaxWorldSize());
+            applySpawn(level, spawn);
+            applyWorldBorder(level, rules, spawn);
+            sideSave.register(level);
+            /*
+             * 玩家数据必须绑到这份存档上，否则玩家在里面时读写会回落到兜底存档
+             * （大厅），背包就串了 —— 下界/末地都踩过这个坑，别再漏。
+             */
+            sideSave.bindPlayerStorage(dimension);
+            RulesManager.register(dimension, rules);
+            entries.put(entryId, new Entry(entryId, dimension, level, sideSave, spawn, label));
+            HubSuite.logger().info("子服 '{}' 新增侧维度 '{}'：{}（存档 {}）",
+                    config.id, entryId, dimension.identifier(), saveName);
+            return dimension;
+        } catch (Throwable t) {
+            HubSuite.logger().error("子服 '{}' 的侧维度 '{}' 创建失败", config.id, entryId, t);
+            return null;
+        }
+    }
+
+    /**
      * 造一个"原版风格"的侧维度（下界或末地）。
      *
      * @param suffix 维度 key 后缀，{@code nether} / {@code end}

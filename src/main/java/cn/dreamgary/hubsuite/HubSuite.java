@@ -144,6 +144,12 @@ public final class HubSuite implements ModInitializer {
                 islands = new cn.dreamgary.hubsuite.island.IslandService(
                         sub, islandsConfig(), hubEntry, islandEntries);
                 islands.register();
+                /*
+                 * v0.4.0：登记自然岛（带宝箱 + 刷怪笼 + 村庄房屋）。
+                 * 真正的铺设由每 tick 的补铺任务完成 —— 启动时那些区块还没到 FULL。
+                 */
+                cn.dreamgary.hubsuite.world.NaturalIslandPlacer
+                        .registerAll(islands, islandsConfig());
                 // 空岛系统可能注册了新的菜单假人（选岛假人），
                 // 而 NpcManager 的生成时机在本事件之前 —— 这里补一次。
                 if (npcManager != null) {
@@ -242,6 +248,12 @@ public final class HubSuite implements ModInitializer {
     }
 
     /** 任务系统；未初始化时为 null。 */
+    /** 海岛渔获配置（模组还没初始化完时为 null）。 */
+    public static cn.dreamgary.hubsuite.feature.FishingPresets.FishingConfig fishing() {
+        ConfigManager cm = configManager();
+        return cm == null ? null : cm.config().fishing;
+    }
+
     public static cn.dreamgary.hubsuite.quest.QuestManager quests() {
         return questManager;
     }

@@ -36,6 +36,10 @@ public final class HubSuiteConfig {
     /** 更新检查（启动时查一次，有新版本时提示管理员）。 */
     public UpdateConfig update = new UpdateConfig();
 
+    /** 海岛渔获（按维度挂表，见 feature/FishingPresets）。 */
+    public cn.dreamgary.hubsuite.feature.FishingPresets.FishingConfig fishing =
+            cn.dreamgary.hubsuite.feature.FishingPresets.defaults();
+
     /**
      * 更新检查配置。
      *
@@ -373,6 +377,10 @@ public final class HubSuiteConfig {
         if (update == null) {
             update = new UpdateConfig();
         }
+        if (fishing == null) {
+            fishing = cn.dreamgary.hubsuite.feature.FishingPresets.defaults();
+        }
+        fishing.normalize();
         if (island == null) {
             island = cn.dreamgary.hubsuite.island.IslandPresets.defaults();
         }
