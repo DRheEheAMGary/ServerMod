@@ -64,6 +64,28 @@ public final class PlayerStateStash {
         public int foodLevel;
         public float saturation;
         public boolean initialized;
+        /**
+         * 玩家登出时骑着谁（实体 UUID 字符串）。
+         *
+         * <p>用途："坐在船上退出再进来，船不见了"（用户实测）。原版把坐骑写进
+         * 玩家数据的 {@code RootVehicle}，重进时靠 {@code ServerPlayer#loadAndSpawnParentVehicle}
+         * 在**玩家落地的那一界**里找回来；而本模组登录时先把人放进大厅
+         * （见 {@code PrepareSpawnTaskMixin}），玩家数据又按维度分开读
+         * （{@link #apply} 只搬背包/经验/血量），那个 RootVehicle 就没人处理了。
+         * 所以在这里记一份，等玩家真的进入那一界再骑回去（见 {@link #restoreMount}）。
+         */
+        public String rootVehicleUuid;
+        /**
+         * 登出时那条坐骑的原始 NBT（原版写的 {@code RootVehicle} 整块）。
+         *
+         * <p>为什么要留原始 NBT：原版在玩家断线时会**把只有一个玩家乘客的载具清掉**
+         * （见 {@code PlayerList.remove}：{@code isPassenger()} +
+         * {@code hasExactlyOnePlayerPassenger()} → {@code stopRiding()} → 丢掉载具），
+         * 把它的完整 NBT 存进玩家数据，等下次登录再重建。
+         * 本模组登录先落大厅、数据按维度分开读，那一步没人为我们做 ——
+         * 所以要么按 UUID 找回还在那一界的载具，要么照这份 NBT 重建（见 #restoreMount）。
+         */
+        public CompoundTag rootVehicleTag;
 
         static State empty() {
             State s = new State();
@@ -160,6 +182,8 @@ public final class PlayerStateStash {
         state.health = player.getHealth();
         state.foodLevel = player.getFoodData().getFoodLevel();
         state.saturation = player.getFoodData().getSaturationLevel();
+        var vehicle = player.getVehicle();
+        state.rootVehicleUuid = vehicle == null ? null : vehicle.getUUID().toString();
         state.initialized = true;
     }
 
@@ -275,8 +299,97 @@ public final class PlayerStateStash {
         state.health = tag.getFloatOr("Health", player.getMaxHealth());
         state.foodLevel = tag.getIntOr("foodLevel", 20);
         state.saturation = tag.getFloatOr("foodSaturationLevel", 5.0F);
+        // RootVehicle 整块留着（原版 saveParentVehicle 写的）：Attach 是那个实体的 UUID，
+        // Entity 是它的完整 NBT —— 原版断线时会清掉载具，只能靠这份 NBT 重建。
+        CompoundTag rootVehicle = tag.getCompoundOrEmpty("RootVehicle");
+        state.rootVehicleTag = rootVehicle.isEmpty() ? null : rootVehicle;
+        state.rootVehicleUuid = rootVehicle
+                .read("Attach", net.minecraft.core.UUIDUtil.CODEC)
+                .map(java.util.UUID::toString)
+                .orElse(null);
         state.initialized = true;
         return state;
+    }
+
+    /**
+     * 重登 / 切服后骑回登出时的那条坐骑（船、矿车、马…）。
+     *
+     * <p><b>为什么需要：</b>见 {@link State#rootVehicleUuid}。原版是在玩家落地的
+     * 那一界里找 RootVehicle；本模组把人放进大厅、数据按维度分开读，于是没人处理它，
+     * 用户看到的就是"坐在船上退出重进，船不见了"。
+     *
+     * <p>两条路，按原版的行为来：
+     * <ol>
+     *   <li><b>载具还在这一界</b>（会话内切服就是这种：载具留在原维度没被清）→
+     *       按 UUID 找回来，直接骑上；</li>
+     *   <li><b>载具已经被原版清掉</b>（断线时 {@code PlayerList.remove} 会丢掉
+     *       只有一个玩家乘客的载具）→ 照玩家数据里的 {@code RootVehicle} NBT 重建，
+     *       就是原版 {@code loadAndSpawnParentVehicle} 做的事
+     *       （它带 {@code addWithUUID} 去重，不会和还活着的那条重复）。</li>
+     * </ol>
+     *
+     * <p>必须在**传送之后**调：重建/查找都发生在玩家已经落脚的那个维度里。
+     */
+    public static void restoreMount(ServerPlayer player, ResourceKey<Level> dimension) {
+        try {
+            if (player.getVehicle() != null) {
+                return;   // 已经骑着了（原版或别的路径处理过），不要抢
+            }
+            Map<String, State> perWorld = STASH.get(player.getUUID());
+            State state = perWorld == null ? null : perWorld.get(id(dimension));
+            if (state == null) {
+                return;
+            }
+            var level = player.level();
+            if (level == null || !level.dimension().equals(dimension)) {
+                return;   // 还没真的进到那一界
+            }
+
+            // ① 载具还活着 → 按 UUID 骑回去
+            if (state.rootVehicleUuid != null && !state.rootVehicleUuid.isBlank()) {
+                var vehicle = level.getEntity(java.util.UUID.fromString(state.rootVehicleUuid));
+                if (vehicle != null && vehicle.isAlive()) {
+                    player.startRiding(vehicle, true, false);
+                    if (player.getVehicle() != null) {
+                        HubSuite.logger().debug("已把 {} 骑回坐骑 {}", player.getName().getString(),
+                                state.rootVehicleUuid);
+                        return;
+                    }
+                }
+            }
+
+            // ② 断线重登：原版在 disconnect 时已经把载具清掉了，只剩这份 NBT。
+            //    照它把载具加载回来，但**已经存在于这一界的实体直接复用** ——
+            //    原版那套 {@code addWithUUID} 遇到已存在的 UUID 会返回 null、什么都不做，
+            //    于是"实体还在但就是骑不上"（自检实测抓到过：getVehicle=null）。
+            if (state.rootVehicleTag != null && !state.rootVehicleTag.isEmpty()) {
+                var server = level.getServer();
+                if (server == null) {
+                    return;
+                }
+                var entityInput = net.minecraft.world.level.storage.TagValueInput.create(
+                        net.minecraft.util.ProblemReporter.DISCARDING, server.registryAccess(),
+                        state.rootVehicleTag.getCompoundOrEmpty("Entity"));
+                var mounted = net.minecraft.world.entity.EntityType.loadEntityRecursive(
+                        entityInput, level, net.minecraft.world.entity.EntitySpawnReason.LOAD, e -> {
+                            var existing = level.getEntity(e.getUUID());
+                            if (existing != null) {
+                                return existing;   // 这一界已经有了 → 复用它，别再建一条
+                            }
+                            return level.addWithUUID(e) ? e : null;
+                        });
+                if (mounted != null) {
+                    player.startRiding(mounted, true, false);
+                    if (player.getVehicle() != null) {
+                        HubSuite.logger().debug("已为 {} 找回保存的坐骑 {}",
+                                player.getName().getString(), mounted.getUUID());
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            // 坐骑找不回来不是致命问题，绝不能因此影响传送
+            HubSuite.logger().debug("恢复坐骑失败：{}", t.toString());
+        }
     }
 
     /** 某个维度是否已有该玩家的状态记录（内存里的）。 */

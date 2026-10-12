@@ -45,9 +45,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * {@code RespawnPoints} 把该子服的出生点绑在玩家的 {@code RespawnConfig} 上，
  * 走的是另一条分支。所以这里只修被那条错误共享数据带偏的兜底结果。
  *
- * <p>坐标也要一起纠正：兜底位置来自"被覆盖的那份共享出生点"，
- * 在别的子服里可能指向虚空（实测空岛服会落到 Y=-111 然后靠虚空救援捞回来）。
- * 所以优先用**该子服自己登记的出生点**，退而用维度自己的 respawnData。
+ * <p>坐标也要一起纠正：兜底位置来自"被覆盖的那份共享出生点"，在别的子服里可能
+ * 指向虚空或维度的世界出生点（实测空岛服落到 Y=-111、海岛落到海中央）。
+ * 所以优先用**玩家自己的重生点**（{@code RespawnPoints.bind} 绑的"他的岛"），
+ * 其次才是"该维度所属子服的这个维度"的出生点、维度自己的 respawnData。
+ * 具体实现在 {@code RespawnPoints#pickSafePos}。
  */
 @Mixin(ServerPlayer.class)
 public abstract class ServerPlayerRespawnDimensionMixin {
@@ -84,7 +86,14 @@ public abstract class ServerPlayerRespawnDimensionMixin {
                 HubSuite.logger().info("重生兜底维度已纠正：{} -> {}（共享出生点数据被覆盖导致的串服）",
                         target.dimension().identifier(), here.dimension().identifier());
             }
-            var pos = hubsuite$pickSafePos(here, t.position());
+            /*
+             * 落点必须优先用**玩家自己的重生点**（RespawnPoints.bind 绑的"他的岛"）。
+             * 原来的实现只在"子服主维度"里找出生点，而多维度子服的主维度恒是那个
+             * 虚空世界 —— 海岛/经典空岛都匹配不上，于是退到维度的 respawnData
+             * （海岛 = 海中央），玩家一死就重生在海里（用户实测：
+             * "海岛服的重生点似乎不在自己的岛上"）。
+             */
+            var pos = cn.dreamgary.hubsuite.world.RespawnPoints.pickSafePos(self, here, t.position());
             var fixed = new TeleportTransition(here, pos, Vec3.ZERO,
                     t.yRot(), t.xRot(), t.relatives(), t.postTeleportTransition());
             cir.setReturnValue(fixed);
@@ -94,36 +103,4 @@ public abstract class ServerPlayerRespawnDimensionMixin {
         }
     }
 
-    /**
-     * 选一个该维度里"能站人"的重生点。
-     *
-     * <p>优先级：该子服登记的出生点 → 该维度自己的 respawnData → 原样保留。
-     * 前两个都拿不到时不动，避免把玩家送进更糟的位置。
-     */
-    private static Vec3 hubsuite$pickSafePos(ServerLevel level, Vec3 fallback) {
-        try {
-            var worlds = HubSuite.worlds();
-            if (worlds != null) {
-                for (var w : worlds.allWorlds()) {
-                    if (w.level() != null && w.level().dimension().equals(level.dimension())) {
-                        var sp = w.spawn();
-                        return new Vec3(sp.x(), sp.y(), sp.z());
-                    }
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        try {
-            var rd = level.getRespawnData();
-            if (rd != null && rd.pos() != null) {
-                var p = rd.pos();
-                // 只在它落在世界高度范围内时才信
-                if (p.getY() > level.getMinY() + 1 && p.getY() < level.getMaxY()) {
-                    return new Vec3(p.getX() + 0.5, p.getY(), p.getZ() + 0.5);
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return fallback;
-    }
 }

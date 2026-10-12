@@ -184,17 +184,25 @@ public final class PlayerRouter {
             PlayerStateStash.apply(player, level.dimension());
 
             // 步骤 2b：解析这个玩家在该场所的**出生点**。
-            //   优先级必须保持：解析器结果（空岛服=自己的岛）> 位置记忆 > 入口出生点。
-            //   以前把记忆提到解析器前面，结果"从海岛切经典空岛"会落到记忆里的
-            //   另一个岛型坐标上（自检抓到："离自己的经典岛 288 格"）。
+            //
+            // 两个解析器各管一段，不再互相顶掉：
+            //   · placeSpawn（解析器 / 入口出生点）决定"他该落在**哪座岛**上"，
+            //     同时它就是**重生点**（步骤 5）—— 重生必须落在自己的岛上；
+            //   · 位置记忆决定"这次落地的坐标"（上次退出时站的地方）。
+            //
+            // 旧顺序是"有解析器结果就完全不看记忆"，于是空岛服永远落在岛的出生点、
+            // 记不住坐标（用户实测："从海岛 /hub 之后回去不保留坐标"）。
+            // 记忆本身是按**目标维度**存的（见 ServerRulesEngine#remember），
+            // 切岛型时查的是目标维度那份，所以历史上"从海岛切经典空岛却用了海岛坐标"
+            // 那个问题不会再回来（自检 checkIslandSwitchLandsCorrectly 会盯着）。
             java.util.Optional<PlayableWorld.SpawnPoint> custom =
                     customSpawnFor(player, target, level);
             PlayableWorld.SpawnPoint placeSpawn = custom.orElse(entrySpawn(target, level));
 
-            // 本次传送的落点：没有自定义出生点、且开启位置记忆时，才回到上次退出的位置。
+            // 本次传送的落点：有记忆就回记忆位置，没有才用场所出生点。
             // 记忆只影响"这次把人放哪"，不影响重生点（见步骤 5）。
             PlayableWorld.SpawnPoint spawn = placeSpawn;
-            if (custom.isEmpty() && memoryResolver != null) {
+            if (memoryResolver != null) {
                 try {
                     PlayableWorld.SpawnPoint remembered = memoryResolver.recall(player, target, level);
                     if (remembered != null) {
@@ -223,6 +231,10 @@ public final class PlayerRouter {
             player.teleport(transition);
 
             applyEnterEffects(player, target);
+
+            // 步骤 4b：登出时骑着的船/矿车要骑回来。
+            //   必须排在传送**之后** —— 要找的那条船在目标维度里。
+            PlayerStateStash.restoreMount(player, level.dimension());
 
             // 步骤 5：把重生点强制绑到"当前所在的场所"（空岛服绑到玩家自己的岛上）。
             //
