@@ -116,6 +116,9 @@ public final class SelfTest {
         passed = 0;
         failed = 0;
 
+        // 开跑前先清掉上一次自检留下的位置记忆，否则会读到旧岛的坐标
+        clearProbeMemories();
+
         // 放最前面：后面的"规则落盘"会触发全维度同步落盘，在刚清档、区块还在
         // 大量生成时可能超 60 秒被看门狗强杀 —— 排后面就永远跑不到这条了。
         step("两个地形子服不是同一张地图（种子真的生效了）", this::checkSubServerSeedsDiffer);
@@ -1719,12 +1722,33 @@ public final class SelfTest {
      * {@code players/data/<假UUID>.dat}，岛屿归属里也会多出测试岛 ——
      * 玩家看到"我还没玩怎么就有岛了"。
      */
+    /** 自检用的假玩家名字：数据文件 / 岛屿归属 / 位置记忆都按它清。 */
+    private static final java.util.List<String> PROBE_NAMES = java.util.List.of(
+            "hubsuite_selftest", "hubsuite_islandtest", "hubsuite_spawntest",
+            "hubsuite_statetest", "hubsuite_spawnprobe", "hubsuite_menutest",
+            "hubsuite_persist", "hubsuite_memtest", "hubsuite_mount", "hubsuite_switch");
+
+    /**
+     * 清掉假玩家的**位置记忆**。
+     *
+     * <p>假玩家 UUID 固定，而位置记忆会落盘（{@code last-locations.json}）——
+     * 不清的话下次自检会读到上次的坐标，"切岛型 / 回岛"两条检查拿到的是旧岛位置
+     * （实测：陈旧记忆把正确落点顶掉 288 格）。
+     */
+    private void clearProbeMemories() {
+        var rules = HubSuite.rulesEngine();
+        if (rules == null) {
+            return;
+        }
+        for (String name : PROBE_NAMES) {
+            rules.forget(net.minecraft.core.UUIDUtil.createOfflinePlayerUUID(
+                    cn.dreamgary.hubsuite.fake.FakePlayers.validName(name)));
+        }
+    }
+
     private void sweepTestResidue() {
         // 1) 删掉假玩家的数据文件
-        java.util.List<String> probeNames = java.util.List.of(
-                "hubsuite_selftest", "hubsuite_islandtest", "hubsuite_spawntest",
-                "hubsuite_statetest", "hubsuite_spawnprobe", "hubsuite_menutest",
-                "hubsuite_persist", "hubsuite_memtest", "hubsuite_mount", "hubsuite_switch");
+        java.util.List<String> probeNames = PROBE_NAMES;
         int removedFiles = 0;
         for (String name : probeNames) {
             // 必须用与 FakePlayers.spawn **同一个**规整函数算 UUID。
@@ -1764,6 +1788,8 @@ public final class SelfTest {
                     net.minecraft.core.UUIDUtil.createOfflinePlayerUUID(
                             cn.dreamgary.hubsuite.fake.FakePlayers.validName(name)));
         }
+        // 3) 位置记忆也清掉
+        clearProbeMemories();
         HubSuite.logger().info("自检收尾：已清理 {} 个测试数据文件与测试岛屿归属", removedFiles);
     }
 
