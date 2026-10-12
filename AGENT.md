@@ -25,7 +25,7 @@
 | 项 | 值 |
 |---|---|
 | 模组 id / 组 | `hubsuite` / `cn.dreamgary` |
-| 版本 | `gradle.properties` 的 `mod_version` = **0.4.0-SNAPSHOT** |
+| 版本 | `gradle.properties` 的 `mod_version` = **0.4.0-alpha.1** |
 | 构建 | Gradle 9.7.1 + Loom 1.18-SNAPSHOT |
 | 映射 | **官方 Mojang 名，不 remap**（26.1 起官方不再混淆；build.gradle 无 mappings、无 remapJar） |
 | 产物 | `build/libs/hubsuite-<版本>.jar`（另有 `-sources.jar`） |
@@ -382,7 +382,7 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 | `next` | 发测试版时：`0.3.0-rc.1`，tag `v0.3.0-rc.1` |
 | `main` | 发正式版时：`0.3.0`，tag `v0.3.0` |
 
-tag 带 `v`；产物名跟随 `mod_version`（`hubsuite-0.3.0-rc.1.jar` / `hubsuite-0.4.0-SNAPSHOT.jar`）。
+tag 带 `v`；产物名跟随 `mod_version`（`hubsuite-0.3.0-rc.1.jar` / `hubsuite-0.4.0-alpha.1.jar`）。
 
 ### 发版前固定步骤
 
