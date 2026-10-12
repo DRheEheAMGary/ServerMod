@@ -133,7 +133,10 @@ public final class SelfTest {
         step("颜色码渲染", this::checkTextColors);
         step("箱子式服务器选择界面", this::checkServerMenu);
         step("海岛维度是自然海洋", this::checkOceanWorld);
-        step("空岛入口分流与保护", this::checkIslandRouting);
+        step("空岛入口分流（保护已在 v0.4.0 删除）", this::checkIslandRouting);
+        step("海岛渔获（按维度挂表 + 按群系分池 + 稀有度）", this::checkFishing);
+        step("岛屿维度各自的下界/末地（空岛虚空式 + 海岛岩浆海）", this::checkIslandSideWorlds);
+        step("自然岛（宝箱 + 刷怪笼 + 村庄房屋）", this::checkNaturalIslands);
         step("空岛指令存在且可用", this::checkIslandCommands);
         step("空岛重置与切换岛型", this::checkIslandReset);
         step("玩家数据落盘目录正确", this::checkPlayerDataRouting);
@@ -505,19 +508,40 @@ public final class SelfTest {
             }
 
             var offenders = new StringBuilder();
+            var intentional = new StringBuilder();
             int checked = 0;
             for (ServerLevel level : voids) {
                 checked++;
                 var sets = level.getChunkSource().getGeneratorState().possibleStructureSets();
-                if (!sets.isEmpty()) {
-                    if (offenders.length() < 200) {
-                        offenders.append(level.dimension().identifier()).append("(")
-                                .append(sets.size()).append(" 个结构集) ");
+                if (sets.isEmpty()) {
+                    continue;
+                }
+                /*
+                 * 空岛式下界是**故意**放行下界结构集的（要塞 + 猪灵堡垒，
+                 * 见 IslandSideWorlds）：这是 v0.4.0 的需求，不算"虚空长村庄"。
+                 * 但它也只许放行 minecraft:nether_complexes —— 混进村庄/要塞就还是要报。
+                 */
+                if (cn.dreamgary.hubsuite.world.PortalLinks.isIslandNether(level.dimension())) {
+                    boolean onlyNether = sets.stream().allMatch(h -> h.unwrapKey()
+                            .map(k -> "minecraft:nether_complexes".equals(k.identifier().toString()))
+                            .orElse(false));
+                    if (onlyNether) {
+                        intentional.append(level.dimension().identifier()).append(' ');
+                    } else {
+                        offenders.append(level.dimension().identifier())
+                                .append("(下界维度里混入了非下界结构集) ");
                     }
+                    continue;
+                }
+                if (offenders.length() < 200) {
+                    offenders.append(level.dimension().identifier()).append("(")
+                            .append(sets.size()).append(" 个结构集) ");
                 }
             }
             if (offenders.length() == 0) {
-                ok("虚空维度里没有任何结构集，不会长出村庄（检查了 " + checked + " 个虚空维度）");
+                ok("虚空维度里没有多余的结构集（检查了 " + checked + " 个虚空维度"
+                        + (intentional.length() == 0 ? ""
+                        : "；其中 " + intentional.toString().trim() + " 只放行了下界要塞/堡垒") + "）");
             } else {
                 fail("虚空维度里放行了结构集，会长出村庄/要塞：" + offenders.toString().trim());
             }
@@ -1085,13 +1109,6 @@ public final class SelfTest {
                 ok("岛屿归属已登记，方格 (" + island.plotX + ", " + island.plotZ + ")");
             } else {
                 fail("岛屿归属未登记");
-            }
-            // 保护：非岛主不能动
-            var other = new net.minecraft.core.BlockPos(pos.getX() + 1, pos.getY(), pos.getZ());
-            if (!manager.canBuild(probe, other)) {
-                fail("岛主竟然不能在自己的岛上建造（保护逻辑反了）");
-            } else {
-                ok("岛主可以在自己的岛上建造");
             }
             // 新增：走**真实的切服路径**进空岛服，验证落脚点确实干净
             var enter = FakePlayers.spawn(server, "hubsuite_spawnprobe", classicLevel, false);
@@ -2093,41 +2110,6 @@ public final class SelfTest {
                 fail("两种岛型的维度没有分开");
             }
 
-            // 5) 保护：别人不能在我的岛上建造
-            var intruder = FakePlayers.spawn(server, "hubsuite_intruder", worlds.lobby().orElseThrow().level(), false);
-            if (intruder != null) {
-                try {
-                    var mine = classic.manager().anchorOf(classicIsland);
-                    if (!classic.manager().canBuild(intruder, mine)) {
-                        ok("别人不能在我的岛上建造（保护生效）");
-                    } else {
-                        fail("陌生人竟然能在我岛上建造 —— 保护没生效");
-                    }
-                    // 岛主自己可以
-                    if (classic.manager().canBuild(probe, mine)) {
-                        ok("岛主可以在自己岛上建造");
-                    } else {
-                        fail("岛主被自己的保护挡住了");
-                    }
-                } finally {
-                    try {
-                        server.getPlayerList().remove(intruder);
-                    } catch (Throwable ignored) {
-                        // 忽略
-                    }
-                }
-            }
-
-            // 6) 海面是公共区域：谁都不能在离岛很远的海上建造
-            var farAway = new net.minecraft.core.BlockPos(
-                    ocean.manager().anchorOf(oceanIsland).getX() + 2000,
-                    ocean.manager().anchorOf(oceanIsland).getY(),
-                    ocean.manager().anchorOf(oceanIsland).getZ() + 2000);
-            if (!ocean.manager().canBuild(probe, farAway)) {
-                ok("海岛之外的海面是公共区域（不能被圈占）");
-            } else {
-                fail("玩家竟然能在远离自己岛的海面上建造");
-            }
         } catch (Throwable t) {
             fail("分流检查异常：" + t);
             HubSuite.logger().error("分流自检失败", t);
@@ -3036,11 +3018,8 @@ public final class SelfTest {
      *
      * <p>锁住用户报的问题："整个空岛服不能和方块交互，右键箱子/工作台都没用"。
      *
-     * <p>交互被拦的可能来源只有两处，这里逐一验证前置条件：
-     * <ol>
-     *   <li>{@code LoginLockdown} —— 未认证玩家的一切交互都会被拒；</li>
-     *   <li>空岛保护 —— 只在**拿着物品**且不在自己区域时才拦。</li>
-     * </ol>
+     * <p>交互被拦的可能来源只剩 {@code LoginLockdown}（未认证玩家的一切交互都会被拒）；
+     * 空岛保护已在 v0.4.0 按用户要求整体删除。
      * 另外游戏模式必须是生存/创造：**冒险模式无法与方块交互**，
      * 而大厅是冒险模式，如果切服时没把模式改回来就会中招。
      */
@@ -3083,40 +3062,20 @@ public final class SelfTest {
                 fail("玩家没落在空岛服维度里：" + dim);
             }
 
-            // 3) 岛主在自己岛上必须被允许建造（交互的首要前提）
+            // 3) 玩家必须真的有自己的岛（进服时自动建）
             var island = classic.manager().islandOf(probe.getUUID()).orElse(null);
             if (island == null) {
                 fail("进入空岛服后没有为玩家建岛");
             } else {
-                var center = classic.manager().anchorOf(island);
-                if (classic.manager().canBuild(probe, center)) {
-                    ok("岛主可以在自己岛上建造/交互");
-                } else {
-                    fail("岛主在自己岛上被拒绝（会导致箱子/工作台点不动）");
-                }
+                ok("进空岛服后有自己的岛（保护已删除，不再做建造判定）");
             }
 
-            /*
-             * 4) 空岛服大厅（公共平台）也必须允许交互。
-             *
-             *    这里必须先**把玩家送回大厅维度**再判定 ——
-             *    canBuildHere 看的是"玩家当前所在维度"，
-             *    而上面刚把他送去了 classic 维度。
-             *    （第一版就是忘了这点，拿大厅的坐标去问 classic 的保护逻辑，
-             *     得到一个假的失败结论。）
-             */
+            // 4) 还能正常回空岛服大厅
             islands.sendToHub(probe);
             if (!islands.hubEntry().dimension().equals(probe.level().dimension())) {
                 fail("无法把测试玩家送回空岛服大厅");
             } else {
-                var hubSpawn = islands.hubEntry().spawn();
-                var platformPos = net.minecraft.core.BlockPos.containing(
-                        hubSpawn.x(), hubSpawn.y() - 1, hubSpawn.z());
-                if (islands.canBuildAt(probe, platformPos)) {
-                    ok("空岛服大厅允许交互（拿物品右键不会被拦）");
-                } else {
-                    fail("空岛服大厅被判定成受保护区域 —— 公共箱子点不开");
-                }
+                ok("可以正常回空岛服大厅（公共平台不再有保护限制）");
             }
 
             // 5) 已认证玩家不能被登录锁定拦住
@@ -5041,6 +5000,288 @@ public final class SelfTest {
                 // 忽略
             }
         }
+    }
+
+    /**
+     * 海岛渔获：按维度挂表、按群系分池、稀有度分级。
+     *
+     * <p>用户要求："只要海岛；稀有度分级；按群系钓到不同的东西 ——
+     * 暖海钓沙子、冷海钓砂砾、冻洋钓冰块"。这里全部用**纯函数**验证，
+     * 不生成任何实体、不加载区块。
+     */
+    private void checkFishing() {
+        var config = HubSuite.fishing();
+        if (config == null) {
+            fail("渔获配置未加载，跳过");
+            return;
+        }
+        var oceanDim = WorldBuilder.dimensionKey("skyblock_ocean");
+        var classicDim = WorldBuilder.dimensionKey("skyblock_classic");
+        var ocean = cn.dreamgary.hubsuite.feature.FishingLoot.tableFor(config, oceanDim);
+        if (ocean == null) {
+            fail("海岛维度没有渔获表（配置里的 key：" + config.tables.keySet() + "）");
+            return;
+        }
+        StringBuilder pools = new StringBuilder();
+        int entries = 0;
+        for (var p : ocean.pools) {
+            pools.append(p.id).append(' ');
+            entries += p.entries.size();
+        }
+        ok("海岛维度有自己的渔获表（" + ocean.pools.size() + " 个池：" + pools.toString().trim() + "）");
+        okOrFail(ocean.pools.size() >= 5 && entries >= 40,
+                "战利品够丰富（" + ocean.pools.size() + " 个池 / " + entries + " 条渔获）",
+                "战利品偏少：池 " + ocean.pools.size() + " 个 / 条目 " + entries + " 条");
+
+        if (cn.dreamgary.hubsuite.feature.FishingLoot.tableFor(config, classicDim) == null) {
+            ok("没配置的维度仍走原版渔获（经典空岛不受影响）");
+        } else {
+            fail("经典空岛没配置渔获表，却被接管的，请检查 keys");
+        }
+
+        checkBiomeJunk(ocean, "warm_ocean", "minecraft:sand", "暖海");
+        checkBiomeJunk(ocean, "cold_ocean", "minecraft:gravel", "冷水洋");
+        checkBiomeJunk(ocean, "frozen_ocean", "minecraft:ice", "冻洋");
+
+        boolean rare = false;
+        boolean legendary = false;
+        StringBuilder missing = new StringBuilder();
+        for (var p : ocean.pools) {
+            for (var e : p.entries) {
+                if ("rare".equals(e.rarity)) {
+                    rare = true;
+                }
+                if ("legendary".equals(e.rarity)) {
+                    legendary = true;
+                }
+                var key = net.minecraft.resources.Identifier.tryParse(e.item);
+                if (key == null || net.minecraft.core.registries.BuiltInRegistries.ITEM
+                        .getOptional(key).isEmpty()) {
+                    missing.append(e.item).append(' ');
+                }
+            }
+        }
+        if (rare && legendary) {
+            ok("渔获有稀有度分级（rare / legendary 都在）");
+        } else {
+            fail("渔获稀有度分级不全：rare=" + rare + " legendary=" + legendary);
+        }
+        if (missing.length() == 0) {
+            ok("渔获表里的物品 id 全部有效");
+        } else {
+            fail("渔获表里有不存在的物品：" + missing.toString().trim());
+        }
+
+        var entry = new cn.dreamgary.hubsuite.feature.FishingPresets.Entry();
+        entry.item = "minecraft:cod";
+        entry.amount = "2-5";
+        var random = net.minecraft.util.RandomSource.create(7L);
+        int min = 99;
+        int max = 0;
+        for (int i = 0; i < 200; i++) {
+            int n = entry.rollAmount(random);
+            min = Math.min(min, n);
+            max = Math.max(max, n);
+        }
+        if (min >= 2 && max <= 5 && max > min) {
+            ok("数量区间 " + "2-5" + " 生效（实测 " + min + "~" + max + "）");
+        } else {
+            fail("数量区间不对：实测 " + min + "~" + max);
+        }
+    }
+
+    /** 某个温度带的垃圾池：必须能钓到本温度带的方块，且不串到别的温度带。 */
+    private void checkBiomeJunk(cn.dreamgary.hubsuite.feature.FishingPresets.Table table,
+                                String biome, String expected, String label) {
+        var random = net.minecraft.util.RandomSource.create(20260101L);
+        int hit = 0;
+        int crossed = 0;
+        for (int i = 0; i < 600; i++) {
+            for (var c : cn.dreamgary.hubsuite.feature.FishingLoot.roll(table, biome, random, 0)) {
+                String id = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                        .getKey(c.stack().getItem()).toString();
+                if (id.equals(expected)) {
+                    hit++;
+                } else if (id.equals("minecraft:sand") || id.equals("minecraft:gravel")
+                        || id.equals("minecraft:ice")) {
+                    crossed++;
+                }
+            }
+        }
+        if (hit > 0 && crossed == 0) {
+            ok(label + "的垃圾里能钓到 " + expected + "，且不会串到别的温度带");
+        } else {
+            fail(label + "群系垃圾池不对：命中 " + expected + " x" + hit + "，串带 x" + crossed);
+        }
+    }
+
+    /**
+     * 自然岛（v0.4.0）：配置可解析、里面的 id 全部有效、并且真的登记了待铺任务。
+     *
+     * <p>用户要求："生成一些自然生成的岛屿，会有一些刷怪笼和宝箱"。
+     * 地形铺设本身要等区块就绪（跨 tick），这里只验证**配置与登记**，
+     * 不加载任何区块。
+     */
+    private void checkNaturalIslands() {
+        var islands = HubSuite.islands();
+        var config = islands == null ? null : islands.config();
+        if (islands == null || config == null) {
+            fail("空岛服务未就绪，跳过自然岛检查");
+            return;
+        }
+        if (config.naturalIslands.isEmpty()) {
+            fail("没有配置任何自然岛");
+            return;
+        }
+        int total = 0;
+        StringBuilder bad = new StringBuilder();
+        for (var e : config.naturalIslands.entrySet()) {
+            if (islands.type(e.getKey()).isEmpty()) {
+                bad.append("岛型 ").append(e.getKey()).append(" 不存在; ");
+            }
+            if (e.getValue() != null) {
+                total += e.getValue().size();
+            }
+        }
+        okOrFail(bad.length() == 0 && total > 0,
+                "自然岛配置有效（" + config.naturalIslands.size() + " 种岛型 / " + total + " 座）",
+                "自然岛配置有问题：" + bad);
+
+        // 刷怪笼生物
+        for (String id : config.naturalIslandSpawners) {
+            var key = net.minecraft.resources.Identifier.tryParse(id);
+            if (key == null || net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+                    .getOptional(key).isEmpty()) {
+                bad.append("生物 ").append(id).append("; ");
+            }
+        }
+        // 宝箱物资（格式：物品id*数量）
+        for (String raw : config.naturalIslandLoot) {
+            String id = raw == null ? "" : raw.trim();
+            int star = id.lastIndexOf('*');
+            if (star > 0) {
+                id = id.substring(0, star).trim();
+            }
+            var key = net.minecraft.resources.Identifier.tryParse(id);
+            if (key == null || net.minecraft.core.registries.BuiltInRegistries.ITEM
+                    .getOptional(key).isEmpty()) {
+                bad.append("物资 ").append(raw).append("; ");
+            }
+        }
+        // 结构模板（原版村庄房屋 / 自建结构，从数据包里取）
+        var templates = server.getStructureManager();
+        for (String id : config.naturalIslandStructures) {
+            var key = net.minecraft.resources.Identifier.tryParse(id);
+            if (key == null || templates.get(key).isEmpty()) {
+                bad.append("结构模板 ").append(id).append("; ");
+            }
+        }
+        okOrFail(bad.length() == 0,
+                "自然岛的刷怪笼生物 / 宝箱物资 / 结构模板全部有效",
+                "自然岛配置里有无效 id：" + bad);
+        okOrFail(config.naturalIslandStructures != null && !config.naturalIslandStructures.isEmpty(),
+                "自然岛以结构模板呈现（" + config.naturalIslandStructures + "），结构下有底座="
+                        + config.naturalIslandStructureBase,
+                "自然岛没有配结构模板");
+        // 底座名单：猪灵堡垒要、要塞不要（用户要求）
+        var rootConfig = HubSuite.configManager() == null ? null : HubSuite.configManager().config();
+        if (rootConfig != null) {
+            okOrFail(rootConfig.structureFoundations.contains("minecraft:bastion_remnant"),
+                    "猪灵堡垒在补底座名单里（" + rootConfig.structureFoundations + "）",
+                    "补底座名单里没有猪灵堡垒：" + rootConfig.structureFoundations);
+            okOrFail(!rootConfig.structureFoundations.contains("minecraft:stronghold"),
+                    "要塞不在补底座名单里（按你的要求）",
+                    "要塞被误加进了补底座名单");
+        }
+
+        int pending = NaturalIslandPlacer.pendingCount();
+        int placed = NaturalIslandPlacer.placedCount();
+        okOrFail(pending + placed > 0,
+                "自然岛已登记（待铺 " + pending + " 座，已铺 " + placed + " 座）",
+                "自然岛一座也没有登记 —— 注册链路断了");
+    }
+
+    /**
+     * 岛屿维度各自的下界 / 末地（v0.4.0）。
+     *
+     * <p>用户要求："空岛服用空岛（虚空式下界）、海岛服用岩浆海，两座都要原版末地"，
+     * 并且"传送门落点下面要补一座全下界岩的小岛"。
+     * 这条全部是**逻辑检查**：只看维度登记与生成器参数，不加载区块。
+     */
+    private void checkIslandSideWorlds() {
+        var islands = HubSuite.islands();
+        var skyblock = worlds.subServer("skyblock").orElse(null);
+        if (islands == null || skyblock == null) {
+            fail("空岛服未就绪，跳过岛屿侧维度检查");
+            return;
+        }
+        var classic = islands.type("classic").orElse(null);
+        var ocean = islands.type("ocean").orElse(null);
+        if (classic == null || ocean == null) {
+            fail("缺少 classic / ocean 岛型");
+            return;
+        }
+        var classicNether = PortalLinks.redirect(classic.entry().dimension(), Level.NETHER);
+        var classicEnd = PortalLinks.redirect(classic.entry().dimension(), Level.END);
+        var oceanNether = PortalLinks.redirect(ocean.entry().dimension(), Level.NETHER);
+        var oceanEnd = PortalLinks.redirect(ocean.entry().dimension(), Level.END);
+
+        okOrFail(classicNether != null && !Level.NETHER.equals(classicNether)
+                        && skyblock.owns(classicNether),
+                "经典空岛有自己的下界（" + name(classicNether) + "）",
+                "经典空岛没有自己的下界（redirect=" + classicNether + "）");
+        okOrFail(classicEnd != null && !Level.END.equals(classicEnd)
+                        && skyblock.owns(classicEnd),
+                "经典空岛有自己的末地（" + name(classicEnd) + "）",
+                "经典空岛没有自己的末地（redirect=" + classicEnd + "）");
+        okOrFail(oceanNether != null && !Level.NETHER.equals(oceanNether)
+                        && skyblock.owns(oceanNether),
+                "海岛有自己的下界（" + name(oceanNether) + "）",
+                "海岛没有自己的下界（redirect=" + oceanNether + "）");
+        okOrFail(oceanEnd != null && !Level.END.equals(oceanEnd)
+                        && skyblock.owns(oceanEnd),
+                "海岛有自己的末地（" + name(oceanEnd) + "）",
+                "海岛没有自己的末地（redirect=" + oceanEnd + "）");
+        okOrFail(classicNether != null && oceanNether != null
+                        && !classicNether.equals(oceanNether),
+                "空岛与海岛的下界是两个不同维度（不会互相串）",
+                "空岛与海岛共用了同一个下界维度");
+
+        // 岩浆海：液面必须被抬起来（原版下界是 32）
+        var oceanNetherLevel = oceanNether == null ? null
+                : skyblock.entryOf(oceanNether).map(SubServer.Entry::level).orElse(null);
+        if (oceanNetherLevel != null) {
+            okOrFail(oceanNetherLevel.getSeaLevel() >= 90,
+                    "海岛下界是岩浆海（液面 Y=" + oceanNetherLevel.getSeaLevel()
+                            + "，原版下界是 32）",
+                    "海岛下界的液面是 " + oceanNetherLevel.getSeaLevel()
+                            + " —— 岩浆海预设没生效（可能回落成了原版或虚空）");
+        } else {
+            fail("拿不到海岛下界的关卡对象");
+        }
+
+        // 落点小岛：两座特殊下界都要登记（否则出门就是虚空/岩浆）
+        okOrFail(classicNether != null && oceanNether != null
+                        && PortalLinks.isIslandNether(classicNether)
+                        && PortalLinks.isIslandNether(oceanNether),
+                "两座特殊下界都登记了传送门落点小岛",
+                "特殊下界的落点小岛登记缺失（classic="
+                        + (classicNether != null && PortalLinks.isIslandNether(classicNether))
+                        + "，ocean="
+                        + (oceanNether != null && PortalLinks.isIslandNether(oceanNether)) + "）");
+    }
+
+    /** 三元的 ok/fail 小工具（省掉一堆重复 if）。 */
+    private void okOrFail(boolean condition, String okMessage, String failMessage) {
+        if (condition) {
+            ok(okMessage);
+        } else {
+            fail(failMessage);
+        }
+    }
+
+    private static String name(net.minecraft.resources.ResourceKey<Level> dimension) {
+        return dimension == null ? "null" : dimension.identifier().toString();
     }
 
     /**

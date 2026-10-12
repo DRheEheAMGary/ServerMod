@@ -96,9 +96,6 @@ public final class IslandConfig {
      */
     public int oceanIslandY = 0;
 
-    /** 是否开启方格保护（非岛主不能破坏/放置）。 */
-    public boolean protectPlots = true;
-
     /** 掉到该 Y 以下就算掉虚空，送回岛上。 */
     public int voidY = 0;
 
@@ -110,6 +107,66 @@ public final class IslandConfig {
 
     /** 岛型列表。 */
     public List<IslandType> types = new ArrayList<>();
+
+    // ------------------------------------------------------------------
+    // 自然生成的岛屿（v0.4.0）
+    // ------------------------------------------------------------------
+
+    /**
+     * 自然生成的岛屿：岛型 id → 坐标列表（每个元素是 {@code [x, z]}）。
+     *
+     * <p>每个位置会铺一座小岛，并在上面放**宝箱**与**刷怪笼**；
+     * 配了 {@link #naturalIslandHouses} 还会放一座原版村庄房屋。
+     * 默认位置都选在"离任何玩家岛 144 格以上"的地方（经典空岛的方格边界上），
+     * 避免和玩家的岛撞在一起。
+     */
+    public Map<String, List<int[]>> naturalIslands = null;
+
+    /** 自然岛的半径（方块，3~12）。 */
+    public int naturalIslandRadius = 6;
+
+    /**
+     * 自然岛宝箱里的物资：{@code 物品id*数量}。
+     *
+     * <p>{@code null} = 用默认表（老配置文件走这条，自动升级）；**空数组 = 明确不要宝箱物资**。
+     */
+    public List<String> naturalIslandLoot = null;
+
+    /** 自然岛上的刷怪笼生物 id（{@code null} = 默认；空数组 = 不放刷怪笼）。 */
+    public List<String> naturalIslandSpawners = null;
+
+    /**
+     * 自然岛上要放的**结构模板**（原版村庄房屋，或你自己搭的结构）。
+     *
+     * <p>{@code null} = 默认（两种平原小房屋）；**空数组 = 不放结构**。
+     * 每座自然岛随机挑一个摆上去，底下会垫一块底座（见
+     * {@link #naturalIslandStructureBase}），所以村庄不会悬空。
+     * 自己搭的结构：游戏里 {@code /structure save 名字:路径} 存下来，再填到这里。
+     */
+    public List<String> naturalIslandStructures = null;
+
+    /** 旧字段名（v0.4.0-alpha.1 之前），只为兼容老配置；新配置用 {@link #naturalIslandStructures}。 */
+    public List<String> naturalIslandHouses = null;
+
+    /** 是否铺自然岛的地形（false = 不放地形，完全靠结构模板当岛）。 */
+    public boolean naturalIslandTerrain = true;
+
+    /** 是否在结构模板下面垫一块底座（村庄必须有，用户要求）。 */
+    public boolean naturalIslandStructureBase = true;
+
+    /** 底座比结构轮廓往外扩几格（0..8）。 */
+    public int naturalIslandBaseMargin = 1;
+
+    /** 默认的自然岛位置：经典空岛取方格边界（离任何玩家岛 ≥144 格），海岛放到 1600 格外。 */
+    private static Map<String, List<int[]>> defaultNaturalIslands() {
+        Map<String, List<int[]>> out = new LinkedHashMap<>();
+        out.put("classic", List.of(
+                new int[]{144, 144}, new int[]{-144, 144},
+                new int[]{144, -144}, new int[]{432, 144}));
+        out.put("ocean", List.of(
+                new int[]{1600, 1600}, new int[]{-1600, 1600}, new int[]{1600, -1600}));
+        return out;
+    }
 
     /** 一座岛的生成配方。 */
     public static final class IslandType {
@@ -140,6 +197,30 @@ public final class IslandConfig {
         /** 箱子里的物资：{@code 物品id*数量}。 */
         public List<String> loot = new ArrayList<>();
 
+        /**
+         * 这个岛屿维度是否配一座**自己的下界**。
+         *
+         * <p>默认开：空岛 / 海岛各有一界，玩家在里面拿到的东西不会和别的子服串。
+         */
+        public boolean ownNether = true;
+
+        /**
+         * 下界生成器预设。
+         *
+         * <ul>
+         *   <li>{@code skyblock} —— 纯虚空 + 传送门落点补一座下界岩小岛（经典空岛用）；</li>
+         *   <li>{@code lava_sea} —— 岩浆海：液面抬到 Y={@code 96}，低地全泡在岩浆里（海岛用）；</li>
+         *   <li>{@code vanilla} —— 和原版一模一样的下界。</li>
+         * </ul>
+         *
+         * <p>{@code null} = 按岛型给默认（空岛 skyblock、海岛 lava_sea）——
+         * 老配置文件里没有这个键，走的就是这条，自动升级成新行为。
+         */
+        public String netherPreset = null;
+
+        /** 这个岛屿维度是否配一座**自己的末地**（原版末地）。 */
+        public boolean ownEnd = true;
+
         public IslandType() {
         }
     }
@@ -149,6 +230,34 @@ public final class IslandConfig {
         plotSize = Math.max(32, Math.min(plotSize, 4096));
         plotGap = Math.max(0, Math.min(plotGap, 1024));
         oceanSpacing = Math.max(64, Math.min(oceanSpacing, 4096));
+        naturalIslandRadius = Math.max(3, Math.min(12, naturalIslandRadius));
+        /*
+         * null（老配置没有这个键）= 给默认；
+         * 空 map 也给默认 —— 空 map 出现过的唯一原因是早期开发版把它写成 {}，
+         * 不是管理员的选择。真想一座自然岛都不要，就把每种岛型都写成空列表。
+         */
+        if (naturalIslands == null || naturalIslands.isEmpty()) {
+            naturalIslands = defaultNaturalIslands();
+        }
+        if (naturalIslandLoot == null) {
+            naturalIslandLoot = new ArrayList<>(List.of(
+                    "minecraft:iron_ingot*4", "minecraft:gold_ingot*2", "minecraft:bread*6",
+                    "minecraft:torch*12", "minecraft:stone_sword*1", "minecraft:oak_planks*16",
+                    "minecraft:bone_meal*8", "minecraft:diamond*1"));
+        }
+        if (naturalIslandSpawners == null) {
+            naturalIslandSpawners = new ArrayList<>(List.of(
+                    "minecraft:zombie", "minecraft:skeleton"));
+        }
+        if (naturalIslandStructures == null) {
+            // 新字段没有 → 用旧的 naturalIslandHouses（如果配了），否则给默认村庄房屋
+            naturalIslandStructures = naturalIslandHouses != null
+                    ? new ArrayList<>(naturalIslandHouses)
+                    : new ArrayList<>(List.of(
+                    "minecraft:village/plains/houses/plains_small_house_1",
+                    "minecraft:village/plains/houses/plains_small_house_2"));
+        }
+        naturalIslandBaseMargin = Math.max(0, Math.min(8, naturalIslandBaseMargin));
         if (types == null) {
             types = new ArrayList<>();
         }
@@ -172,6 +281,11 @@ public final class IslandConfig {
                 // 想关掉沙滩要显式写 "none" 或空串。
                 type.beach = "minecraft:sand";
             }
+            if (type.netherPreset == null || type.netherPreset.isBlank()) {
+                // 老配置没有这个键 → 按岛型给默认：海岛岩浆海、其它（含经典空岛）虚空式
+                type.netherPreset = "ocean".equals(type.id) ? "lava_sea" : "skyblock";
+            }
+            type.netherPreset = type.netherPreset.trim().toLowerCase(java.util.Locale.ROOT);
             /*
              * 老存档的**海岛物资**补齐树苗。
              *

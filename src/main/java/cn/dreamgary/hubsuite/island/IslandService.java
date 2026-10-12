@@ -5,7 +5,6 @@ import cn.dreamgary.hubsuite.world.PlayableWorld;
 import cn.dreamgary.hubsuite.world.PlayerRouter;
 import cn.dreamgary.hubsuite.world.SubServer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -270,18 +269,14 @@ public final class IslandService {
             return new PlayableWorld.SpawnPoint(spawn.x, spawn.y, spawn.z, 0.0F, 0.0F);
         });
 
-        // 4) 建造保护
-        PlayerBlockBreakEvents.BEFORE.register((level, player, pos, state, entity) -> {
-            if (!isSkyblock(level) || !(player instanceof ServerPlayer serverPlayer)) {
-                return true;
-            }
-            if (!canBuildHere(serverPlayer, pos)) {
-                serverPlayer.sendSystemMessage(Component.literal("\u00A7c这不是你的岛屿区域，无法破坏。"));
-                return false;
-            }
-            return true;
-        });
-
+        /*
+         * 4) 方块交互。
+         *
+         * **空岛服已经没有建造保护了**（v0.4.0 起按用户要求整体删掉：
+         * 岛屿保护、方格归属判定、海面公共区判定全部不再拦截）。
+         * 这里只留下"容器方块实体丢了就重建"的自愈逻辑，其余一律放行 ——
+         * 未认证玩家仍由 LoginLockdown 拦着。
+         */
         UseBlockCallback.EVENT.register((Player player, Level level, InteractionHand hand, BlockHitResult hit) -> {
             if (!isSkyblock(level) || !(player instanceof ServerPlayer serverPlayer)) {
                 return InteractionResult.PASS;
@@ -326,32 +321,21 @@ public final class IslandService {
                         return InteractionResult.SUCCESS;
                     }
                 }
-                boolean allowed = canBuildHere(serverPlayer, hit.getBlockPos());
-                HubSuite.logger().info(
-                        "右键容器：{} 点 {} @ {} 维度 {}｜手持 {}｜判定 {}｜"
+                // 降到 debug：正常游玩不该刷屏，排查"箱子点不开"时开 debug 看
+                HubSuite.logger().debug(
+                        "右键容器：{} 点 {} @ {} 维度 {}｜手持 {}｜"
                                 + "上方 {}｜方块实体 {}｜受阻 {}",
                         serverPlayer.getName().getString(),
                         clicked.getBlock().getName().getString(),
                         hit.getBlockPos(),
                         level.dimension().identifier(),
                         player.getItemInHand(hand).getItem(),
-                        allowed ? "放行" : "被保护拦下",
                         level.getBlockState(hit.getBlockPos().above()).getBlock().getName().getString(),
                         level.getBlockEntity(hit.getBlockPos()),
                         net.minecraft.world.level.block.ChestBlock.isChestBlockedAt(
                                 level, hit.getBlockPos()));
             }
 
-            if (!canBuildHere(serverPlayer, hit.getBlockPos())) {
-                // 记日志：用户反馈"对着箱子右键打不开"时，这是唯一能区分
-                // "被保护拦下"和"根本没走到这里"的证据。
-                HubSuite.logger().info("右击被岛屿保护拦下：{} @ {} 维度 {}（手持 {}）",
-                        serverPlayer.getName().getString(), hit.getBlockPos(),
-                        level.dimension().identifier(),
-                        player.getItemInHand(hand).getItem());
-                serverPlayer.sendSystemMessage(Component.literal("\u00A7c这不是你的岛屿区域，无法放置。"));
-                return InteractionResult.FAIL;
-            }
             return InteractionResult.PASS;
         });
 
@@ -387,20 +371,6 @@ public final class IslandService {
                 player -> IslandMenu.open(player, this, HubSuite.worlds()));
         HubSuite.logger().info("空岛服大厅将生成选岛假人 '{}'（位置 {}, {}, {}）",
                 npcConfig.name, npcConfig.x, npcConfig.y, npcConfig.z);
-    }
-
-    /** 按玩家所在维度判断能不能建造（大厅永远允许）。 */
-    /** 供自检调用：某个位置的交互是否会被放行。 */
-    public boolean canBuildAt(ServerPlayer player, net.minecraft.core.BlockPos pos) {
-        return canBuildHere(player, pos);
-    }
-
-    private boolean canBuildHere(ServerPlayer player, net.minecraft.core.BlockPos pos) {
-        Optional<Type> type = typeOf(player.level());
-        if (type.isEmpty()) {
-            return true;   // 大厅
-        }
-        return type.get().manager().canBuild(player, pos);
     }
 
     /** 保存全部岛型的归属记录。 */

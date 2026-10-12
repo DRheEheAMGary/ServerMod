@@ -36,6 +36,27 @@ public final class HubSuiteConfig {
     /** 更新检查（启动时查一次，有新版本时提示管理员）。 */
     public UpdateConfig update = new UpdateConfig();
 
+    /** 海岛渔获（按维度挂表，见 feature/FishingPresets）。 */
+    public cn.dreamgary.hubsuite.feature.FishingPresets.FishingConfig fishing =
+            cn.dreamgary.hubsuite.feature.FishingPresets.defaults();
+
+    /**
+     * 需要"补底座"的结构 id 名单。
+     *
+     * <p>用户要求："村庄和猪灵堡垒需要底部的底座，要塞不需要"。
+     * 默认只有猪灵堡垒（{@code minecraft:bastion_remnant}）——
+     * 因为空岛式下界是虚空，堡垒会悬空；要塞（stronghold）不在名单里。
+     * 结构真的生成出来时由 {@code world/StructureFoundations} 在它下面垫方块。
+     */
+    public List<String> structureFoundations = new ArrayList<>(
+            List.of("minecraft:bastion_remnant"));
+    /** 底座方块 id。 */
+    public String structureFoundationBlock = "minecraft:netherrack";
+    /** 底座往下垫几层（1..16）。 */
+    public int structureFoundationDepth = 4;
+    /** 底座比结构轮廓往外扩几格（0..8）。 */
+    public int structureFoundationMargin = 1;
+
     /**
      * 更新检查配置。
      *
@@ -373,6 +394,32 @@ public final class HubSuiteConfig {
         if (update == null) {
             update = new UpdateConfig();
         }
+        if (fishing == null) {
+            fishing = cn.dreamgary.hubsuite.feature.FishingPresets.defaults();
+        }
+        /*
+         * 配置版本迁移。
+         *
+         * v2 = 渔获表从 3 池 18 条扩到 5 池 40+ 条；
+         * v3 = 修掉 v2 里一个不存在的物品 id（minecraft:scute）。
+         *
+         * 迁移就是把 fishing 段整体换成当前默认表 —— alpha 阶段不承诺配置兼容，
+         * 改过 fishing 段的管理员需要重新配（release 说明里写清楚了）。
+         * 不做迁移的话，升级上来的服务器会一直用那份旧表（甚至带着坏条目）。
+         */
+        if (configVersion < 3) {
+            fishing = cn.dreamgary.hubsuite.feature.FishingPresets.defaults();
+            configVersion = 3;
+        }
+        fishing.normalize();
+        if (structureFoundations == null) {
+            structureFoundations = new ArrayList<>(List.of("minecraft:bastion_remnant"));
+        }
+        if (structureFoundationBlock == null || structureFoundationBlock.isBlank()) {
+            structureFoundationBlock = "minecraft:netherrack";
+        }
+        structureFoundationDepth = Math.max(1, Math.min(16, structureFoundationDepth));
+        structureFoundationMargin = Math.max(0, Math.min(8, structureFoundationMargin));
         if (island == null) {
             island = cn.dreamgary.hubsuite.island.IslandPresets.defaults();
         }

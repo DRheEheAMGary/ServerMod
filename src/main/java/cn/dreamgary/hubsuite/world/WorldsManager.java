@@ -64,6 +64,9 @@ public final class WorldsManager {
         // 加载阶段先跳过，等区块就绪后在这里补算并写回缓存
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(
                 server -> SubServer.tickPendingSpawns());
+        // 自然岛同理：区块就绪了再铺（和出生平台一套机制）
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(
+                server -> NaturalIslandPlacer.tick());
     }
 
     // ------------------------------------------------------------------
@@ -110,12 +113,21 @@ public final class WorldsManager {
                     } else {
                         HubSuite.logger().info("空岛服大厅出生平台已生成：{} 个方块", blocks);
                     }
-                    sub.addDimension("classic", HubSuiteConfig.WorldKind.VOID, null,
+                    var classicDim = sub.addDimension("classic", HubSuiteConfig.WorldKind.VOID, null,
                             "§a经典空岛");
                     // 海岛维度：一整片自然生成的海洋（含沉船、海底废墟、珊瑚礁），
                     // 岛由玩家创建时"点"进海里。
-                    sub.addDimension("ocean", HubSuiteConfig.WorldKind.NORMAL, null,
+                    var oceanDim = sub.addDimension("ocean", HubSuiteConfig.WorldKind.NORMAL, null,
                             "§b海岛", WorldFactory.oceanGenerator(server));
+                    /*
+                     * v0.4.0：两个岛屿维度各自还有**自己的下界与末地** ——
+                     * 空岛用虚空式下界（传送门落点补下界岩小岛），海岛用岩浆海，
+                     * 末地两座都是原版。登记进 PortalLinks 后传送门自动改道。
+                     */
+                    java.util.Map<String, SubServer.Entry> islandDims = new java.util.LinkedHashMap<>();
+                    islandDims.put("classic", classicDim);
+                    islandDims.put("ocean", oceanDim);
+                    IslandSideWorlds.create(sub, config.island, islandDims);
                 }
                 subServers.put(sub.id(), sub);
                 HubSuite.logger().info("子服已加载：{} -> {}（存档 {}）",

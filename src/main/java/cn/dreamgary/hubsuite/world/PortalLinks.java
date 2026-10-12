@@ -186,6 +186,28 @@ public final class PortalLinks {
         return dimension != null && SUB_DIMENSIONS.contains(dimension);
     }
 
+    /**
+     * "空岛服/海岛服那种特殊下界"的集合。
+     *
+     * <p>用途：玩家从传送门落到这种下界时，要在**门下补一座下界岩小岛**
+     * （用户要求："在地狱门的生成位置下面生成一个小岛屿，全部都是地狱岩"）。
+     * 生存服/创造服的原版下界不在这个集合里，保持原版落点。
+     */
+    private static final java.util.Set<ResourceKey<Level>> ISLAND_NETHERS =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 登记一个"落点要补下界岩小岛"的下界维度。 */
+    public static void registerIslandNether(ResourceKey<Level> dimension) {
+        if (dimension != null) {
+            ISLAND_NETHERS.add(dimension);
+        }
+    }
+
+    /** 这个下界是不是"特殊下界"（空岛/海岛那两座）。 */
+    public static boolean isIslandNether(ResourceKey<Level> dimension) {
+        return dimension != null && ISLAND_NETHERS.contains(dimension);
+    }
+
     /** 停服时清掉，别把上一局的维度 key 留着。 */
     public static void clear() {
         NETHER_OF.clear();
@@ -193,5 +215,6 @@ public final class PortalLinks {
         END_OF.clear();
         END_BACK.clear();
         SUB_DIMENSIONS.clear();
+        ISLAND_NETHERS.clear();
     }
 }
