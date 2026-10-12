@@ -34,6 +34,8 @@ dependencies {
 	// ------------------------------------------------------------------
 	compileOnly "net.william278.huskhomes:huskhomes-fabric:${project.huskhomes_version}"
 	compileOnly "eu.pb4:placeholder-api:${project.placeholder_api_version}"
+	// 硬依赖（不是软依赖）：自定义物品必须走 Polymer 才能让原版客户端看到
+	compileOnly "eu.pb4:polymer-core:${project.polymer_version}"
 	compileOnly "net.luckperms:api:${project.luckperms_api_version}"
 }
 

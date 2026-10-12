@@ -57,6 +57,8 @@ public final class HubSuite implements ModInitializer {
 
     @Override
     public void onInitialize() {
+        // 自定义物品必须先注册（Polymer 硬依赖，客户端侧由它映射成原版物品）
+        cn.dreamgary.hubsuite.feature.item.HubSuiteItems.register();
         instance = this;
         LOGGER.info("{} 正在初始化……", MOD_NAME);
         logEnvironment();
