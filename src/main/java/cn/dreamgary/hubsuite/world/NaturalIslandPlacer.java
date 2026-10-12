@@ -181,14 +181,21 @@ public final class NaturalIslandPlacer {
         RandomSource random = RandomSource.create(seedFor(spot));
         RandomSource levelRandom = level.getRandom();
 
-        // 1) 地形：圆盘，最外一圈是沙（像自然小岛的海岸）
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
+        /*
+         * 1) 地形：圆盘，最外一圈是沙（像自然小岛的海岸）。
+         *
+         * 配 naturalIslandTerrain=false 时**不铺岛** —— 岛完全由结构模板提供
+         * （用户要求"自然岛改成结构"）。但这时仍铺一块半径 3 的小台，
+         * 否则宝箱/刷怪笼会浮在虚空里。
+         */
+        int terrainRadius = config.naturalIslandTerrain ? radius : Math.min(radius, 3);
+        for (int dx = -terrainRadius; dx <= terrainRadius; dx++) {
+            for (int dz = -terrainRadius; dz <= terrainRadius; dz++) {
                 double d = Math.sqrt(dx * dx + dz * dz);
-                if (d > radius) {
+                if (d > terrainRadius) {
                     continue;
                 }
-                boolean beach = d > radius - 1.5;
+                boolean beach = config.naturalIslandTerrain && d > terrainRadius - 1.5;
                 BlockState top = (beach ? Blocks.SAND : Blocks.GRASS_BLOCK).defaultBlockState();
                 BlockState fill = (beach ? Blocks.SAND : Blocks.DIRT).defaultBlockState();
                 int x = spot.x() + dx;
@@ -233,8 +240,8 @@ public final class NaturalIslandPlacer {
             }
         }
 
-        // 4) 村庄房屋（原版结构模板）
-        placeHouse(level, spot, config, baseY, random);
+        // 4) 结构模板（村庄房屋 / 你自建的结构）—— 传说中"自然岛改成结构"
+        placeStructure(level, spot, config, baseY, random);
     }
 
     /** 岛面高度：虚空世界用配置的 islandY，正常世界用海平面上一格。 */
@@ -246,25 +253,55 @@ public final class NaturalIslandPlacer {
         return Math.max(level.getMinY() + 8, level.getSeaLevel() + 1);
     }
 
-    private static void placeHouse(ServerLevel level, Spot spot, IslandConfig config,
-                                   int baseY, RandomSource random) {
-        if (config.naturalIslandHouses.isEmpty()) {
+    /**
+     * 在自然岛上摆一个**结构模板**（默认是原版村庄小房屋）。
+     *
+     * <p>结构底下会先垫一块底座（{@code naturalIslandStructureBase}）——
+     * 用户要求"村庄需要底座"：房屋比岛大时不会悬空。
+     * 想换成自己搭的结构：游戏里 {@code /structure save 名字:路径} 存下来，
+     * 再把 id 填进 {@code naturalIslandStructures}。
+     */
+    private static void placeStructure(ServerLevel level, Spot spot, IslandConfig config,
+                                       int baseY, RandomSource random) {
+        if (config.naturalIslandStructures == null || config.naturalIslandStructures.isEmpty()) {
             return;
         }
         var server = level.getServer();
         if (server == null) {
             return;
         }
-        String id = config.naturalIslandHouses.get(random.nextInt(config.naturalIslandHouses.size()));
+        String id = config.naturalIslandStructures.get(
+                random.nextInt(config.naturalIslandStructures.size()));
         var template = server.getStructureManager().get(Identifier.parse(id)).orElse(null);
         if (template == null) {
-            HubSuite.logger().debug("村庄房屋模板 '{}' 不存在，跳过", id);
+            HubSuite.logger().warn("自然岛的结构模板 '{}' 不存在，跳过", id);
             return;
         }
         var size = template.getSize();
-        BlockPos origin = new BlockPos(spot.x() - size.getX() / 2, baseY + 1,
-                spot.z() - size.getZ() / 2);
+        int originX = spot.x() - size.getX() / 2;
+        int originZ = spot.z() - size.getZ() / 2;
+        if (config.naturalIslandStructureBase) {
+            placeBase(level, originX, originZ, size.getX(), size.getZ(), baseY,
+                    config.naturalIslandBaseMargin);
+        }
+        BlockPos origin = new BlockPos(originX, baseY + 1, originZ);
         template.placeInWorld(level, origin, origin, new StructurePlaceSettings(), random, 3);
+    }
+
+    /** 在结构轮廓下面垫一层底座：顶面草/土，下面石头。没加载的列跳过。 */
+    private static void placeBase(ServerLevel level, int originX, int originZ,
+                                  int sizeX, int sizeZ, int topY, int margin) {
+        for (int x = originX - margin; x < originX + sizeX + margin; x++) {
+            for (int z = originZ - margin; z < originZ + sizeZ + margin; z++) {
+                if (level.getChunkSource().getChunkNow(x >> 4, z >> 4) == null) {
+                    continue;
+                }
+                level.setBlock(new BlockPos(x, topY, z), Blocks.DIRT.defaultBlockState(), 3);
+                level.setBlock(new BlockPos(x, topY - 1, z), Blocks.DIRT.defaultBlockState(), 3);
+                level.setBlock(new BlockPos(x, topY - 2, z), Blocks.STONE.defaultBlockState(), 3);
+                level.setBlock(new BlockPos(x, topY - 3, z), Blocks.STONE.defaultBlockState(), 3);
+            }
+        }
     }
 
     // ------------------------------------------------------------------

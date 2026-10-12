@@ -135,8 +135,27 @@ public final class IslandConfig {
     /** 自然岛上的刷怪笼生物 id（{@code null} = 默认；空数组 = 不放刷怪笼）。 */
     public List<String> naturalIslandSpawners = null;
 
-    /** 自然岛上的村庄房屋（{@code null} = 默认；空数组 = 不放村庄）。 */
+    /**
+     * 自然岛上要放的**结构模板**（原版村庄房屋，或你自己搭的结构）。
+     *
+     * <p>{@code null} = 默认（两种平原小房屋）；**空数组 = 不放结构**。
+     * 每座自然岛随机挑一个摆上去，底下会垫一块底座（见
+     * {@link #naturalIslandStructureBase}），所以村庄不会悬空。
+     * 自己搭的结构：游戏里 {@code /structure save 名字:路径} 存下来，再填到这里。
+     */
+    public List<String> naturalIslandStructures = null;
+
+    /** 旧字段名（v0.4.0-alpha.1 之前），只为兼容老配置；新配置用 {@link #naturalIslandStructures}。 */
     public List<String> naturalIslandHouses = null;
+
+    /** 是否铺自然岛的地形（false = 不放地形，完全靠结构模板当岛）。 */
+    public boolean naturalIslandTerrain = true;
+
+    /** 是否在结构模板下面垫一块底座（村庄必须有，用户要求）。 */
+    public boolean naturalIslandStructureBase = true;
+
+    /** 底座比结构轮廓往外扩几格（0..8）。 */
+    public int naturalIslandBaseMargin = 1;
 
     /** 默认的自然岛位置：经典空岛取方格边界（离任何玩家岛 ≥144 格），海岛放到 1600 格外。 */
     private static Map<String, List<int[]>> defaultNaturalIslands() {
@@ -230,11 +249,15 @@ public final class IslandConfig {
             naturalIslandSpawners = new ArrayList<>(List.of(
                     "minecraft:zombie", "minecraft:skeleton"));
         }
-        if (naturalIslandHouses == null) {
-            naturalIslandHouses = new ArrayList<>(List.of(
+        if (naturalIslandStructures == null) {
+            // 新字段没有 → 用旧的 naturalIslandHouses（如果配了），否则给默认村庄房屋
+            naturalIslandStructures = naturalIslandHouses != null
+                    ? new ArrayList<>(naturalIslandHouses)
+                    : new ArrayList<>(List.of(
                     "minecraft:village/plains/houses/plains_small_house_1",
                     "minecraft:village/plains/houses/plains_small_house_2"));
         }
+        naturalIslandBaseMargin = Math.max(0, Math.min(8, naturalIslandBaseMargin));
         if (types == null) {
             types = new ArrayList<>();
         }

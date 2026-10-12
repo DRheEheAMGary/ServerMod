@@ -29,7 +29,7 @@
 | 构建 | Gradle 9.7.1 + Loom 1.18-SNAPSHOT |
 | 映射 | **官方 Mojang 名，不 remap**（26.1 起官方不再混淆；build.gradle 无 mappings、无 remapJar） |
 | 产物 | `build/libs/hubsuite-<版本>.jar`（另有 `-sources.jar`） |
-| 规模 | 93 个 Java 文件 / 22 个 Mixin / 自检 210 项 |
+| 规模 | 93 个 Java 文件 / 22 个 Mixin / 自检 216 项 |
 
 ### 架构要点（改之前必须理解）
 
@@ -81,7 +81,7 @@ $env:JAVA_HOME = $j; $env:PATH = "$j\bin;$env:PATH"
 ```
 
 - 服务端是 `online-mode=false`，机器人可直连。
-- 自检结果看 `run/logs/latest.log` 里的 `通过 210 项，失败 0 项`。
+- 自检结果看 `run/logs/latest.log` 里的 `通过 216 项，失败 0 项`。
 - 控制台命令：`hub selftest`（也可在游戏内 `/hub selftest`）。
 
 ### 清档（改了地形 / 生成器才需要）
@@ -221,10 +221,11 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 | `world/PlayerDataRouter.java` + `world/PlayerStateStash.java` + `mixin/PlayerListStorageMixin.java` | 背包 / 经验按子服隔离（内存暂存 + 磁盘两份） |
 | `world/PlayerRouter.java` | 切服主流程（`sendTo`） |
 | `world/ServerInternals.java` / `ServerLevelsAccess.java` / `PlayerListAccess.java` | 访问原版内部字段的唯一出口（放业务包，见「十」） |
-| `world/SelfTest.java` | **全部自检**（210 项）。加检查看这里 |
+| `world/SelfTest.java` | **全部自检**（216 项）。加检查看这里 |
 | `island/IslandService.java` + `island/IslandManager.java` | 空岛：建岛、归属、出生点（**保护已删**） |
 | `world/IslandSideWorlds.java` + `world/LavaSeaGenerator.java` | 岛屿维度各自的下界/末地（空岛虚空式、海岛岩浆海） |
-| `world/NaturalIslandPlacer.java` | 自然岛：地形 + 宝箱 + 刷怪笼 + 村庄房屋（跨 tick 补铺、落盘去重） |
+| `world/NaturalIslandPlacer.java` | 自然岛：地形 + 宝箱 + 刷怪笼 + **结构模板与底座**（跨 tick 补铺、落盘去重） |
+| `world/StructureFoundations.java` | 悬空结构的底座（区块加载时按 `structureFoundations` 名单补，默认猪灵堡垒、不含要塞） |
 | `feature/FishingLoot.java` + `feature/FishingPresets.java` + `mixin/FishingHookLootMixin.java` | 海岛渔获：按维度挂表、按群系分池、稀有度 |
 | `feature/CommandGuard.java` | 命令闸门（创造服屏蔽 40+ 条作弊指令） |
 | `feature/PermissionService.java` | 三级权限降级 |
@@ -449,7 +450,7 @@ release 的**提交信息、tag message、release notes** 都是给**使用者�
 - 大厅 NPC 用真 `ServerPlayer` 假人；空岛只做 classic + ocean，不做单方块
 - 扩展性要求：新增子服尽量只改配置
 
-**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 当前 **210**。
+**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 当前 **216**。
 
 **已修复且经作者实测的关键问题**：
 
@@ -468,8 +469,9 @@ release 的**提交信息、tag message、release notes** 都是给**使用者�
 以下项**尚未实机验证**，报告 / 发布时按「未验证」对待：
 
 > **v0.4.0 新增（全部只过了自检，实机未验证）**：岛屿保护整体删除；
-> 岛上钓鱼（稀有度 + 群系分池）；岛屿维度各自的下界/末地（虚空式/岩浆海）；
-> 传送门落点下界岩小岛；自然岛的宝箱/刷怪笼/村庄房屋；下界要塞与猪灵堡垒。
+> 岛上钓鱼（5 个池 / 40+ 条渔获 / 稀有度 / 群系分池）；岛屿维度各自的下界/末地
+> （虚空式/岩浆海）；传送门落点下界岩小岛；自然岛 = 结构模板 + 底座 + 宝箱 + 刷怪笼；
+> 猪灵堡垒自动补底座（要塞不补）。
 
 1. **传送门端到端**：自检只验了「能点火」和「改道映射」，**没有真的让玩家钻进去**。
    v0.2.5 修了「出口门建在正确维度」但**仍未实机验证**。

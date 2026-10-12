@@ -67,6 +67,9 @@ public final class HubSuite implements ModInitializer {
         worldsManager = new WorldsManager(configManager);
         worldsManager.register();
 
+        // 悬空结构的底座（猪灵堡垒等；名单在 config.json 的 structureFoundations）
+        cn.dreamgary.hubsuite.world.StructureFoundations.register();
+
         authService = new AuthService(
                 configManager.configDir(),
                 configManager.config().auth,

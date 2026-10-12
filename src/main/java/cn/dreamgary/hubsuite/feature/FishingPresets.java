@@ -199,38 +199,90 @@ public final class FishingPresets {
     // 默认表
     // ------------------------------------------------------------------
 
-    /** 默认只给海岛维度一套表。 */
+    /**
+     * 默认只给海岛维度一套表。
+     *
+     * <p>战利品追求"丰富"：**5 个池**（小鱼 / 大鱼 / 宝物 / 深海奇珍 / 垃圾），
+     * 每个池十几条，并且鱼和垃圾都按群系分化 —— 暖海出热带鱼与沙子、
+     * 冷水洋出鲑鱼与砂砾、冻洋出冰块与浮冰。
+     */
     public static FishingConfig defaults() {
         FishingConfig config = new FishingConfig();
 
         Table ocean = new Table();
         ocean.displayName = "§b海岛渔获";
         ocean.replaceVanilla = true;
-        ocean.pools.add(pool("fish", 62.0,
-                entry("minecraft:cod", 40.0, "1-3", "common"),
-                entry("minecraft:salmon", 26.0, "1-2", "common"),
-                entry("minecraft:tropical_fish", 16.0, "1", "uncommon"),
-                entry("minecraft:pufferfish", 10.0, "1", "uncommon"),
-                entry("minecraft:ink_sac", 8.0, "1-2", "common")));
-        ocean.pools.add(pool("treasure", 23.0,
-                entry("minecraft:prismarine_shard", 30.0, "1-3", "common"),
-                entry("minecraft:prismarine_crystals", 22.0, "1-2", "uncommon"),
-                entry("minecraft:nautilus_shell", 20.0, "1", "rare"),
-                entry("minecraft:lily_pad", 12.0, "1-2", "common"),
-                entry("minecraft:name_tag", 8.0, "1", "rare"),
-                entry("minecraft:heart_of_the_sea", 1.0, "1", "legendary")));
-        ocean.pools.add(pool("junk", 15.0,
-                // 按群系分：暖海是沙子、冷水洋是砂砾、冻洋是冰块（用户要求）
-                entry("minecraft:sand", 60.0, "1-4", "common",
+
+        // ── 小鱼：最常见的一档，各温度带都能钓到 ──
+        ocean.pools.add(pool("small_fish", 40.0,
+                entry("minecraft:cod", 40.0, "1-4", "common"),
+                entry("minecraft:salmon", 26.0, "1-3", "common"),
+                entry("minecraft:tropical_fish", 18.0, "1-2", "uncommon",
                         "warm_ocean", "lukewarm_ocean", "deep_lukewarm_ocean"),
-                entry("minecraft:gravel", 60.0, "1-3", "common",
-                        "cold_ocean", "deep_cold_ocean"),
-                entry("minecraft:ice", 60.0, "1-2", "common",
+                entry("minecraft:pufferfish", 12.0, "1-2", "uncommon"),
+                entry("minecraft:ink_sac", 10.0, "1-3", "common"),
+                entry("minecraft:cod", 6.0, "1", "common",
                         "frozen_ocean", "deep_frozen_ocean"),
-                entry("minecraft:kelp", 10.0, "1-3", "common"),
-                entry("minecraft:seagrass", 8.0, "1-2", "common"),
-                entry("minecraft:bone", 6.0, "1", "common"),
-                entry("minecraft:string", 6.0, "1", "common")));
+                entry("minecraft:kelp", 6.0, "1-2", "common")));
+
+        // ── 大鱼 / 海产：量多，靠"海之眷顾"更容易出 ──
+        ocean.pools.add(pool("big_catch", 18.0,
+                entry("minecraft:cooked_cod", 20.0, "1-2", "common"),
+                entry("minecraft:cooked_salmon", 18.0, "1-2", "common"),
+                entry("minecraft:prismarine_shard", 16.0, "2-4", "common"),
+                entry("minecraft:prismarine_crystals", 14.0, "1-3", "uncommon"),
+                entry("minecraft:sponge", 8.0, "1", "rare"),
+                entry("minecraft:sea_lantern", 6.0, "1", "rare"),
+                // 乌龟鳞甲（老版本叫 scute，26.1 的物品 id 变了，这里用确定存在的）
+                entry("minecraft:nautilus_shell", 6.0, "1-2", "rare"),
+                entry("minecraft:glow_ink_sac", 6.0, "1-2", "uncommon")));
+
+        // ── 宝物：原版"宝藏"那一档的加强版 ──
+        ocean.pools.add(pool("treasure", 22.0,
+                entry("minecraft:lily_pad", 14.0, "1-3", "common"),
+                entry("minecraft:nautilus_shell", 14.0, "1", "rare"),
+                entry("minecraft:name_tag", 10.0, "1", "rare"),
+                entry("minecraft:saddle", 10.0, "1", "rare"),
+                entry("minecraft:bow", 8.0, "1", "uncommon"),
+                entry("minecraft:fishing_rod", 8.0, "1", "uncommon"),
+                entry("minecraft:emerald", 8.0, "1-3", "uncommon"),
+                entry("minecraft:iron_ingot", 8.0, "2-5", "common"),
+                entry("minecraft:gold_ingot", 6.0, "1-3", "uncommon"),
+                entry("minecraft:diamond", 4.0, "1", "rare"),
+                entry("minecraft:golden_apple", 3.0, "1", "rare"),
+                entry("minecraft:heart_of_the_sea", 1.0, "1", "legendary")));
+
+        // ── 深海奇珍：稀有度最高的一档，幸运值加成也只加在这里 ──
+        ocean.pools.add(pool("deep_rare", 8.0,
+                entry("minecraft:diamond", 20.0, "1-2", "rare"),
+                entry("minecraft:emerald_block", 12.0, "1", "rare"),
+                entry("minecraft:golden_apple", 12.0, "1-2", "rare"),
+                entry("minecraft:enchanted_golden_apple", 4.0, "1", "legendary"),
+                entry("minecraft:trident", 4.0, "1", "legendary"),
+                entry("minecraft:heart_of_the_sea", 6.0, "1", "legendary"),
+                entry("minecraft:netherite_scrap", 2.0, "1", "legendary")));
+
+        // ── 垃圾：按群系分化（暖海沙子 / 冷水洋砂砾 / 冻洋冰块）──
+        ocean.pools.add(pool("junk", 12.0,
+                entry("minecraft:sand", 55.0, "1-6", "common",
+                        "warm_ocean", "lukewarm_ocean", "deep_lukewarm_ocean"),
+                entry("minecraft:gravel", 55.0, "1-5", "common",
+                        "cold_ocean", "deep_cold_ocean"),
+                entry("minecraft:ice", 50.0, "1-3", "common",
+                        "frozen_ocean", "deep_frozen_ocean"),
+                entry("minecraft:packed_ice", 10.0, "1", "uncommon",
+                        "frozen_ocean", "deep_frozen_ocean"),
+                entry("minecraft:kelp", 14.0, "1-4", "common"),
+                entry("minecraft:seagrass", 12.0, "1-3", "common"),
+                entry("minecraft:bone", 10.0, "1-2", "common"),
+                entry("minecraft:string", 10.0, "1-2", "common"),
+                entry("minecraft:stick", 10.0, "1-3", "common"),
+                entry("minecraft:bowl", 8.0, "1-2", "common"),
+                entry("minecraft:leather", 8.0, "1-2", "common"),
+                entry("minecraft:rotten_flesh", 8.0, "1-2", "common"),
+                entry("minecraft:clay_ball", 8.0, "1-4", "common"),
+                entry("minecraft:bamboo", 6.0, "1-4", "common")));
+
         ocean.normalize();
         config.tables.put("hubsuite:skyblock_ocean", ocean);
 

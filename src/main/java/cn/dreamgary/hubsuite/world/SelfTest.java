@@ -5023,10 +5023,15 @@ public final class SelfTest {
             return;
         }
         StringBuilder pools = new StringBuilder();
+        int entries = 0;
         for (var p : ocean.pools) {
             pools.append(p.id).append(' ');
+            entries += p.entries.size();
         }
         ok("海岛维度有自己的渔获表（" + ocean.pools.size() + " 个池：" + pools.toString().trim() + "）");
+        okOrFail(ocean.pools.size() >= 5 && entries >= 40,
+                "战利品够丰富（" + ocean.pools.size() + " 个池 / " + entries + " 条渔获）",
+                "战利品偏少：池 " + ocean.pools.size() + " 个 / 条目 " + entries + " 条");
 
         if (cn.dreamgary.hubsuite.feature.FishingLoot.tableFor(config, classicDim) == null) {
             ok("没配置的维度仍走原版渔获（经典空岛不受影响）");
@@ -5163,17 +5168,31 @@ public final class SelfTest {
                 bad.append("物资 ").append(raw).append("; ");
             }
         }
-        // 村庄房屋模板（原版结构模板，从数据包里取）
+        // 结构模板（原版村庄房屋 / 自建结构，从数据包里取）
         var templates = server.getStructureManager();
-        for (String id : config.naturalIslandHouses) {
+        for (String id : config.naturalIslandStructures) {
             var key = net.minecraft.resources.Identifier.tryParse(id);
             if (key == null || templates.get(key).isEmpty()) {
-                bad.append("村庄模板 ").append(id).append("; ");
+                bad.append("结构模板 ").append(id).append("; ");
             }
         }
         okOrFail(bad.length() == 0,
-                "自然岛的刷怪笼生物 / 宝箱物资 / 村庄模板全部有效",
+                "自然岛的刷怪笼生物 / 宝箱物资 / 结构模板全部有效",
                 "自然岛配置里有无效 id：" + bad);
+        okOrFail(config.naturalIslandStructures != null && !config.naturalIslandStructures.isEmpty(),
+                "自然岛以结构模板呈现（" + config.naturalIslandStructures + "），结构下有底座="
+                        + config.naturalIslandStructureBase,
+                "自然岛没有配结构模板");
+        // 底座名单：猪灵堡垒要、要塞不要（用户要求）
+        var rootConfig = HubSuite.configManager() == null ? null : HubSuite.configManager().config();
+        if (rootConfig != null) {
+            okOrFail(rootConfig.structureFoundations.contains("minecraft:bastion_remnant"),
+                    "猪灵堡垒在补底座名单里（" + rootConfig.structureFoundations + "）",
+                    "补底座名单里没有猪灵堡垒：" + rootConfig.structureFoundations);
+            okOrFail(!rootConfig.structureFoundations.contains("minecraft:stronghold"),
+                    "要塞不在补底座名单里（按你的要求）",
+                    "要塞被误加进了补底座名单");
+        }
 
         int pending = NaturalIslandPlacer.pendingCount();
         int placed = NaturalIslandPlacer.placedCount();
