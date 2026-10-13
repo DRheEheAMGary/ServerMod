@@ -444,6 +444,36 @@ public final class SelfTest {
                     return;
                 }
                 ok("副手渔桶生效：岩浆里按桶内饵档次加速，钓上来从桶里扣 1");
+
+            // 4) 模型 id 随内容物切换（空 / 装了饵 / 哪种饵 → 不同贴图）
+            var emptyBucket = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            var bucketItem = (cn.dreamgary.hubsuite.feature.item.BaitBucketItem)
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET;
+            String mEmpty = String.valueOf(bucketItem.getPolymerItemModel(emptyBucket, null, null));
+            if (!"hubsuite:wooden_fishing_bucket".equals(mEmpty)) {
+                fail("空桶模型应为 hubsuite:wooden_fishing_bucket，实际 " + mEmpty);
+                return;
+            }
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                    emptyBucket, new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 1), 1);
+            String mBait = String.valueOf(bucketItem.getPolymerItemModel(emptyBucket, null, null));
+            if (!"hubsuite:wooden_fishing_bucket_bait".equals(mBait)) {
+                fail("装了普通钓饵的木桶模型应为 ..._bait，实际 " + mBait);
+                return;
+            }
+            var netherBucket = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                    netherBucket, new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT, 1), 1);
+            String mNether = String.valueOf(bucketItem.getPolymerItemModel(netherBucket, null, null));
+            if (!"hubsuite:wooden_fishing_bucket_compressed_nether_bait".equals(mNether)) {
+                fail("装了压缩地狱钓饵的木桶模型应为 ..._compressed_nether_bait，实际 " + mNether);
+                return;
+            }
+            ok("渔桶模型 id 随内容物切换（空桶 / 普通饵 / 压缩地狱饵 各一个样）");
             } finally {
                 try {
                     server.getPlayerList().remove(probe);

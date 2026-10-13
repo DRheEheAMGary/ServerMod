@@ -203,6 +203,25 @@ public class BaitBucketItem extends SimplePolymerItem {
         return false;
     }
 
+    /**
+     * 客户端模型按内容物切换：空桶用 {@code hubsuite:<桶>}，装了饵用
+     * {@code hubsuite:<桶>_<饵id>}（例：{@code wooden_fishing_bucket_bait}、
+     * {@code wooden_fishing_bucket_compressed_nether_bait}）。
+     *
+     * <p>资源包要给每只桶准备 7 个模型（空 + 6 种饵），见 {@code docs/自定义物品.md}。
+     */
+    @Override
+    public net.minecraft.resources.Identifier getPolymerItemModel(ItemStack stack, PacketContext context,
+                                                                  net.minecraft.core.HolderLookup.Provider registries) {
+        Identifier base = stack.get(DataComponents.ITEM_MODEL);
+        Item contained = containedBait(stack);
+        if (base == null || contained == null) {
+            return base;
+        }
+        Identifier baitId = BuiltInRegistries.ITEM.getKey(contained);
+        return Identifier.fromNamespaceAndPath(base.getNamespace(), base.getPath() + "_" + baitId.getPath());
+    }
+
     /** 客户端 tooltip 里追加一行"内容物 数量/容量"。 */
     @Override
     public void modifyClientTooltip(List<Component> tooltip, ItemStack stack, PacketContext context) {
