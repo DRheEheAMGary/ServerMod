@@ -29,7 +29,7 @@
 | 构建 | Gradle 9.7.1 + Loom 1.18-SNAPSHOT |
 | 映射 | **官方 Mojang 名，不 remap**（26.1 起官方不再混淆；build.gradle 无 mappings、无 remapJar） |
 | 产物 | `build/libs/hubsuite-<版本>.jar`（另有 `-sources.jar`） |
-| 规模 | 93 个 Java 文件 / 22 个 Mixin / 自检 216 项 |
+| 规模 | 112 个 Java 文件 / 27 个 Mixin / 自检 221 项 |
 
 ### 架构要点（改之前必须理解）
 
@@ -37,6 +37,8 @@
 - 每个存档有**独立玩家数据**：背包/经验/末影箱（`playerIo`）、成就、统计，三份都要隔离
 - 所有自定义维度用 **`hubsuite:` 自有 key**，不占用 `minecraft:overworld` 等原版 key
 - 软依赖（运行时探测，缺失要能降级）：LuckPerms / HuskHomes / Placeholder API / fabric-permissions-api
+- **硬依赖：Polymer**（自定义物品必须靠它映射给原版客户端；缺了 Fabric Loader 直接拒绝加载本模组）。
+  build.gradle 里 `compileOnly polymer-core` + `runtimeOnly polymer-bundled`（后者只给 dev 运行时用）
 - **维度只能启动时建立**：`MinecraftServer.levels` 是只读映射，运行期无法新建/卸载 → 增删子服必须重启
 
 ---
@@ -81,7 +83,7 @@ $env:JAVA_HOME = $j; $env:PATH = "$j\bin;$env:PATH"
 ```
 
 - 服务端是 `online-mode=false`，机器人可直连。
-- 自检结果看 `run/logs/latest.log` 里的 `通过 216 项，失败 0 项`。
+- 自检结果看 `run/logs/latest.log` 里的 `通过 221 项，失败 0 项`。
 - 控制台命令：`hub selftest`（也可在游戏内 `/hub selftest`）。
 
 ### 清档（改了地形 / 生成器才需要）
@@ -221,12 +223,15 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 | `world/PlayerDataRouter.java` + `world/PlayerStateStash.java` + `mixin/PlayerListStorageMixin.java` | 背包 / 经验按子服隔离（内存暂存 + 磁盘两份） |
 | `world/PlayerRouter.java` | 切服主流程（`sendTo`） |
 | `world/ServerInternals.java` / `ServerLevelsAccess.java` / `PlayerListAccess.java` | 访问原版内部字段的唯一出口（放业务包，见「十」） |
-| `world/SelfTest.java` | **全部自检**（216 项）。加检查看这里 |
+| `world/SelfTest.java` | **全部自检**（221 项）。加检查看这里 |
 | `island/IslandService.java` + `island/IslandManager.java` | 空岛：建岛、归属、出生点（**保护已删**） |
 | `world/IslandSideWorlds.java` + `world/LavaSeaGenerator.java` | 岛屿维度各自的下界/末地（空岛虚空式、海岛岩浆海） |
 | `world/NaturalIslandPlacer.java` | 自然岛：地形 + 宝箱 + 刷怪笼 + **结构模板与底座**（跨 tick 补铺、落盘去重） |
 | `world/StructureFoundations.java` | 悬空结构的底座（区块加载时按 `structureFoundations` 名单补，默认猪灵堡垒、不含要塞） |
-| `feature/FishingLoot.java` + `feature/FishingPresets.java` + `mixin/FishingHookLootMixin.java` | 海岛渔获：按维度挂表、按群系分池、稀有度 |
+| `feature/FishingLoot.java` + `feature/FishingPresets.java` + `mixin/FishingHookLootMixin.java` | 渔获：按维度挂表、按群系分池、稀有度（含岩浆表） |
+| `feature/FishingBait.java` + `feature/FishingGameplay.java` | 副手钓饵（水/岩浆分档加速、钓到才扣）与岩浆可钓判定 |
+| `feature/item/HubSuiteItems.java` + `feature/item/LavaRodItem.java` | 8 个自定义物品（Polymer 映射；`Item.Properties.setId` 必填） |
+| `mixin/FishingHookMixin.java` + `FishingHookAccessor.java` + `FishingRodCastMixin.java` + `LavaFishingHook.java` | 岩浆算水（`tick` 里两处 `FluidState.is` 都要改）、钓饵加速、抛竿打标记 |
 | `feature/CommandGuard.java` | 命令闸门（创造服屏蔽 40+ 条作弊指令） |
 | `feature/PermissionService.java` | 三级权限降级 |
 | `command/HubCommand.java` | `/hub` 命令族（`list`/`where`/`selftest` + 服务器参数） |
@@ -450,7 +455,7 @@ release 的**提交信息、tag message、release notes** 都是给**使用者�
 - 大厅 NPC 用真 `ServerPlayer` 假人；空岛只做 classic + ocean，不做单方块
 - 扩展性要求：新增子服尽量只改配置
 
-**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 当前 **216**。
+**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 当前 **221**。
 
 **已修复且经作者实测的关键问题**：
 

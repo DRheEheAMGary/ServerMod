@@ -259,7 +259,9 @@ public final class SelfTest {
             // 配方真的加载了（JSON 写错是静默失败）
             String[] recipes = {"nether_string", "lava_rod", "bait", "nether_bait",
                     "compressed_bait", "compressed_nether_bait",
-                    "double_compressed_bait", "double_compressed_nether_bait"};
+                    "double_compressed_bait", "double_compressed_nether_bait",
+                    "unpack_compressed_bait", "unpack_compressed_nether_bait",
+                    "unpack_double_compressed_bait", "unpack_double_compressed_nether_bait"};
             var badRecipes = new StringBuilder();
             for (String id : recipes) {
                 var key = net.minecraft.resources.ResourceKey.create(
@@ -274,6 +276,44 @@ public final class SelfTest {
                 return;
             }
             ok("自定义物品相关配方全部加载（" + recipes.length + " 条）");
+
+            /*
+             * 配方书能不能"看见"某条配方，取决于有没有对应的 advancement
+             * （data/hubsuite/advancement/recipes/<id>.json，trigger = recipe_unlocked）。
+             * 没有 advancement 时，配方在合成台上手摆仍然能合成，但玩家在配方书里
+             * 永远发现不了 —— 所以逐条查。
+             */
+            var resourceManager = server.getResourceManager();
+            var missingAdv = new StringBuilder();
+            for (String id : recipes) {
+                var adv = net.minecraft.resources.Identifier.fromNamespaceAndPath(
+                        "hubsuite", "advancement/recipes/" + id + ".json");
+                if (resourceManager.getResourceStack(adv).isEmpty()) {
+                    missingAdv.append(id).append(' ');
+                }
+            }
+            okOrFail(missingAdv.length() == 0,
+                    "配方解锁 advancement 齐全（" + recipes.length + " 条，配方书里能看到）",
+                    "这些配方没有 advancement，玩家在配方书里看不到：" + missingAdv.toString().trim());
+
+            // Polymer 硬依赖：自定义物品必须实现 PolymerItem，原版客户端才认这个 id
+            boolean polymerOk = true;
+            for (var item : items.values()) {
+                polymerOk &= item instanceof eu.pb4.polymer.core.api.item.PolymerItem;
+            }
+            okOrFail(polymerOk,
+                    "自定义物品全部实现了 PolymerItem（原版客户端可识别）",
+                    "有自定义物品没实现 PolymerItem —— 客户端不会认这个物品 id");
+
+            // 客户端资源包格式号（服主做自定义外观的资源包时要用）
+            try {
+                var format = net.minecraft.SharedConstants.getCurrentVersion()
+                        .packVersion(net.minecraft.server.packs.PackType.CLIENT_RESOURCES);
+                ok("客户端资源包格式号 = " + format
+                        + "（自定义外观需要资源包：assets/hubsuite/models/item/<id>.json）");
+            } catch (Throwable ignored) {
+                // 只是提示信息，拿不到不影响结论
+            }
         } catch (Throwable t) {
             fail("自定义物品检查出错：" + t);
         }

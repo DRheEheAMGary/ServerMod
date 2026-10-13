@@ -1,7 +1,6 @@
 package cn.dreamgary.hubsuite.feature;
 
 import cn.dreamgary.hubsuite.HubSuite;
-import cn.dreamgary.hubsuite.mixin.LavaFishingHook;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.entity.player.Player;

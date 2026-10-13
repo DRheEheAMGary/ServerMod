@@ -1,6 +1,7 @@
 package cn.dreamgary.hubsuite.mixin;
 
 import cn.dreamgary.hubsuite.feature.FishingGameplay;
+import cn.dreamgary.hubsuite.feature.LavaFishingHook;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.projectile.FishingHook;
 import org.spongepowered.asm.mixin.Mixin;
@@ -36,6 +37,15 @@ public abstract class FishingHookMixin implements LavaFishingHook {
         hubsuite$lavaRod = value;
     }
 
+    /*
+     * 这里**故意不写 ordinal**：{@code FishingHook.tick} 里有两处
+     * {@code FluidState.is(FluidTags.WATER)}，两处都要改，岩浆钓鱼才成立 ——
+     *   · 字节码偏移 127：算水面高度（浮漂的上下浮动），不改就不会"浮"在岩浆上；
+     *   · 字节码偏移 595：{@code !is(WATER) && !onGround() && hookedIn == null}
+     *     —— 不改就会被当成"出水了"，直接收竿。
+     * 所以熔岩竿抛出的钩子在两处都"岩浆也算水"。改之前先 javap 数一遍这两处，
+     * 别顺手加 ordinal（加了就只剩一处生效，另一处会把钓鱼掐断）。
+     */
     @ModifyExpressionValue(method = "tick",
             at = @At(value = "INVOKE",
                     target = "Lnet/minecraft/world/level/material/FluidState;is(Lnet/minecraft/tags/TagKey;)Z"))
