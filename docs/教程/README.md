@@ -20,7 +20,7 @@
 ```text
 ./gradlew build                        # 产物 build/libs/hubsuite-0.4.0-alpha.2.jar
 → 放进服务端 mods/（连同 Fabric API）
-→ 控制台 hub selftest                  # 应输出「通过 216 项，失败 0 项」
+→ 控制台 hub selftest                  # 应输出「通过 221 项，失败 0 项」
 → 进游戏，点大厅「点击传送」假人 / 用 /island / 用 /menu
 ```
 

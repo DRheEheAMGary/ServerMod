@@ -1,5 +1,6 @@
 package cn.dreamgary.hubsuite.mixin;
 
+import cn.dreamgary.hubsuite.feature.LavaFishingHook;
 import cn.dreamgary.hubsuite.feature.item.HubSuiteItems;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;

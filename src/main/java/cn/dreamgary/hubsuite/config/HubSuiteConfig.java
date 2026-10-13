@@ -398,18 +398,19 @@ public final class HubSuiteConfig {
             fishing = cn.dreamgary.hubsuite.feature.FishingPresets.defaults();
         }
         /*
-         * 配置版本迁移。
+         * 配置版本迁移（**每次改默认渔获表都要 +1**，否则老配置永远拿不到新表）。
          *
          * v2 = 渔获表从 3 池 18 条扩到 5 池 40+ 条；
-         * v3 = 修掉 v2 里一个不存在的物品 id（minecraft:scute）。
+         * v3 = 修掉 v2 里一个不存在的物品 id（minecraft:scute）；
+         * v4 = 加岩浆渔获表 + 副手钓饵配置（v0.4.0-alpha.2 的内容，当时没升版本号 ——
+         *      升级上来的配置里没有岩浆表，自检「岩浆渔获表就绪」会红）。
          *
          * 迁移就是把 fishing 段整体换成当前默认表 —— alpha 阶段不承诺配置兼容，
          * 改过 fishing 段的管理员需要重新配（release 说明里写清楚了）。
-         * 不做迁移的话，升级上来的服务器会一直用那份旧表（甚至带着坏条目）。
          */
-        if (configVersion < 3) {
+        if (configVersion < 4) {
             fishing = cn.dreamgary.hubsuite.feature.FishingPresets.defaults();
-            configVersion = 3;
+            configVersion = 4;
         }
         fishing.normalize();
         if (structureFoundations == null) {

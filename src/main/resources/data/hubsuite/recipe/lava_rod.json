@@ -7,8 +7,8 @@
   },
   "pattern": [
     "  B",
-    " B N",
-    "B  N"
+    " BN",
+    "B N"
   ],
   "result": {
     "id": "hubsuite:lava_rod"

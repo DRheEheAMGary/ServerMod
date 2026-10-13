@@ -48,8 +48,6 @@ public abstract class FishingHookLootMixin {
                 return original;   // 没配置 → 原版行为，一个字都不改
             }
             Player owner = self.getPlayerOwner();
-            // 钓上来一条就扣一个副手钓饵（环境不匹配 / 没有则不扣）
-            cn.dreamgary.hubsuite.feature.FishingGameplay.consumeBaitOnCatch(self);
             String biome = level.getBiome(self.blockPosition()).unwrapKey()
                     .map(k -> k.identifier().getPath())
                     .orElse(null);
@@ -58,6 +56,13 @@ public abstract class FishingHookLootMixin {
             if (rolled.isEmpty()) {
                 return original;   // 表里没有可用条目 → 别把玩家的这次钓获吃掉
             }
+            /*
+             * 到这一步才扣副手钓饵。
+             *
+             * 以前扣在掷骰**之前** —— 万一表里没有可用条目（配置写坏、物品 id 不存在），
+             * 这一杆会回落到原版，但玩家的饵已经没了。扣费必须跟在"真的按我们的表出货"后面。
+             */
+            cn.dreamgary.hubsuite.feature.FishingGameplay.consumeBaitOnCatch(self);
             ObjectArrayList<ItemStack> result = new ObjectArrayList<>();
             if (!table.replaceVanilla) {
                 result.addAll(original);
