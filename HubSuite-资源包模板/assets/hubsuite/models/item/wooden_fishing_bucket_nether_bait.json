@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "hubsuite:item/wooden_fishing_bucket_nether_bait"
+  }
+}

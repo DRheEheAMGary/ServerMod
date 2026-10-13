@@ -32,7 +32,7 @@ public final class HubSuiteItems {
 
     /** 地狱线：熔岩钓竿的合成材料。 */
     public static Item NETHER_STRING;
-    /** 普通钓饵 / 地狱钓饵 / 两档压缩。 */
+    /** 普通钓饵 / 地狱钓饵 / 两档压缩（全部堆叠 8 —— 大量携带请用渔桶）。 */
     public static Item BAIT;
     public static Item NETHER_BAIT;
     public static Item COMPRESSED_BAIT;
@@ -41,19 +41,23 @@ public final class HubSuiteItems {
     public static Item DOUBLE_COMPRESSED_NETHER_BAIT;
     /** 能在岩浆里钓的钓竿。 */
     public static Item LAVA_ROD;
+    /** 渔桶：钓饵的收纳袋（容量 16 / 64 / 1024）。 */
+    public static Item WOODEN_FISHING_BUCKET;
+    public static Item IRON_FISHING_BUCKET;
+    public static Item DIAMOND_FISHING_BUCKET;
 
     private HubSuiteItems() {
     }
 
     /** 在 {@code onInitialize} 里调一次。 */
     public static void register() {
-        NETHER_STRING = simple("nether_string", Rarity.COMMON);
-        BAIT = simple("bait", Rarity.COMMON);
-        NETHER_BAIT = simple("nether_bait", Rarity.COMMON);
-        COMPRESSED_BAIT = simple("compressed_bait", Rarity.UNCOMMON);
-        COMPRESSED_NETHER_BAIT = simple("compressed_nether_bait", Rarity.UNCOMMON);
-        DOUBLE_COMPRESSED_BAIT = simple("double_compressed_bait", Rarity.RARE);
-        DOUBLE_COMPRESSED_NETHER_BAIT = simple("double_compressed_nether_bait", Rarity.RARE);
+        NETHER_STRING = simple("nether_string", Rarity.COMMON, 64);
+        BAIT = simple("bait", Rarity.COMMON, 8);
+        NETHER_BAIT = simple("nether_bait", Rarity.COMMON, 8);
+        COMPRESSED_BAIT = simple("compressed_bait", Rarity.UNCOMMON, 8);
+        COMPRESSED_NETHER_BAIT = simple("compressed_nether_bait", Rarity.UNCOMMON, 8);
+        DOUBLE_COMPRESSED_BAIT = simple("double_compressed_bait", Rarity.RARE, 8);
+        DOUBLE_COMPRESSED_NETHER_BAIT = simple("double_compressed_nether_bait", Rarity.RARE, 8);
 
         LAVA_ROD = register("lava_rod", new LavaRodItem(props("lava_rod")
                 .stacksTo(1)
@@ -62,8 +66,21 @@ public final class HubSuiteItems {
                 .component(DataComponents.ITEM_NAME, Component.translatable("item.hubsuite.lava_rod"))
                 .component(DataComponents.ITEM_MODEL, id("lava_rod"))));
 
+        WOODEN_FISHING_BUCKET = bucket("wooden_fishing_bucket", Rarity.COMMON, 16);
+        IRON_FISHING_BUCKET = bucket("iron_fishing_bucket", Rarity.UNCOMMON, 64);
+        DIAMOND_FISHING_BUCKET = bucket("diamond_fishing_bucket", Rarity.RARE, 1024);
+
         cn.dreamgary.hubsuite.HubSuite.logger().info(
-                "已注册 8 个自定义物品（Polymer 硬依赖：原版客户端看到的是试炼钥匙 + 资源包模型）");
+                "已注册 11 个自定义物品（Polymer 硬依赖：原版客户端看到的是试炼钥匙 + 资源包模型）");
+    }
+
+    private static Item bucket(String path, Rarity rarity, int capacity) {
+        return register(path, new BaitBucketItem(props(path)
+                .stacksTo(1)
+                .rarity(rarity)
+                .component(DataComponents.ITEM_NAME, Component.translatable("item.hubsuite." + path))
+                .component(DataComponents.ITEM_MODEL, id(path)),
+                capacity));
     }
 
     /** 1.21.2+ 的 Item.Properties **必须**先 setId，否则构造物品时会 NPE（实测）。 */
@@ -71,8 +88,9 @@ public final class HubSuiteItems {
         return new Item.Properties().setId(ResourceKey.create(Registries.ITEM, id(path)));
     }
 
-    private static Item simple(String path, Rarity rarity) {
+    private static Item simple(String path, Rarity rarity, int stackSize) {
         return register(path, new SimplePolymerItem(props(path)
+                .stacksTo(stackSize)
                 .rarity(rarity)
                 .component(DataComponents.ITEM_NAME, Component.translatable("item.hubsuite." + path))
                 .component(DataComponents.ITEM_MODEL, id(path)),

@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "hubsuite:item/diamond_fishing_bucket_double_compressed_bait"
+  }
+}
