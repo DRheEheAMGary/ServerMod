@@ -2,7 +2,7 @@
 
 > Minecraft **26.1.2** 的**纯服务端** Fabric 模组：把**一个服务端**变成
 > 「大厅 + 多个互相独立的子服」（生存 / 创造 / 空岛），带对话框注册登录、
-> 假人大厅与内置任务系统，并对 HuskHomes、Text Placeholder API 做了适配。
+> 假人大厅与内置任务系统，并对 HuskHomes、Text Placeholder API、JEI 做了适配。
 >
 > 客户端使用**原版**即可进服，**不需要**安装任何模组。
 
@@ -95,6 +95,7 @@
 | `placeholder-api-3.0.0+26.1.jar` | 建议 | 让其它模组读到 `%hubsuite_...%` |
 | `fabric-permissions-api-0.7.0.jar` | 建议 | 权限 API（LuckPerms 的前置） |
 | `LuckPerms-Fabric-5.5.85.jar` | 可选 | 权限组管理 |
+| `jei-26.1.2-fabric-29.47.0.109.jar` | 可选 | 装在**服务端**可让客户端 JEI 用配方转移 / 作弊给予；自定义配方无论装不装都会出现在客户端 JEI 的配方页（走原版配方同步） |
 
 > HuskHomes 必须用 **Fabric 版 4.11+ 的 26.1 构建**。旧版（如 4.6）用已废弃的 intermediary 名，
 > 在 26.1.2 上会直接加载失败，且版本检查拦不住。

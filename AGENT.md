@@ -36,7 +36,10 @@
 - 每个子服 / 维度是**一个独立存档**（`IsolatedSave`，各一份 `LevelStorageAccess`）
 - 每个存档有**独立玩家数据**：背包/经验/末影箱（`playerIo`）、成就、统计，三份都要隔离
 - 所有自定义维度用 **`hubsuite:` 自有 key**，不占用 `minecraft:overworld` 等原版 key
-- 软依赖（运行时探测，缺失要能降级）：LuckPerms / HuskHomes / Placeholder API / fabric-permissions-api
+- 软依赖（运行时探测，缺失要能降级）：LuckPerms / HuskHomes / Placeholder API / fabric-permissions-api / JEI
+  - **JEI 服务端没有可调用的 API**：它的插件接口（IModPlugin）只在客户端加载，所以 JeiIntegration
+    只做探测 + 记录，不引用 JEI 的类；客户端 JEI 的配方页数据走原版配方同步（我们的配方全是
+    shaped/shapeless，物品由 Polymer 改写 SlotDisplay/Ingredient），配方转移由服务端 JEI 通用处理
 - **硬依赖：Polymer**（自定义物品必须靠它映射给原版客户端；缺了 Fabric Loader 直接拒绝加载本模组）。
   build.gradle 里 `compileOnly polymer-core` + `runtimeOnly polymer-bundled`（后者只给 dev 运行时用）
 - **维度只能启动时建立**：`MinecraftServer.levels` 是只读映射，运行期无法新建/卸载 → 增删子服必须重启

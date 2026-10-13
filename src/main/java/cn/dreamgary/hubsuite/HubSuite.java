@@ -54,6 +54,7 @@ public final class HubSuite implements ModInitializer {
     private cn.dreamgary.hubsuite.feature.CommandGuard commandGuard;
     private cn.dreamgary.hubsuite.island.IslandService islands;
     private cn.dreamgary.hubsuite.integration.UpdateChecker updateChecker;
+    private cn.dreamgary.hubsuite.integration.JeiIntegration jei;
 
     @Override
     public void onInitialize() {
@@ -116,6 +117,12 @@ public final class HubSuite implements ModInitializer {
         huskHomes = new cn.dreamgary.hubsuite.integration.HuskHomesIntegration(worldsManager);
         huskHomes.registerHomeIsolation();
         placeholders = new cn.dreamgary.hubsuite.integration.PlaceholderService(worldsManager, huskHomes);
+        // JEI（软依赖）：服务端没有可调用的 JEI API，只探测并记录；
+        // 我们的配方是原版类型 + Polymer 显示，客户端 JEI 天然能看能转移。
+        jei = new cn.dreamgary.hubsuite.integration.JeiIntegration();
+        if (jei.present()) {
+            logger().info("检测到 JEI（服务端 v{}）：客户端 JEI 的配方转移 / 作弊给予由它接管", jei.version());
+        }
 
         // 任务系统不依赖世界，初始化阶段就能建好
         try {
@@ -232,8 +239,8 @@ public final class HubSuite implements ModInitializer {
         LOGGER.info("  Fabric Loader : {}",
                 loader.getModContainer("fabricloader").map(c -> c.getMetadata().getVersion().getFriendlyString()).orElse("?"));
         LOGGER.info("  运行环境      : {}", loader.getEnvironmentType());
-        LOGGER.info("  软依赖探测    : huskhomes={}, placeholder-api={}, luckperms={}, fabric-permissions-api-v0={}",
-                isLoaded("huskhomes"), isLoaded("placeholder-api"), isLoaded("luckperms"), isLoaded("fabric-permissions-api-v0"));
+        LOGGER.info("  软依赖探测    : huskhomes={}, placeholder-api={}, luckperms={}, fabric-permissions-api-v0={}, jei={}",
+                isLoaded("huskhomes"), isLoaded("placeholder-api"), isLoaded("luckperms"), isLoaded("fabric-permissions-api-v0"), isLoaded("jei"));
     }
 
     private static boolean isLoaded(String modId) {
@@ -283,6 +290,10 @@ public final class HubSuite implements ModInitializer {
 
     public static cn.dreamgary.hubsuite.island.IslandService islands() {
         return instance == null ? null : instance.islands;
+    }
+
+    public static cn.dreamgary.hubsuite.integration.JeiIntegration jei() {
+        return get().jei;
     }
 
     public static cn.dreamgary.hubsuite.integration.HuskHomesIntegration huskHomes() {
