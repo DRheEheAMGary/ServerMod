@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "key": {
+    "B": "minecraft:blaze_rod",
+    "N": "hubsuite:nether_string"
+  },
+  "pattern": [
+    "  B",
+    " B N",
+    "B  N"
+  ],
+  "result": {
+    "id": "hubsuite:lava_rod"
+  }
+}

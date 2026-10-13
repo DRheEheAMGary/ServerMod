@@ -40,8 +40,35 @@ public final class FishingPresets {
         public Map<String, Table> tables = new LinkedHashMap<>();
         /** 钓到 rare / legendary 时是否给玩家一条提示。 */
         public boolean announceRare = true;
+        /** 副手钓饵的加速配置。 */
+        public BaitConfig bait = new BaitConfig();
+
+        /** 副手钓饵加速：等待时间按比例缩短（+10% 就是 ×0.9）。 */
+        public static final class BaitConfig {
+            public double baitSpeedup = 0.10;
+            public double compressedSpeedup = 0.25;
+            public double doubleCompressedSpeedup = 0.45;
+
+            public void normalize() {
+                baitSpeedup = clamp(baitSpeedup);
+                compressedSpeedup = clamp(compressedSpeedup);
+                doubleCompressedSpeedup = clamp(doubleCompressedSpeedup);
+            }
+
+            /** 高于 0.9 会把等待压到几乎为零，没意义。 */
+            private static double clamp(double v) {
+                if (Double.isNaN(v) || v < 0) {
+                    return 0;
+                }
+                return Math.min(0.9, v);
+            }
+        }
 
         public void normalize() {
+            if (bait == null) {
+                bait = new BaitConfig();
+            }
+            bait.normalize();
             if (tables == null) {
                 tables = new LinkedHashMap<>();
             }
@@ -285,6 +312,62 @@ public final class FishingPresets {
 
         ocean.normalize();
         config.tables.put("hubsuite:skyblock_ocean", ocean);
+
+        /*
+         * ── 岩浆海（海岛服的地狱）──
+         *
+         * 独立一张表：这里原版根本钓不了（钩子进不了水流），所以整表替换。
+         * 条目按**下界群系**分化 —— 岩浆海用的是原版下界群系预设
+         * （见 LavaSeaGenerator），所以灵魂沙峡谷钓灵魂沙、绯红森林钓菌类、
+         * 玄武岩三角洲钓黑石。
+         */
+        Table lava = new Table();
+        lava.displayName = "§c岩浆渔获";
+        lava.replaceVanilla = true;
+
+        lava.pools.add(pool("magma_catch", 45.0,
+                entry("minecraft:magma_cream", 20.0, "1-2", "common"),
+                entry("minecraft:blaze_powder", 16.0, "1-3", "common"),
+                entry("minecraft:glowstone_dust", 16.0, "1-4", "common"),
+                entry("minecraft:quartz", 14.0, "1-3", "common"),
+                entry("minecraft:gold_nugget", 12.0, "1-5", "common"),
+                entry("minecraft:fire_charge", 8.0, "1-2", "uncommon"),
+                entry("minecraft:nether_brick", 8.0, "1-3", "common"),
+                entry("minecraft:soul_sand", 30.0, "1-3", "common", "soul_sand_valley"),
+                entry("minecraft:soul_soil", 24.0, "1-3", "common", "soul_sand_valley"),
+                entry("minecraft:nether_wart", 18.0, "1-2", "common", "soul_sand_valley"),
+                entry("minecraft:crimson_fungus", 24.0, "1-2", "common", "crimson_forest"),
+                entry("minecraft:shroomlight", 16.0, "1-2", "uncommon", "crimson_forest", "warped_forest"),
+                entry("minecraft:weeping_vines", 14.0, "1-3", "common", "crimson_forest"),
+                entry("minecraft:warped_fungus", 24.0, "1-2", "common", "warped_forest"),
+                entry("minecraft:twisting_vines", 14.0, "1-3", "common", "warped_forest"),
+                entry("minecraft:basalt", 30.0, "1-4", "common", "basalt_deltas"),
+                entry("minecraft:blackstone", 24.0, "1-3", "common", "basalt_deltas"),
+                entry("minecraft:magma_block", 10.0, "1", "uncommon", "basalt_deltas")));
+
+        lava.pools.add(pool("magma_treasure", 22.0,
+                entry("minecraft:gold_ingot", 18.0, "1-3", "common"),
+                entry("minecraft:obsidian", 12.0, "1-3", "common"),
+                entry("minecraft:blaze_rod", 12.0, "1-2", "uncommon"),
+                entry("minecraft:ghast_tear", 8.0, "1", "rare"),
+                entry("minecraft:crying_obsidian", 6.0, "1", "rare"),
+                entry("minecraft:golden_apple", 6.0, "1", "rare"),
+                entry("minecraft:netherite_scrap", 4.0, "1", "legendary"),
+                entry("minecraft:enchanted_golden_apple", 2.0, "1", "legendary"),
+                entry("minecraft:ancient_debris", 1.0, "1", "legendary")));
+
+        lava.pools.add(pool("magma_junk", 18.0,
+                entry("minecraft:netherrack", 40.0, "1-8", "common"),
+                entry("minecraft:gravel", 20.0, "1-4", "common"),
+                entry("minecraft:bone", 14.0, "1-3", "common"),
+                entry("minecraft:coal", 14.0, "1-3", "common"),
+                entry("minecraft:string", 10.0, "1-2", "common"),
+                entry("minecraft:leather", 8.0, "1-2", "common"),
+                entry("minecraft:rotten_flesh", 8.0, "1-2", "common")));
+
+        lava.normalize();
+        config.tables.put("hubsuite:skyblock_ocean_nether", lava);
+        config.tables.put("hubsuite:skyblock_classic_nether", lava);
 
         config.normalize();
         return config;

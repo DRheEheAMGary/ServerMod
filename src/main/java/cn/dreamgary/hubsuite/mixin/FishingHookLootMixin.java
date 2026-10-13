@@ -48,6 +48,8 @@ public abstract class FishingHookLootMixin {
                 return original;   // 没配置 → 原版行为，一个字都不改
             }
             Player owner = self.getPlayerOwner();
+            // 钓上来一条就扣一个副手钓饵（环境不匹配 / 没有则不扣）
+            cn.dreamgary.hubsuite.feature.FishingGameplay.consumeBaitOnCatch(self);
             String biome = level.getBiome(self.blockPosition()).unwrapKey()
                     .map(k -> k.identifier().getPath())
                     .orElse(null);

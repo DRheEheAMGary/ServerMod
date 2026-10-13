@@ -6,6 +6,9 @@
   "mixins": [
     "BaseFireBlockPortalMixin",
     "CommonPlayerSpawnInfoMixin",
+    "FishingHookAccessor",
+    "FishingHookMixin",
+    "FishingRodCastMixin",
     "ConnectionChannelAccessor",
     "DistanceManagerAccessor",
     "DistanceManagerRemovePlayerMixin",

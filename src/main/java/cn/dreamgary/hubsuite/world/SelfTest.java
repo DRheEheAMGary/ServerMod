@@ -170,7 +170,113 @@ public final class SelfTest {
         step("虚空维度里没有任何结构（不会长出村庄）", this::checkVoidHasNoStructures);
         step("退出服务器不会丢成就（退出→重登仍读得回来）", this::checkAdvancementsSurviveRelogin);
         step("切服会真的放掉成就/统计缓存（隔离的前提）", this::checkAuxCacheEvictedOnSwitch);
+        step("自定义物品 / 岩浆渔获 / 配方", this::checkCustomItemsAndFishing);
         step("火能在本模组的维度里点燃传送门", this::checkFireCanIgnitePortal);
+    }
+
+
+    /**
+     * 自定义物品 + 岩浆渔获 + 配方。
+     *
+     * <p>锁三件事：Polymer 物品注册上了、岩浆表按群系分化了、配方真的加载了
+     * （JSON 写错不会崩，只会静默没有这条配方 —— 必须主动查）。
+     */
+    private void checkCustomItemsAndFishing() {
+        try {
+            var items = new java.util.LinkedHashMap<String, net.minecraft.world.item.Item>();
+            items.put("nether_string", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_STRING);
+            items.put("bait", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT);
+            items.put("nether_bait", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_BAIT);
+            items.put("compressed_bait", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_BAIT);
+            items.put("compressed_nether_bait", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT);
+            items.put("double_compressed_bait", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT);
+            items.put("double_compressed_nether_bait",
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_NETHER_BAIT);
+            items.put("lava_rod", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD);
+
+            var missing = new StringBuilder();
+            for (var e : items.entrySet()) {
+                if (e.getValue() == null) {
+                    missing.append(e.getKey()).append(' ');
+                }
+            }
+            if (missing.length() > 0) {
+                fail("这些自定义物品没注册上：" + missing.toString().trim());
+                return;
+            }
+            ok("8 个自定义物品都注册上了（客户端显示由 Polymer 负责）");
+
+            // 钓饵识别 + 水/岩浆分档
+            var bait = cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT;
+            var netherBait = cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_BAIT;
+            if (!cn.dreamgary.hubsuite.feature.FishingBait.isBait(bait)
+                    || !cn.dreamgary.hubsuite.feature.FishingBait.isBait(netherBait)) {
+                fail("钓饵没有被识别（FishingBait.speedupOf 返回 0）");
+                return;
+            }
+            if (cn.dreamgary.hubsuite.feature.FishingBait.isNetherBait(bait)
+                    || !cn.dreamgary.hubsuite.feature.FishingBait.isNetherBait(netherBait)) {
+                fail("普通/地狱钓饵分档不对");
+                return;
+            }
+            double s1 = cn.dreamgary.hubsuite.feature.FishingBait.speedupOf(bait);
+            double s2 = cn.dreamgary.hubsuite.feature.FishingBait
+                    .speedupOf(cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_BAIT);
+            double s3 = cn.dreamgary.hubsuite.feature.FishingBait
+                    .speedupOf(cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT);
+            if (!(s1 < s2 && s2 < s3)) {
+                fail(String.format("钓饵加速档位不是递增的：%.2f / %.2f / %.2f", s1, s2, s3));
+                return;
+            }
+            ok(String.format("钓饵分档正确（+%.0f%% / +%.0f%% / +%.0f%%）", s1 * 100, s2 * 100, s3 * 100));
+
+            // 岩浆渔获表（按群系分化）
+            var config = HubSuite.fishing();
+            int totalBiomeEntries = 0;
+            for (String dim : new String[]{"hubsuite:skyblock_ocean_nether", "hubsuite:skyblock_classic_nether"}) {
+                var key = net.minecraft.resources.ResourceKey.create(
+                        net.minecraft.core.registries.Registries.DIMENSION,
+                        net.minecraft.resources.Identifier.parse(dim));
+                var table = cn.dreamgary.hubsuite.feature.FishingLoot.tableFor(config, key);
+                if (table == null) {
+                    fail("维度 " + dim + " 没有配岩浆渔获表");
+                    return;
+                }
+                for (var pool : table.pools) {
+                    for (var entry : pool.entries) {
+                        if (!entry.biomes.isEmpty()) {
+                            totalBiomeEntries++;
+                        }
+                    }
+                }
+            }
+            if (totalBiomeEntries < 5) {
+                fail("岩浆渔获表没有按群系分化（带群系的条目只有 " + totalBiomeEntries + " 条）");
+                return;
+            }
+            ok("岩浆渔获表就绪（两个海岛下界，按群系分化的条目 " + totalBiomeEntries + " 条）");
+
+            // 配方真的加载了（JSON 写错是静默失败）
+            String[] recipes = {"nether_string", "lava_rod", "bait", "nether_bait",
+                    "compressed_bait", "compressed_nether_bait",
+                    "double_compressed_bait", "double_compressed_nether_bait"};
+            var badRecipes = new StringBuilder();
+            for (String id : recipes) {
+                var key = net.minecraft.resources.ResourceKey.create(
+                        net.minecraft.core.registries.Registries.RECIPE,
+                        net.minecraft.resources.Identifier.fromNamespaceAndPath("hubsuite", id));
+                if (server.getRecipeManager().byKey(key).isEmpty()) {
+                    badRecipes.append(id).append(' ');
+                }
+            }
+            if (badRecipes.length() > 0) {
+                fail("这些配方没加载：" + badRecipes.toString().trim());
+                return;
+            }
+            ok("自定义物品相关配方全部加载（" + recipes.length + " 条）");
+        } catch (Throwable t) {
+            fail("自定义物品检查出错：" + t);
+        }
     }
 
     /**
