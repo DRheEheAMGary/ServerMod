@@ -1,0 +1,11 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "hubsuite:compressed_nether_bait"
+  ],
+  "result": {
+    "id": "hubsuite:nether_bait",
+    "count": 9
+  }
+}

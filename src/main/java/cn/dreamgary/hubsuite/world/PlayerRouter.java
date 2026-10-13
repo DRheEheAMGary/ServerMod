@@ -201,6 +201,9 @@ public final class PlayerRouter {
 
             // 本次传送的落点：有记忆就回记忆位置，没有才用场所出生点。
             // 记忆只影响"这次把人放哪"，不影响重生点（见步骤 5）。
+            //
+            // 注意：记忆是"换岛时会被清掉"的（见 IslandService.createFor）——
+            // 旧岛的坐标不会残留下来，所以这里可以放心让记忆生效。
             PlayableWorld.SpawnPoint spawn = placeSpawn;
             if (memoryResolver != null) {
                 try {

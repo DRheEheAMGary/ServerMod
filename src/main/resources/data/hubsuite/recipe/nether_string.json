@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "N": "minecraft:netherrack",
+    "S": "minecraft:string",
+    "O": "minecraft:obsidian"
+  },
+  "pattern": [
+    " N ",
+    "NSN",
+    " O "
+  ],
+  "result": {
+    "id": "hubsuite:nether_string"
+  }
+}

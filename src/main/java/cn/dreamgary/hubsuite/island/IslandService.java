@@ -397,6 +397,13 @@ public final class IslandService {
         // 此刻玩家还在旧维度、目标区块必然未加载，getBlockState 会同步生成
         // 整片区块 → 主线程卡死（就是看门狗强杀那条路径，实测踩过两次）。
         // 想诊断落点，请等玩家落地之后再看（自检就是这么做的）。
+        //
+        // 新建的岛会落在别的格子上 → 这个维度里旧的位置记忆已经指向上一座岛，
+        // 必须清掉，否则"回自己的岛"会落在旧岛坐标上（实测：差 288 格）。
+        var rules = cn.dreamgary.hubsuite.HubSuite.rulesEngine();
+        if (rules != null) {
+            rules.forget(player.getUUID(), type.entry().dimension().identifier().toString());
+        }
         return type.manager().getOrCreate(
                 player.getUUID(), player.getName().getString(), type.id());
     }

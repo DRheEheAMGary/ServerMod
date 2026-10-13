@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "M": "#minecraft:meat",
+    "W": "minecraft:water_bucket"
+  },
+  "pattern": [
+    " M ",
+    "MWM",
+    " M "
+  ],
+  "result": {
+    "id": "hubsuite:bait",
+    "count": 4
+  }
+}

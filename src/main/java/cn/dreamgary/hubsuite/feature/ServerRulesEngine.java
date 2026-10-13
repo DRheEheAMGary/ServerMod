@@ -218,6 +218,36 @@ public final class ServerRulesEngine {
     }
 
     /**
+     * 忘掉某个玩家在某个维度的位置记忆。
+     *
+     * <p><b>什么时候要清：</b>玩家**换了岛**（新建 / 重置）时 —— 旧记忆指向的是
+     * 上一座岛的坐标，留着就会让人"回自己的岛却落在旧岛的位置"（实测踩过）。
+     *
+     * @param dimensionId 维度标识串（{@code hubsuite:skyblock_classic} 这种）
+     */
+    public void forget(UUID uuid, String dimensionId) {
+        if (uuid == null || dimensionId == null) {
+            return;
+        }
+        Map<String, double[]> perPlayer = memory.get(uuid.toString());
+        if (perPlayer == null) {
+            return;
+        }
+        perPlayer.remove(dimensionId);
+        if (perPlayer.isEmpty()) {
+            memory.remove(uuid.toString());
+        }
+        saveMemory();
+    }
+
+    /** 忘掉某个玩家的**全部**位置记忆（自检清理用）。 */
+    public void forget(UUID uuid) {
+        if (uuid != null && memory.remove(uuid.toString()) != null) {
+            saveMemory();
+        }
+    }
+
+    /**
      * 进入子服时的落点：记忆优先，其次配置出生点。
      *
      * @param dimension 这次要进入的**具体维度**；坐标记忆是按它存的
