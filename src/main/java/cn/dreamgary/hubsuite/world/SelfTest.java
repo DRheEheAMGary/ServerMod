@@ -1348,6 +1348,28 @@ public final class SelfTest {
         } else {
             ok("权限后端：" + permissions.backendName());
         }
+
+        // JEI（软依赖）：装没装都不该失败，但我们的配方必须对客户端 JEI 友好
+        var jei = HubSuite.jei();
+        if (jei == null) {
+            fail("JEI 适配器未初始化");
+        } else {
+            ok(jei.present()
+                    ? "JEI 已加载（服务端 v" + jei.version() + "）：客户端 JEI 的配方转移 / 作弊给予由它接管"
+                    : "未检测到 JEI（软依赖，不装不影响功能）");
+            var badType = cn.dreamgary.hubsuite.integration.JeiIntegration.nonVanillaTypeRecipes(server);
+            if (!badType.isEmpty()) {
+                fail("这些配方不是原版 shaped/shapeless，JEI 配方转移不认：" + badType);
+            } else {
+                ok("自定义配方全是原版类型，客户端 JEI 的配方转移可直接处理");
+            }
+            var invisible = cn.dreamgary.hubsuite.integration.JeiIntegration.recipesWithInvisibleItems(server);
+            if (!invisible.isEmpty()) {
+                fail("配方里引用了原版客户端看不到的物品：" + invisible);
+            } else {
+                ok("配方里的自定义物品全是 PolymerItem，原版客户端 / JEI 都能看到配方");
+            }
+        }
     }
 
     private void checkPlayerDataSwap() {
