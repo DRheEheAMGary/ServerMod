@@ -53,6 +53,19 @@ public final class FishingBait {
     }
 
     /**
+     * 副手上"实际生效的饵"：散饵就是它自己；渔桶就是桶里装的饵（空桶 → null）。
+     */
+    public static Item effectiveBait(ItemStack offhand) {
+        if (offhand.isEmpty()) {
+            return null;
+        }
+        if (offhand.getItem() instanceof cn.dreamgary.hubsuite.feature.item.BaitBucketItem) {
+            return cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedBait(offhand);
+        }
+        return isBait(offhand.getItem()) ? offhand.getItem() : null;
+    }
+
+    /**
      * 副手钓饵在当前环境下的加速比例；环境不匹配 / 没钓饵返回 0。
      *
      * @param inLava 浮漂此刻是不是泡在岩浆里
@@ -61,23 +74,27 @@ public final class FishingBait {
         if (player == null) {
             return 0;
         }
-        ItemStack off = player.getOffhandItem();
-        if (off.isEmpty()) {
+        Item bait = effectiveBait(player.getOffhandItem());
+        if (bait == null) {
             return 0;
         }
-        Item item = off.getItem();
-        double value = speedupOf(item);
+        double value = speedupOf(bait);
         if (value <= 0) {
             return 0;
         }
-        return isNetherBait(item) == inLava ? value : 0;
+        return isNetherBait(bait) == inLava ? value : 0;
     }
 
-    /** 钓上来一条：扣掉一个生效的副手钓饵。 */
+    /** 钓上来一条：扣掉一个生效的副手钓饵（桶里装的就从桶里扣）。 */
     public static void consume(Player player, boolean inLava) {
         if (player == null || speedup(player, inLava) <= 0) {
             return;
         }
-        player.getOffhandItem().shrink(1);
+        ItemStack off = player.getOffhandItem();
+        if (off.getItem() instanceof cn.dreamgary.hubsuite.feature.item.BaitBucketItem) {
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.remove(off, 1);
+            return;
+        }
+        off.shrink(1);
     }
 }

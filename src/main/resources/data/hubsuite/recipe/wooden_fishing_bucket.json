@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "A": "#minecraft:planks"
+  },
+  "pattern": [
+    "A A",
+    "A A",
+    " A "
+  ],
+  "result": {
+    "id": "hubsuite:wooden_fishing_bucket"
+  }
+}

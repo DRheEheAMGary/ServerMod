@@ -1,6 +1,16 @@
 {
   "parent": "minecraft:recipes/root",
   "criteria": {
+    "has_material": {
+      "conditions": {
+        "items": [
+          {
+            "items": "hubsuite:double_compressed_bait"
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    },
     "has_the_recipe": {
       "conditions": {
         "recipe": "hubsuite:unpack_double_compressed_bait"
@@ -10,6 +20,7 @@
   },
   "requirements": [
     [
+      "has_material",
       "has_the_recipe"
     ]
   ],
