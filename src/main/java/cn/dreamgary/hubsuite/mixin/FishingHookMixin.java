@@ -100,6 +100,11 @@ public abstract class FishingHookMixin implements LavaFishingHook {
     @Inject(method = "tick", at = @At("TAIL"))
     private void hubsuite$noFireInLava(CallbackInfo ci) {
         FishingHook self = (FishingHook) (Object) this;
+        // 快路径：绝大多数情况这里就是 0（没火），直接返回，一次字段读而已。
+        // 正常路径由 EntityLavaHurtMixin（fireImmune）挡住，这里只是双保险。
+        if (self.getRemainingFireTicks() == 0) {
+            return;
+        }
         if (((LavaFishingHook) (Object) this).hubsuite$fromLavaRod()
                 && FishingGameplay.inFluid(self, net.minecraft.tags.FluidTags.LAVA)) {
             self.clearFire();

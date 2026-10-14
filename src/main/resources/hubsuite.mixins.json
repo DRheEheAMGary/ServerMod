@@ -10,6 +10,7 @@
     "FishingHookMixin",
     "FishingRodCastMixin",
     "ConnectionChannelAccessor",
+    "EntityLavaHurtMixin",
     "DistanceManagerAccessor",
     "DistanceManagerRemovePlayerMixin",
     "FishingHookLootMixin",
