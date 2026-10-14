@@ -420,6 +420,23 @@ public final class SelfTest {
                 return;
             }
 
+            // 3b) 反向路径：桶在**光标**上、饵在格子里，左键应该整摞装进去
+            var bucket4 = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            var slot4 = new net.minecraft.world.inventory.Slot(container, 0, 0, 0);
+            slot4.set(new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT, 12));
+            bucketItem.overrideStackedOnOther(bucket4, slot4,
+                    net.minecraft.world.inventory.ClickAction.PRIMARY, probe);
+            if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(bucket4,
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT) != 12
+                    || !slot4.getItem().isEmpty()) {
+                fail("桶在光标上左键点整摞饵，应该 12 个全进去：桶里 "
+                        + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(bucket4)
+                        + "，格子里剩 " + slot4.getItem().getCount());
+                return;
+            }
+
             // 4) 只读格子（allowModification=false）不许取出
             var locked = new net.minecraft.world.inventory.Slot(container, 0, 0, 0) {
                 @Override

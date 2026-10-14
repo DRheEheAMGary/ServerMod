@@ -345,6 +345,8 @@ public class BaitBucketItem extends SimplePolymerItem {
         }
         tooltip.add(Component.literal("内容物 " + containedCount(stack) + " / " + capacity)
                 .withStyle(ChatFormatting.GRAY));
+        tooltip.add(Component.literal("左键点=全装 · 右键点=装一个 · 右键空格子=取一组")
+                .withStyle(ChatFormatting.DARK_GRAY));
         int lines = 0;
         for (Map.Entry<Item, Integer> e : contents.entrySet()) {
             if (lines++ >= 3) {
