@@ -48,11 +48,18 @@ public final class FishingPresets {
             public double baitSpeedup = 0.10;
             public double compressedSpeedup = 0.25;
             public double doubleCompressedSpeedup = 0.45;
+            /**
+             * **环境不匹配**的惩罚：拿普通饵去岩浆里钓（或地狱饵下水）时，
+             * 速度 ×(1 - 这个值)（0.40 = 速度打 6 折、等待时间 ×1.67），
+             * 而且**照样扣饵**。压缩不压缩一个价。
+             */
+            public double familyMismatchPenalty = 0.40;
 
             public void normalize() {
                 baitSpeedup = clamp(baitSpeedup);
                 compressedSpeedup = clamp(compressedSpeedup);
                 doubleCompressedSpeedup = clamp(doubleCompressedSpeedup);
+                familyMismatchPenalty = clamp(familyMismatchPenalty);
             }
 
             /** 高于 0.9 会把等待压到几乎为零，没意义。 */

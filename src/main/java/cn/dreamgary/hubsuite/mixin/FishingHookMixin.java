@@ -63,15 +63,42 @@ public abstract class FishingHookMixin implements LavaFishingHook {
             return;
         }
         double speedup = FishingGameplay.baitSpeedup(self);
-        if (speedup <= 0 || self.getRandom().nextDouble() >= speedup) {
+        if (speedup == 0) {
             return;
         }
+        double roll = self.getRandom().nextDouble();
         FishingHookAccessor accessor = (FishingHookAccessor) (Object) this;
+
+        if (speedup > 0) {
+            // 加速：基础递减之外，再按概率多减一格 → 等待时间 ×1/(1+speedup)
+            if (roll >= speedup) {
+                return;
+            }
+            if (accessor.hubsuite$getTimeUntilHooked() > 0) {
+                accessor.hubsuite$setTimeUntilHooked(accessor.hubsuite$getTimeUntilHooked() - 1);
+            }
+            if (accessor.hubsuite$getTimeUntilLured() > 0) {
+                accessor.hubsuite$setTimeUntilLured(accessor.hubsuite$getTimeUntilLured() - 1);
+            }
+            return;
+        }
+
+        /*
+         * 减速（环境不匹配的惩罚）：速度 ×(1+speedup)，speedup 是负的。
+         *
+         * 无法在这里"拦住"原版的递减（注入点在 tick 开头，vanilla 的倒计时在后面跑），
+         * 所以反着来：按概率**把计时器加回一格**，等效于有 |speedup| 的比例没递减。
+         * 0.40 的惩罚 → 每 tick 有 40% 概率加回 → 实际速度 ×0.6（等待 ×1.67）。
+         */
+        double slowChance = Math.min(0.9, -speedup);
+        if (roll >= slowChance) {
+            return;
+        }
         if (accessor.hubsuite$getTimeUntilHooked() > 0) {
-            accessor.hubsuite$setTimeUntilHooked(accessor.hubsuite$getTimeUntilHooked() - 1);
+            accessor.hubsuite$setTimeUntilHooked(accessor.hubsuite$getTimeUntilHooked() + 1);
         }
         if (accessor.hubsuite$getTimeUntilLured() > 0) {
-            accessor.hubsuite$setTimeUntilLured(accessor.hubsuite$getTimeUntilLured() - 1);
+            accessor.hubsuite$setTimeUntilLured(accessor.hubsuite$getTimeUntilLured() + 1);
         }
     }
 }

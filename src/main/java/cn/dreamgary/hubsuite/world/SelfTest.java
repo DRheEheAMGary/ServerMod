@@ -366,11 +366,29 @@ public final class SelfTest {
                 fail("木桶装满 64 后还能继续装");
                 return;
             }
-            if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
-                    wood, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_BAIT, 8),
-                    Integer.MAX_VALUE) != 0) {
-                fail("桶里已有普通饵，还能装地狱饵（应该一桶一种）");
+            // 旧版是"一桶一种"，现在**允许混装**：满桶才拒绝（上面已经查过满桶）
+            var mixed = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                    mixed, new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 3), Integer.MAX_VALUE);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                    mixed, new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_BAIT, 2), Integer.MAX_VALUE);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                    mixed, new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT, 1),
+                    Integer.MAX_VALUE);
+            if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(mixed) != 6
+                    || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(mixed).size() != 3) {
+                fail("渔桶不能混装三种饵，实际 "
+                        + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(mixed));
+                return;
+            }
+            if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedBait(mixed)
+                    != cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT) {
+                fail("混装时桶里最高档的那种应是压缩地狱钓饵，实际 "
+                        + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedBait(mixed));
                 return;
             }
             var taken = cn.dreamgary.hubsuite.feature.item.BaitBucketItem.extract(wood);
@@ -398,7 +416,7 @@ public final class SelfTest {
                 fail("渔桶容量不是 64 / 256 / 1024");
                 return;
             }
-            ok("渔桶装取逻辑正确（64 装满、拒异种、压缩可进、容量 64/256/1024）");
+            ok("渔桶装取逻辑正确（64 装满、可混装 3 种、压缩可进、容量 64/256/1024）");
 
             // 2) 堆叠数
             if (new net.minecraft.world.item.ItemStack(
@@ -435,10 +453,6 @@ public final class SelfTest {
                     fail("副手桶在岩浆里应加速 " + expected + "，实际 " + inLava);
                     return;
                 }
-                if (cn.dreamgary.hubsuite.feature.FishingBait.speedup(probe, false) != 0) {
-                    fail("地狱饵在水里不应生效");
-                    return;
-                }
                 cn.dreamgary.hubsuite.feature.FishingBait.consume(probe, true);
                 if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket) != 7) {
                     fail("钓上来后桶里应剩 7 个，实际 "
@@ -447,7 +461,84 @@ public final class SelfTest {
                 }
                 ok("副手渔桶生效：岩浆里按桶内饵档次加速，钓上来从桶里扣 1");
 
-            // 4) 模型 id 随内容物切换（空 / 装了饵 / 哪种饵 → 不同贴图）
+                /*
+                 * 3b) 环境不匹配 = 减速（不是"没效果"）：地狱饵拿水里用 → 负的速度；
+                 * 而且**照样扣**（用户定的：乱用饵要付代价，压缩不压缩一个价）。
+                 */
+                double penalty = -cn.dreamgary.hubsuite.feature.FishingBait.mismatchPenalty();
+                double inWater = cn.dreamgary.hubsuite.feature.FishingBait.speedup(probe, false);
+                if (inWater != 0) {
+                    fail("渔桶里只有地狱饵、人在水里：应该完全不生效（0），实际 " + inWater);
+                    return;
+                }
+                cn.dreamgary.hubsuite.feature.FishingBait.consume(probe, false);
+                // 桶"护饵"：只有错误环境的饵时减速照旧，但**不扣**
+                if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket) != 7) {
+                    fail("渔桶里只有错误环境的饵时不该扣，实际剩 "
+                            + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket));
+                    return;
+                }
+
+                // 3c) 混装消耗顺序：二重压缩 → 压缩 → 普通
+                var order = new net.minecraft.world.item.ItemStack(
+                        cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+                cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                        order, new net.minecraft.world.item.ItemStack(
+                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 1), Integer.MAX_VALUE);
+                cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                        order, new net.minecraft.world.item.ItemStack(
+                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT, 1),
+                        Integer.MAX_VALUE);
+                cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                        order, new net.minecraft.world.item.ItemStack(
+                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_BAIT, 1),
+                        Integer.MAX_VALUE);
+                probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND, order);
+                double wantTop = cn.dreamgary.hubsuite.feature.FishingBait.speedupOf(
+                        cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT);
+                double gotTop = cn.dreamgary.hubsuite.feature.FishingBait.speedup(probe, false);
+                if (Math.abs(gotTop - wantTop) > 0.0001) {
+                    fail("混装时应该按最高档加速 " + wantTop + "，实际 " + gotTop);
+                    return;
+                }
+                cn.dreamgary.hubsuite.feature.FishingBait.consume(probe, false);
+                if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(order,
+                        cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT) != 0
+                        || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(order,
+                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_BAIT) != 1
+                        || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(order,
+                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT) != 1) {
+                    fail("混装消耗顺序不是 二重压缩 → 压缩 → 普通，实际剩下 "
+                            + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(order));
+                    return;
+                }
+                ok("桶里只有错误族的饵时完全不生效（不减速、不扣）；混装按 二重压缩 → 压缩 → 普通 消耗");
+
+                // 3d) 副手直接放散饵：水里 +；岩浆里（普通饵）减速，并且照样扣
+                probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND,
+                        new net.minecraft.world.item.ItemStack(
+                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 3));
+                double water = cn.dreamgary.hubsuite.feature.FishingBait.speedup(probe, false);
+                double wantWater = cn.dreamgary.hubsuite.feature.FishingBait.speedupOf(
+                        cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT);
+                if (Math.abs(water - wantWater) > 0.0001) {
+                    fail("副手散饵在水里应加速 " + wantWater + "，实际 " + water);
+                    return;
+                }
+                double lava = cn.dreamgary.hubsuite.feature.FishingBait.speedup(probe, true);
+                if (Math.abs(lava - penalty) > 0.0001) {
+                    fail("普通饵拿去岩浆里应该减速 " + penalty + "，实际 " + lava);
+                    return;
+                }
+                cn.dreamgary.hubsuite.feature.FishingBait.consume(probe, true);
+                if (probe.getOffhandItem().getCount() != 2) {
+                    fail("环境不匹配的散饵也应该扣 1，实际剩 "
+                            + probe.getOffhandItem().getCount());
+                    return;
+                }
+                ok("副手散饵：水里加速；普通饵拿去岩浆里减速且照扣（剩 2）");
+
+            // 4) 模型只看"空 / 有饵"：装了**任何**饵（含混装）都是 ..._bait
             var emptyBucket = new net.minecraft.world.item.ItemStack(
                     cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
             var bucketItem = (cn.dreamgary.hubsuite.feature.item.BaitBucketItem)
@@ -471,11 +562,24 @@ public final class SelfTest {
                     netherBucket, new net.minecraft.world.item.ItemStack(
                             cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT, 1), 1);
             String mNether = String.valueOf(bucketItem.getPolymerItemModel(netherBucket, null, null));
-            if (!"hubsuite:wooden_fishing_bucket_compressed_nether_bait".equals(mNether)) {
-                fail("装了压缩地狱钓饵的木桶模型应为 ..._compressed_nether_bait，实际 " + mNether);
+            if (!"hubsuite:wooden_fishing_bucket_bait".equals(mNether)) {
+                fail("装了压缩地狱钓饵的木桶模型也应为 ..._bait（不按饵种类分），实际 " + mNether);
                 return;
             }
-            ok("渔桶模型 id 随内容物切换（空桶 / 普通饵 / 压缩地狱饵 各一个样）");
+            var mixedBucket = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                    mixedBucket, new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 1), 1);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                    mixedBucket, new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT, 1), 1);
+            String mMixed = String.valueOf(bucketItem.getPolymerItemModel(mixedBucket, null, null));
+            if (!"hubsuite:wooden_fishing_bucket_bait".equals(mMixed)) {
+                fail("混装的木桶模型也应为 ..._bait，实际 " + mMixed);
+                return;
+            }
+            ok("渔桶模型只有空 / 有饵两种（装了任何饵、混装，统一 ..._bait）");
             } finally {
                 try {
                     server.getPlayerList().remove(probe);
