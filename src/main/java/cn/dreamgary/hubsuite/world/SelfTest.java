@@ -173,6 +173,7 @@ public final class SelfTest {
         step("自定义物品 / 岩浆渔获 / 配方", this::checkCustomItemsAndFishing);
         step("渔桶：装饵 / 容量 / 钓鱼消耗", this::checkBaitBuckets);
         step("熔岩钓竿甩竿后浮标留得住", this::checkLavaRodCast);
+        step("岩浆钓鱼：浮标不掉、不着火、能进浮漂状态", this::checkLavaFishing);
         step("火能在本模组的维度里点燃传送门", this::checkFireCanIgnitePortal);
     }
 
@@ -328,6 +329,112 @@ public final class SelfTest {
         }
     }
 
+
+    /**
+     * 岩浆钓鱼：浮标泡在岩浆里要能进入"浮漂（BOBBING）"状态、并且不着火。
+     *
+     * <p>锁住用户实测："好像是一直不咬钩" + "钓钩不要着火"。
+     * 原版判"水"的地方是 {@code FluidState.is(FluidTags.WATER)}（{@code tick} 两处 +
+     * {@code getOpenWaterTypeForBlock} 一处），我们按"熔岩竿抛的钩子 + 真的在岩浆里"全部放行；
+     * TAIL 清火焰；粒子换岩浆。
+     */
+    private void checkLavaFishing() {
+        var key = net.minecraft.resources.ResourceKey.create(
+                net.minecraft.core.registries.Registries.DIMENSION,
+                net.minecraft.resources.Identifier.parse("hubsuite:skyblock_ocean_nether"));
+        var level = server.getLevel(key);
+        if (level == null) {
+            fail("找不到海岛下界维度，跳过岩浆钓鱼检查");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_lavatest", level, false);
+        if (probe == null) {
+            fail("岩浆钓鱼检查用假玩家创建失败");
+            return;
+        }
+        var base = new net.minecraft.core.BlockPos(0, 200, 0);
+        try {
+            /*
+             * 搭个 5x5 石台 + 中间 3x3 岩浆池。
+             * 假玩家必须站在**实体方块**上：之前直接放在虚空空气里，它 80 tick 就掉到
+             * 离浮标 32 格以外，被原版 shouldStopFishing 的"超距"规则收掉了 —— 那是测试
+             * 自己的问题，不是玩法问题。
+             */
+            for (int dx = -2; dx <= 2; dx++) {
+                for (int dz = -2; dz <= 2; dz++) {
+                    boolean pool = Math.abs(dx) <= 1 && Math.abs(dz) <= 1;
+                    level.setBlockAndUpdate(base.offset(dx, 0, dz),
+                            net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+                    level.setBlockAndUpdate(base.offset(dx, 1, dz), pool
+                            ? net.minecraft.world.level.block.Blocks.LAVA.defaultBlockState()
+                            : net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+                    level.setBlockAndUpdate(base.offset(dx, 2, dz),
+                            net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                }
+            }
+            probe.teleportTo(level, base.getX() + 2.5, base.getY() + 2.0, base.getZ() + 0.5,
+                    java.util.Set.of(), 0.0F, 0.0F, false);
+            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND,
+                    new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD));
+            probe.fishing = null;
+            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD
+                    .use(level, probe, net.minecraft.world.InteractionHand.MAIN_HAND);
+            net.minecraft.world.entity.projectile.FishingHook hook = probe.fishing;
+            if (hook == null) {
+                fail("岩浆里甩竿没生成浮标");
+                return;
+            }
+            // 把浮标按进岩浆里
+            hook.setPos(base.getX() + 0.5, base.getY() + 1.9, base.getZ() + 0.5);
+            var accessor = (cn.dreamgary.hubsuite.mixin.FishingHookAccessor) hook;
+            // 原版第一次咬钩要等 5~30 秒（100~600 tick），窗口开大一点才有意义
+            boolean hooked = false;
+            int untilHooked = 0;
+            for (int i = 1; i <= 1200; i++) {
+                hook.tick();
+                if (hook.isRemoved()) {
+                    fail("浮标在岩浆里第 " + i + " tick 被收掉了");
+                    return;
+                }
+                untilHooked = Math.max(untilHooked, accessor.hubsuite$getTimeUntilHooked());
+                // nibble / biting / timeUntilHooked 任意一个动过，就说明"咬钩流程跑起来了"
+                if (accessor.hubsuite$getNibble() > 0 || accessor.hubsuite$isBiting() || untilHooked > 0) {
+                    hooked = true;
+                    break;
+                }
+            }
+            if (hook.getRemainingFireTicks() > 0) {
+                fail("浮标在岩浆里着火了（剩余 " + hook.getRemainingFireTicks() + " tick）");
+                return;
+            }
+            if (!hooked) {
+                fail("浮标在岩浆里 1200 tick 都没进入咬钩流程（nibble/biting/timeUntilHooked 全是 0）");
+                return;
+            }
+            ok("岩浆钓鱼：浮标不掉、不着火、进入了咬钩流程（timeUntilHooked=" + untilHooked
+                    + "，nibble=" + accessor.hubsuite$getNibble() + "）");
+        } catch (Throwable t) {
+            fail("岩浆钓鱼检查异常：" + t);
+        } finally {
+            try {
+                if (probe.fishing != null) {
+                    probe.fishing.discard();
+                }
+                for (int dx = -2; dx <= 2; dx++) {
+                    for (int dz = -2; dz <= 2; dz++) {
+                        level.setBlockAndUpdate(base.offset(dx, 0, dz),
+                                net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                        level.setBlockAndUpdate(base.offset(dx, 1, dz),
+                                net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                    }
+                }
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 清理失败不影响结论
+            }
+        }
+    }
 
     /**
      * 熔岩钓竿真的能甩出去、浮标留得住。
