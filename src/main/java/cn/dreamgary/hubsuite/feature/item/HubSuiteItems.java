@@ -52,12 +52,12 @@ public final class HubSuiteItems {
     /** 在 {@code onInitialize} 里调一次。 */
     public static void register() {
         NETHER_STRING = simple("nether_string", Rarity.COMMON, 64);
-        BAIT = simple("bait", Rarity.COMMON, 8);
-        NETHER_BAIT = simple("nether_bait", Rarity.COMMON, 8);
-        COMPRESSED_BAIT = simple("compressed_bait", Rarity.UNCOMMON, 8);
-        COMPRESSED_NETHER_BAIT = simple("compressed_nether_bait", Rarity.UNCOMMON, 8);
-        DOUBLE_COMPRESSED_BAIT = simple("double_compressed_bait", Rarity.RARE, 8);
-        DOUBLE_COMPRESSED_NETHER_BAIT = simple("double_compressed_nether_bait", Rarity.RARE, 8);
+        BAIT = simple("bait", Rarity.COMMON, 16);
+        NETHER_BAIT = simple("nether_bait", Rarity.COMMON, 16);
+        COMPRESSED_BAIT = simple("compressed_bait", Rarity.UNCOMMON, 16);
+        COMPRESSED_NETHER_BAIT = simple("compressed_nether_bait", Rarity.UNCOMMON, 16);
+        DOUBLE_COMPRESSED_BAIT = simple("double_compressed_bait", Rarity.RARE, 16);
+        DOUBLE_COMPRESSED_NETHER_BAIT = simple("double_compressed_nether_bait", Rarity.RARE, 16);
 
         LAVA_ROD = register("lava_rod", new LavaRodItem(props("lava_rod")
                 .stacksTo(1)
@@ -66,8 +66,8 @@ public final class HubSuiteItems {
                 .component(DataComponents.ITEM_NAME, Component.translatable("item.hubsuite.lava_rod"))
                 .component(DataComponents.ITEM_MODEL, id("lava_rod"))));
 
-        WOODEN_FISHING_BUCKET = bucket("wooden_fishing_bucket", Rarity.COMMON, 16);
-        IRON_FISHING_BUCKET = bucket("iron_fishing_bucket", Rarity.UNCOMMON, 64);
+        WOODEN_FISHING_BUCKET = bucket("wooden_fishing_bucket", Rarity.COMMON, 64);
+        IRON_FISHING_BUCKET = bucket("iron_fishing_bucket", Rarity.UNCOMMON, 256);
         DIAMOND_FISHING_BUCKET = bucket("diamond_fishing_bucket", Rarity.RARE, 1024);
 
         cn.dreamgary.hubsuite.HubSuite.logger().info(

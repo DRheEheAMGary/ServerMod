@@ -331,7 +331,7 @@ public final class SelfTest {
     /**
      * 渔桶（钓饵收纳袋）。
      *
-     * <p>锁四件事：装取纯逻辑（满 / 拒异种 / 压缩可进 / 容量分档）、堆叠数（饵 8、桶 1）、
+     * <p>锁四件事：装取纯逻辑（满 / 拒异种 / 压缩可进 / 容量分档）、堆叠数（饵 16、桶 1）、
      * 假玩家副手拿桶时的加速与"钓上来从桶里扣"。装取不走真实点击 ——
      * 点击回调只是把点击翻译给 {@code BaitBucketItem.insert/extract}，
      * 手感（收纳袋式点击）标"实机未验证"。
@@ -347,21 +347,23 @@ public final class SelfTest {
             var wood = new net.minecraft.world.item.ItemStack(
                     cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
             var H = cn.dreamgary.hubsuite.feature.item.HubSuiteItems.class;
-            int moved = cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
-                    wood, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 8), Integer.MAX_VALUE)
-                    + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
-                            wood, new net.minecraft.world.item.ItemStack(
-                                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 8), Integer.MAX_VALUE);
-            if (moved != 16
-                    || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(wood) != 16) {
-                fail("木桶应正好装 16 个饵，实际装了 " + moved);
+            // 木桶容量 64：用 4 个"满堆叠"（钓饵堆叠上限 16）刚好装满
+            int moved = 0;
+            for (int i = 0; i < 4; i++) {
+                moved += cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                        wood, new net.minecraft.world.item.ItemStack(
+                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 16),
+                        Integer.MAX_VALUE);
+            }
+            if (moved != 64
+                    || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(wood) != 64) {
+                fail("木桶应正好装 64 个饵，实际装了 " + moved);
                 return;
             }
             if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                     wood, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 8), Integer.MAX_VALUE) != 0) {
-                fail("木桶装满 16 后还能继续装");
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 16), Integer.MAX_VALUE) != 0) {
+                fail("木桶装满 64 后还能继续装");
                 return;
             }
             if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
@@ -373,8 +375,8 @@ public final class SelfTest {
             }
             var taken = cn.dreamgary.hubsuite.feature.item.BaitBucketItem.extract(wood);
             if (taken.getItem() != cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT
-                    || taken.getCount() != 8
-                    || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(wood) != 8) {
+                    || taken.getCount() != 16
+                    || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(wood) != 48) {
                 fail("从桶里取出的不对：" + taken);
                 return;
             }
@@ -388,29 +390,29 @@ public final class SelfTest {
                 return;
             }
             if (((cn.dreamgary.hubsuite.feature.item.BaitBucketItem)
-                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET).capacity() != 16
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET).capacity() != 64
                     || ((cn.dreamgary.hubsuite.feature.item.BaitBucketItem)
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.IRON_FISHING_BUCKET).capacity() != 64
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.IRON_FISHING_BUCKET).capacity() != 256
                     || ((cn.dreamgary.hubsuite.feature.item.BaitBucketItem)
                             cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DIAMOND_FISHING_BUCKET).capacity() != 1024) {
-                fail("渔桶容量不是 16 / 64 / 1024");
+                fail("渔桶容量不是 64 / 256 / 1024");
                 return;
             }
-            ok("渔桶装取逻辑正确（16 装满、拒异种、压缩可进、容量 16/64/1024）");
+            ok("渔桶装取逻辑正确（64 装满、拒异种、压缩可进、容量 64/256/1024）");
 
             // 2) 堆叠数
             if (new net.minecraft.world.item.ItemStack(
-                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT).getMaxStackSize() != 8
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT).getMaxStackSize() != 16
                     || new net.minecraft.world.item.ItemStack(
                             cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_NETHER_BAIT)
-                            .getMaxStackSize() != 8
+                            .getMaxStackSize() != 16
                     || new net.minecraft.world.item.ItemStack(
                             cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET)
                             .getMaxStackSize() != 1) {
-                fail("堆叠数不对：饵应为 8、桶应为 1");
+                fail("堆叠数不对：饵应为 16、桶应为 1");
                 return;
             }
-            ok("钓饵全部堆叠 8，渔桶堆叠 1");
+            ok("钓饵全部堆叠 16，渔桶堆叠 1");
 
             // 3) 假玩家：副手桶 → 加速按桶内饵档次、钓上来从桶里扣
             var probe = FakePlayers.spawn(server, "hubsuite_buckettest", lobby.level(), false);
