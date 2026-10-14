@@ -1,6 +1,0 @@
-{
-  "parent": "minecraft:item/generated",
-  "textures": {
-    "layer0": "hubsuite:item/double_compressed_bait"
-  }
-}

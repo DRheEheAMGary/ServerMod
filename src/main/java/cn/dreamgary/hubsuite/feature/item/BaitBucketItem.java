@@ -30,10 +30,11 @@ import java.util.Map;
  * <ul>
  *   <li>背包里把钓饵"点"到桶上（或拿着桶点钓饵）→ 装入：左键全装、右键装一个；</li>
  *   <li>空手右键点桶（或拿着桶右键空格子）→ 取出一组（最多一个堆叠 16 个）；</li>
- *   <li><b>可以混装</b>：6 种饵（普通/地狱 × 普通/压缩/二重压缩）都能进，
+ *   <li><b>可以混装</b>：凡是加进了 item tag {@code #hubsuite:fishing_bait}
+ *       的物品都能进（tag 文件：{@code data/hubsuite/tags/item/fishing_bait.json}），
  *       容量按**总个数**算；</li>
- *   <li>钓鱼时桶放副手即可生效：按档次 <b>二重压缩 → 压缩 → 普通</b> 消耗
- *       （见 {@link FishingBait#select}）。</li>
+ *   <li>钓鱼时桶放副手即可生效：按**档次从高到低**消耗（档次 = 物品稀有度，
+ *       见 {@link FishingBait#select}）。</li>
  * </ul>
  *
  * <p>内容物存在原版的 {@code CUSTOM_DATA} 组件里（存档 / 背包同步都安全）：
@@ -134,7 +135,7 @@ public class BaitBucketItem extends SimplePolymerItem {
      */
     public static int insert(ItemStack bucket, ItemStack source, int max) {
         if (!(bucket.getItem() instanceof BaitBucketItem bucketItem)
-                || source.isEmpty() || !FishingBait.isBait(source.getItem())) {
+                || !FishingBait.isBait(source)) {
             return 0;
         }
         int canTake = Math.min(Math.min(source.getCount(), max),

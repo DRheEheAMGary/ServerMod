@@ -232,8 +232,8 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 | `world/NaturalIslandPlacer.java` | 自然岛：地形 + 宝箱 + 刷怪笼 + **结构模板与底座**（跨 tick 补铺、落盘去重） |
 | `world/StructureFoundations.java` | 悬空结构的底座（区块加载时按 `structureFoundations` 名单补，默认猪灵堡垒、不含要塞） |
 | `feature/FishingLoot.java` + `feature/FishingPresets.java` + `mixin/FishingHookLootMixin.java` | 渔获：按维度挂表、按群系分池、稀有度（含岩浆表） |
-| `feature/FishingBait.java` + `feature/FishingGameplay.java` | 副手钓饵（水/岩浆分档加速、钓到才扣）与岩浆可钓判定 |
-| `feature/item/HubSuiteItems.java` + `feature/item/LavaRodItem.java` | 8 个自定义物品（Polymer 映射；`Item.Properties.setId` 必填） |
+| `feature/FishingBait.java` + `feature/FishingGameplay.java` | 副手钓饵（**tag 驱动** `#hubsuite:fishing_bait` / `#hubsuite:fishing_bait_nether`，档次=稀有度；水/岩浆分族加速、钓到才扣）与岩浆可钓判定 |
+| `feature/item/HubSuiteItems.java` + `feature/item/LavaRodItem.java` | 5 个自定义物品（Polymer 映射；`Item.Properties.setId` 必填） |
 | `mixin/FishingHookMixin.java` + `FishingHookAccessor.java` + `FishingRodCastMixin.java` + `LavaFishingHook.java` | 岩浆算水（`tick` 里两处 `FluidState.is` 都要改）、钓饵加速、抛竿打标记 |
 | `feature/CommandGuard.java` | 命令闸门（创造服屏蔽 40+ 条作弊指令） |
 | `feature/PermissionService.java` | 三级权限降级 |

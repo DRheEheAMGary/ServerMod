@@ -32,13 +32,14 @@ public final class HubSuiteItems {
 
     /** 地狱线：熔岩钓竿的合成材料。 */
     public static Item NETHER_STRING;
-    /** 普通钓饵 / 地狱钓饵 / 两档压缩（全部堆叠 8 —— 大量携带请用渔桶）。 */
-    public static Item BAIT;
-    public static Item NETHER_BAIT;
-    public static Item COMPRESSED_BAIT;
-    public static Item COMPRESSED_NETHER_BAIT;
-    public static Item DOUBLE_COMPRESSED_BAIT;
-    public static Item DOUBLE_COMPRESSED_NETHER_BAIT;
+    /*
+     * 钓饵本身（bait / nether_bait / 压缩档）在 v0.4.0-alpha.7 已**移除**：
+     * 钓饵系统改成"自己注册物品 + 加进 item tag"，判据见
+     * {@link cn.dreamgary.hubsuite.feature.FishingBait}：
+     *   #hubsuite:fishing_bait        —— 能不能放进渔桶 / 当饵用
+     *   #hubsuite:fishing_bait_nether —— 是不是"岩浆那一族"
+     * 档次 = 物品稀有度（COMMON 1 / UNCOMMON 2 / RARE 3 / EPIC 4）。
+     */
     /** 能在岩浆里钓的钓竿。 */
     public static Item LAVA_ROD;
     /** 渔桶：钓饵的收纳袋（容量 16 / 64 / 1024）。 */
@@ -52,12 +53,6 @@ public final class HubSuiteItems {
     /** 在 {@code onInitialize} 里调一次。 */
     public static void register() {
         NETHER_STRING = simple("nether_string", Rarity.COMMON, 64);
-        BAIT = simple("bait", Rarity.COMMON, 16);
-        NETHER_BAIT = simple("nether_bait", Rarity.COMMON, 16);
-        COMPRESSED_BAIT = simple("compressed_bait", Rarity.UNCOMMON, 16);
-        COMPRESSED_NETHER_BAIT = simple("compressed_nether_bait", Rarity.UNCOMMON, 16);
-        DOUBLE_COMPRESSED_BAIT = simple("double_compressed_bait", Rarity.RARE, 16);
-        DOUBLE_COMPRESSED_NETHER_BAIT = simple("double_compressed_nether_bait", Rarity.RARE, 16);
 
         LAVA_ROD = register("lava_rod", new LavaRodItem(props("lava_rod")
                 .stacksTo(1)
@@ -71,7 +66,7 @@ public final class HubSuiteItems {
         DIAMOND_FISHING_BUCKET = bucket("diamond_fishing_bucket", Rarity.RARE, 1024);
 
         cn.dreamgary.hubsuite.HubSuite.logger().info(
-                "已注册 11 个自定义物品（Polymer 硬依赖：原版客户端看到的是试炼钥匙 + 资源包模型）");
+                "已注册 5 个自定义物品（地狱线 / 熔岩钓竿 / 三种渔桶；钓饵改成 tag 驱动，见 #hubsuite:fishing_bait）");
     }
 
     private static Item bucket(String path, Rarity rarity, int capacity) {
