@@ -33,22 +33,24 @@ import java.util.Map;
  *   <li><b>可以混装</b>：凡是加进了 item tag {@code #hubsuite:fishing_bait}
  *       的物品都能进（tag 文件：{@code data/hubsuite/tags/item/fishing_bait.json}），
  *       容量按**总个数**算；</li>
- *   <li>钓鱼时桶放副手即可生效：按**档次从高到低**消耗（档次 = 物品稀有度，
- *       见 {@link FishingBait#select}）。</li>
+ *   <li>钓鱼时桶放副手即可生效：**当栈用** —— 最后放进去的那种在栈顶，
+ *       <b>先消耗栈顶</b>（同一种再装一次会置顶）；</li>
+ *   <li><b>栈顶环境不对就什么都不做</b>：不往下找、也不消耗（见
+ *       {@link FishingBait#select}）。</li>
  * </ul>
  *
  * <p>内容物存在原版的 {@code CUSTOM_DATA} 组件里（存档 / 背包同步都安全）：
- * {@code hubsuite_baits} = { 物品id: 个数 }（旧版单一种的字段读的时候会自动迁移）。
- * 客户端看到的仍是 Polymer 换出来的"试炼钥匙 + 模型"，内容物通过
- * {@link #modifyClientTooltip} 展示；模型按**桶里最高档**的那种饵切换。
+ * {@code hubsuite_baits} = { 物品id: 个数 }，{@code hubsuite_order} = 逗号分隔的
+ * 物品 id（**旧 → 新**，末尾 = 栈顶）。**0.x 阶段不做旧数据兼容**（改格式就是改格式）。
+ * 客户端看到的仍是 Polymer 换出来的"试炼钥匙 + 模型"，
+ * 内容物通过 {@link #modifyClientTooltip} 展示。
  */
 public class BaitBucketItem extends SimplePolymerItem {
 
     /** 新格式：{@code hubsuite_baits} = { 物品id: 个数 }（可以混装）。 */
     private static final String TAG_BAITS = "hubsuite_baits";
-    /** 旧格式（一桶一种）：只读，读到时迁移成新格式。 */
-    private static final String TAG_BAIT = "hubsuite_bait";
-    private static final String TAG_COUNT = "hubsuite_bait_count";
+    /** 栈序：逗号分隔的物品 id，**旧 → 新**（末尾 = 栈顶，下一个被消耗的）。 */
+    private static final String TAG_ORDER = "hubsuite_order";
 
     private final int capacity;
 
@@ -62,7 +64,7 @@ public class BaitBucketItem extends SimplePolymerItem {
     }
 
     /**
-     * 桶里的内容物：{@code 物品 → 个数}，按档次从高到低排（二重压缩 → 压缩 → 普通）。
+     * 桶里的内容物：{@code 物品 → 个数}，**按栈序排（栈顶在最前，即下一个会被消耗的）**。
      * 空桶 / 不是桶 → 空 Map。
      */
     public static Map<Item, Integer> contents(ItemStack bucket) {
@@ -82,26 +84,88 @@ public class BaitBucketItem extends SimplePolymerItem {
                         raw.merge(item, count, Integer::sum);
                     }
                 }
-                // 旧格式（一桶一种）迁移
-                if (raw.isEmpty()) {
-                    int old = tag.getIntOr(TAG_COUNT, 0);
-                    Item item = itemOf(tag.getStringOr(TAG_BAIT, ""));
-                    if (old > 0 && item != null && FishingBait.isBait(item)) {
-                        raw.put(item, old);
-                    }
+            }
+        }
+        // 先按"栈序"（旧 → 新）排，然后**倒过来**变成栈顶在前
+        List<Item> order = stackOrder(bucket, raw);
+        Map<Item, Integer> out = new LinkedHashMap<>();
+        for (int i = order.size() - 1; i >= 0; i--) {
+            Item item = order.get(i);
+            Integer count = raw.get(item);
+            if (count != null && count > 0) {
+                out.put(item, count);
+            }
+        }
+        // 兜底：栈序里没登记到的（异常数据 / 老桶），按物品 id 稳定追加
+        raw.entrySet().stream()
+                .filter(e -> !out.containsKey(e.getKey()))
+                .sorted(java.util.Comparator.comparing(e -> String.valueOf(BuiltInRegistries.ITEM.getKey(e.getKey()))))
+                .forEach(e -> out.put(e.getKey(), e.getValue()));
+        return out;
+    }
+
+    /**
+     * 栈序（**旧 → 新**，末尾 = 栈顶）。
+     *
+     * <p>迁移：没有 {@code hubsuite_order} 字段的老桶（v0.4.0-alpha.7 之前）→
+     * 按"稀有度从低到高"补一个顺序，玩家无感，不用清档。
+     */
+    private static List<Item> stackOrder(ItemStack bucket, Map<Item, Integer> raw) {
+        List<Item> out = new ArrayList<>();
+        CustomData data = bucket.get(DataComponents.CUSTOM_DATA);
+        if (data != null && !data.isEmpty()) {
+            String encoded = data.copyTag().getStringOr(TAG_ORDER, "");
+            for (String id : encoded.split(",")) {
+                if (id.isBlank()) {
+                    continue;
+                }
+                Item item = itemOf(id.trim());
+                if (item != null && raw.containsKey(item) && !out.contains(item)) {
+                    out.add(item);
                 }
             }
         }
-        // 按档次降序（同档按物品 id 稳定排序，tooltip 不会跳来跳去）
-        List<Map.Entry<Item, Integer>> list = new ArrayList<>(raw.entrySet());
-        list.sort((a, b) -> {
-            int byTier = Integer.compare(FishingBait.tierOf(b.getKey()), FishingBait.tierOf(a.getKey()));
-            return byTier != 0 ? byTier : String.valueOf(BuiltInRegistries.ITEM.getKey(a.getKey()))
-                    .compareTo(String.valueOf(BuiltInRegistries.ITEM.getKey(b.getKey())));
-        });
-        Map<Item, Integer> out = new LinkedHashMap<>();
-        for (Map.Entry<Item, Integer> e : list) {
-            out.put(e.getKey(), e.getValue());
+        // 栈序里没登记的（异常数据）：按 map 顺序补到末尾，不做任何"智能"排序
+        for (Item item : raw.keySet()) {
+            if (!out.contains(item)) {
+                out.add(item);
+            }
+        }
+        return out;
+    }
+
+    /** 写回栈序（空则删字段）。 */
+    private static void writeStackOrder(CompoundTag tag, List<Item> order) {
+        StringBuilder sb = new StringBuilder();
+        for (Item item : order) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(BuiltInRegistries.ITEM.getKey(item));
+        }
+        if (sb.length() == 0) {
+            tag.remove(TAG_ORDER);
+        } else {
+            tag.putString(TAG_ORDER, sb.toString());
+        }
+    }
+
+    /** 从 tag 里读栈序（不含兜底），供 insert / remove 改序用。 */
+    private static List<Item> readStackOrder(CompoundTag tag, Map<Item, Integer> raw) {
+        List<Item> out = new ArrayList<>();
+        for (String id : tag.getStringOr(TAG_ORDER, "").split(",")) {
+            if (id.isBlank()) {
+                continue;
+            }
+            Item item = itemOf(id.trim());
+            if (item != null && raw.containsKey(item) && !out.contains(item)) {
+                out.add(item);
+            }
+        }
+        for (Item item : raw.keySet()) {
+            if (!out.contains(item)) {
+                out.add(item);
+            }
         }
         return out;
     }
@@ -115,7 +179,7 @@ public class BaitBucketItem extends SimplePolymerItem {
         return total;
     }
 
-    /** 桶里**最高档**的那种饵（模型 / 取出 / 默认消耗都用它）；空桶 → null。 */
+    /** **栈顶**那种饵（模型 / 取出 / 默认消耗都用它）；空桶 → null。 */
     public static Item containedBait(ItemStack bucket) {
         var it = contents(bucket).entrySet().iterator();
         return it.hasNext() ? it.next().getKey() : null;
@@ -148,8 +212,18 @@ public class BaitBucketItem extends SimplePolymerItem {
             CompoundTag baits = tag.getCompoundOrEmpty(TAG_BAITS);
             baits.putInt(id, baits.getIntOr(id, 0) + canTake);
             tag.put(TAG_BAITS, baits);
-            tag.remove(TAG_BAIT);
-            tag.remove(TAG_COUNT);
+            // **置顶**：刚装进去的（或补货的）那种挪到栈顶
+            Map<Item, Integer> counts = new LinkedHashMap<>();
+            for (String key : baits.keySet()) {
+                Item item = itemOf(key);
+                if (item != null) {
+                    counts.put(item, baits.getIntOr(key, 0));
+                }
+            }
+            List<Item> order = readStackOrder(tag, counts);
+            order.remove(source.getItem());
+            order.add(source.getItem());
+            writeStackOrder(tag, order);
         });
         source.shrink(canTake);
         return canTake;
@@ -197,13 +271,22 @@ public class BaitBucketItem extends SimplePolymerItem {
             } else {
                 baits.remove(id);
             }
+            Map<Item, Integer> counts = new LinkedHashMap<>();
+            for (String key : baits.keySet()) {
+                Item item = itemOf(key);
+                if (item != null && baits.getIntOr(key, 0) > 0) {
+                    counts.put(item, baits.getIntOr(key, 0));
+                }
+            }
             if (baits.isEmpty()) {
                 tag.remove(TAG_BAITS);
+                tag.remove(TAG_ORDER);
             } else {
                 tag.put(TAG_BAITS, baits);
+                List<Item> order = readStackOrder(tag, counts);
+                order.removeIf(item -> !counts.containsKey(item));
+                writeStackOrder(tag, order);
             }
-            tag.remove(TAG_BAIT);
-            tag.remove(TAG_COUNT);
         });
         return take;
     }
@@ -346,6 +429,13 @@ public class BaitBucketItem extends SimplePolymerItem {
         }
         tooltip.add(Component.literal("内容物 " + containedCount(stack) + " / " + capacity)
                 .withStyle(ChatFormatting.GRAY));
+        Item top = containedBait(stack);
+        if (top != null) {
+            tooltip.add(Component.literal("栈顶（下一个消耗）：")
+                    .append(Component.translatable(top.getDescriptionId()))
+                    .append(Component.literal(" × " + countOf(stack, top)))
+                    .withStyle(ChatFormatting.GRAY));
+        }
         tooltip.add(Component.literal("左键点=全装 · 右键点=装一个 · 右键空格子=取一组")
                 .withStyle(ChatFormatting.DARK_GRAY));
         int lines = 0;

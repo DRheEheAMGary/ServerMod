@@ -144,41 +144,37 @@ public final class FishingBait {
         if (off.isEmpty()) {
             return Selection.NONE;
         }
-        Map<Item, Integer> pool;
-        boolean bucket = off.getItem() instanceof BaitBucketItem;
-        if (bucket) {
-            pool = BaitBucketItem.contents(off);
-        } else if (isBait(off)) {
-            pool = Map.of(off.getItem(), off.getCount());
-        } else {
-            return Selection.NONE;
+        /*
+         * 渔桶：**只看栈顶那一种**（最后放进去的），不往下找。
+         *   · 栈顶族匹配 → 按它自己的档次加速、钓上来扣 1 个；
+         *   · 栈顶族不匹配 → **什么都不做**（不加速、不减速、不扣），
+         *     即使下面压着正确族的饵也不去用（用户定的规则）。
+         */
+        if (off.getItem() instanceof BaitBucketItem) {
+            Item top = BaitBucketItem.containedBait(off);
+            if (top == null || isNetherBait(top) != inLava) {
+                return Selection.NONE;
+            }
+            int tier = tierOf(top);
+            return tier > 0 ? new Selection(top, speedupOfTier(tier), tier, false) : Selection.NONE;
         }
 
-        // 1) 同族最高档（桶里的 contents 已按档次降序排好）
-        for (Map.Entry<Item, Integer> e : pool.entrySet()) {
-            if (e.getValue() <= 0 || isNetherBait(e.getKey()) != inLava) {
-                continue;
-            }
-            int tier = tierOf(e.getKey());
-            if (tier > 0) {
-                return new Selection(e.getKey(), speedupOfTier(tier), tier, false);
-            }
-        }
-
-        // 2) 只有另一族的饵
-        if (bucket) {
+        /*
+         * 散饵（副手直接放饵）：
+         *   · 族匹配 → 加速；
+         *   · 族不匹配 → **减速**（惩罚），而且照样扣 1 个。
+         */
+        if (!isBait(off)) {
             return Selection.NONE;
         }
-        for (Map.Entry<Item, Integer> e : pool.entrySet()) {
-            if (e.getValue() <= 0) {
-                continue;
-            }
-            int tier = tierOf(e.getKey());
-            if (tier > 0) {
-                return new Selection(e.getKey(), -mismatchPenalty(), tier, true);
-            }
+        int tier = tierOf(off.getItem());
+        if (tier <= 0) {
+            return Selection.NONE;
         }
-        return Selection.NONE;
+        if (isNetherBait(off) == inLava) {
+            return new Selection(off.getItem(), speedupOfTier(tier), tier, false);
+        }
+        return new Selection(off.getItem(), -mismatchPenalty(), tier, true);
     }
 
     /** 副手上"实际生效的饵"：散饵就是它自己；渔桶就是桶里最高档的那种。 */

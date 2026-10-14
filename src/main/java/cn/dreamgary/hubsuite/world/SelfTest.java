@@ -795,7 +795,7 @@ public final class SelfTest {
                     return;
                 }
 
-                // 3c) 混装消耗顺序：稀有度高的先扣（heart 3 档 → shell 2 档 → cod 1 档）
+                // 3c) 栈式消耗：后进先出（栈顶 = 最后放进去的），补货置顶
                 var order = new net.minecraft.world.item.ItemStack(
                         cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
                 cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
@@ -807,26 +807,63 @@ public final class SelfTest {
                 cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                         order, new net.minecraft.world.item.ItemStack(
                                 net.minecraft.world.item.Items.NAUTILUS_SHELL, 1), Integer.MAX_VALUE);
+                if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedBait(order)
+                        != net.minecraft.world.item.Items.NAUTILUS_SHELL) {
+                    fail("栈顶应是最后放进去的 nautilus_shell，实际 "
+                            + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedBait(order));
+                    return;
+                }
                 probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND, order);
                 double wantTop = cn.dreamgary.hubsuite.feature.FishingBait.speedupOf(
-                        net.minecraft.world.item.Items.NETHER_STAR);
+                        net.minecraft.world.item.Items.NAUTILUS_SHELL);
                 double gotTop = cn.dreamgary.hubsuite.feature.FishingBait.speedup(probe, false);
                 if (Math.abs(gotTop - wantTop) > 0.0001) {
-                    fail("混装时应该按最高档加速 " + wantTop + "，实际 " + gotTop);
+                    fail("栈顶是 nautilus_shell，应按它的档次加速 " + wantTop + "，实际 " + gotTop);
                     return;
                 }
                 cn.dreamgary.hubsuite.feature.FishingBait.consume(probe, false);
                 if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(order,
-                        net.minecraft.world.item.Items.NETHER_STAR) != 0
+                        net.minecraft.world.item.Items.NAUTILUS_SHELL) != 0
                         || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(order,
-                                net.minecraft.world.item.Items.NAUTILUS_SHELL) != 1
+                                net.minecraft.world.item.Items.NETHER_STAR) != 1
                         || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(order,
                                 net.minecraft.world.item.Items.COD) != 1) {
-                    fail("混装消耗顺序不是 稀有度高 → 低，实际剩下 "
+                    fail("LIFO 应该只扣栈顶那种，实际剩下 "
                             + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(order));
                     return;
                 }
-                ok("桶里只有错误族的饵时完全不生效（不减速、不扣）；混装按稀有度高 → 低消耗");
+                // 补货置顶：再塞 1 个 cod，它应该变成栈顶
+                cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                        order, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD, 1),
+                        Integer.MAX_VALUE);
+                if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedBait(order)
+                        != net.minecraft.world.item.Items.COD) {
+                    fail("补货应该置顶（cod 变成栈顶），实际 "
+                            + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(order));
+                    return;
+                }
+
+                // 3d) 栈顶族不对 → 什么都不做，**而且不往下找**（下面还压着水里那一族的 cod）
+                var mixed2 = new net.minecraft.world.item.ItemStack(
+                        cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+                cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                        mixed2, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD, 2),
+                        Integer.MAX_VALUE);
+                cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                        mixed2, new net.minecraft.world.item.ItemStack(
+                                net.minecraft.world.item.Items.MAGMA_CREAM, 1), Integer.MAX_VALUE);
+                probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND, mixed2);
+                if (cn.dreamgary.hubsuite.feature.FishingBait.speedup(probe, false) != 0) {
+                    fail("栈顶是岩浆族的 magma_cream、人在水里：应该完全不生效，也不该往下找 cod");
+                    return;
+                }
+                cn.dreamgary.hubsuite.feature.FishingBait.consume(probe, false);
+                if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(mixed2) != 3) {
+                    fail("栈顶族不对时不该扣饵，实际剩 "
+                            + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(mixed2));
+                    return;
+                }
+                ok("栈式消耗：后进先出 + 补货置顶；栈顶族不对就什么都不做（不往下找、不扣）");
 
                 // 3d) 副手直接放散饵：水里 +；岩浆里（普通饵）减速，并且照样扣
                 probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND,
