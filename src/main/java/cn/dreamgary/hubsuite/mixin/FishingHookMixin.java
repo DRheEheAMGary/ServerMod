@@ -3,7 +3,9 @@ package cn.dreamgary.hubsuite.mixin;
 import cn.dreamgary.hubsuite.feature.FishingGameplay;
 import cn.dreamgary.hubsuite.feature.LavaFishingHook;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.FishingHook;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -54,6 +56,37 @@ public abstract class FishingHookMixin implements LavaFishingHook {
             return true;
         }
         return FishingGameplay.canFishInLava((FishingHook) (Object) this);
+    }
+
+    /**
+     * 原版 {@code FishingHook.shouldStopFishing(Player)} 是**身份比较**：
+     *
+     * <pre>
+     * boolean mainRod = main.getMainHandItem().is(Items.FISHING_ROD);
+     * boolean offRod  = player.getOffhandItem().is(Items.FISHING_ROD);
+     * if ((mainRod || offRod) &amp;&amp; distanceToSqr(player) &lt;= 1024) return false;
+     * this.discard();   // ← 手里不是**原版**钓竿就立刻收掉
+     * </pre>
+     *
+     * <p>我们的熔岩钓竿是自有 id（{@code hubsuite:lava_rod}），这个检查必然为假 ——
+     * 症状就是实测的<b>"一甩竿浮标就消失，什么都没碰到"</b>（浮标下一 tick 就被
+     * {@code discard()}）。这里只在"手里确实拿着我们的竿"时接管：继续钓；
+     * 距离超 1024 / 玩家不能交互仍然按原版收掉。
+     */
+    @Inject(method = "shouldStopFishing", at = @At("HEAD"), cancellable = true)
+    private void hubsuite$ourRodCountsAsRod(Player player, CallbackInfoReturnable<Boolean> cir) {
+        if (!player.canInteractWithLevel()) {
+            return;
+        }
+        boolean ours = cn.dreamgary.hubsuite.feature.item.LavaRodItem.isLavaRod(player.getMainHandItem())
+                || cn.dreamgary.hubsuite.feature.item.LavaRodItem.isLavaRod(player.getOffhandItem());
+        if (!ours) {
+            return;
+        }
+        FishingHook self = (FishingHook) (Object) this;
+        if (self.distanceToSqr(player) <= 1024.0) {
+            cir.setReturnValue(false);
+        }
     }
 
     @Inject(method = "tick", at = @At("HEAD"))

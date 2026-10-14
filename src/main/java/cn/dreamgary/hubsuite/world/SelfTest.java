@@ -172,6 +172,7 @@ public final class SelfTest {
         step("切服会真的放掉成就/统计缓存（隔离的前提）", this::checkAuxCacheEvictedOnSwitch);
         step("自定义物品 / 岩浆渔获 / 配方", this::checkCustomItemsAndFishing);
         step("渔桶：装饵 / 容量 / 钓鱼消耗", this::checkBaitBuckets);
+        step("熔岩钓竿甩竿后浮标留得住", this::checkLavaRodCast);
         step("火能在本模组的维度里点燃传送门", this::checkFireCanIgnitePortal);
     }
 
@@ -327,6 +328,70 @@ public final class SelfTest {
         }
     }
 
+
+    /**
+     * 熔岩钓竿真的能甩出去、浮标留得住。
+     *
+     * <p>锁住用户实测："熔岩钓竿一扔出去浮标就消失，我都没收杆"。
+     *
+     * <p>根因是原版 {@code FishingHook.shouldStopFishing} 用的是**身份比较**
+     * {@code stack.is(Items.FISHING_ROD)}（见 {@code javap} 字节码：偏移 18/27 处
+     * {@code getstatic Items.FISHING_ROD} + {@code ItemStack.is(Object)}）——
+     * 手里拿的不是**原版**钓竿就立刻 {@code discard()}。我们的竿是自有 id
+     * （{@code hubsuite:lava_rod}），所以浮标生成后下一 tick 就被收掉。
+     *
+     * <p>这里直接复现：假玩家拿竿 → 调 {@code use} 甩出去 → 手动 tick 10 次，
+     * 浮标必须还在。
+     */
+    private void checkLavaRodCast() {
+        var lobby = worlds.lobby().orElse(null);
+        if (lobby == null) {
+            fail("缺少大厅，跳过熔岩钓竿甩竿检查");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_rodtest", lobby.level(), false);
+        if (probe == null) {
+            fail("熔岩钓竿检查用假玩家创建失败");
+            return;
+        }
+        try {
+            var level = (net.minecraft.server.level.ServerLevel) probe.level();
+            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND,
+                    new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD));
+            probe.fishing = null;
+            var result = cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD
+                    .use(level, probe, net.minecraft.world.InteractionHand.MAIN_HAND);
+            net.minecraft.world.entity.projectile.FishingHook hook = probe.fishing;
+            if (hook == null) {
+                fail("熔岩钓竿甩出去没生成浮标（use 返回 " + result + "）");
+                return;
+            }
+            if (!((cn.dreamgary.hubsuite.feature.LavaFishingHook) hook).hubsuite$fromLavaRod()) {
+                fail("浮标没被标记成熔岩竿抛的（岩浆钓鱼判定会失效）");
+                return;
+            }
+            for (int i = 1; i <= 10; i++) {
+                hook.tick();
+                if (hook.isRemoved()) {
+                    fail("浮标第 " + i + " tick 就被收掉了 —— 原版 shouldStopFishing 认为手里不是钓竿");
+                    return;
+                }
+            }
+            ok("熔岩钓竿甩竿正常：浮标留住 10 tick，且被标记为熔岩钩");
+        } catch (Throwable t) {
+            fail("熔岩钓竿甩竿检查异常：" + t);
+        } finally {
+            try {
+                if (probe.fishing != null) {
+                    probe.fishing.discard();
+                }
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 清理失败不影响结论
+            }
+        }
+    }
 
     /**
      * 渔桶（钓饵收纳袋）。
