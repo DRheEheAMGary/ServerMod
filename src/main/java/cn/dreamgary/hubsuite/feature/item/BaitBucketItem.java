@@ -159,11 +159,17 @@ public class BaitBucketItem extends SimplePolymerItem {
      * 空桶返回 {@link ItemStack#EMPTY}。
      */
     public static ItemStack extract(ItemStack bucket) {
+        return extract(bucket, Integer.MAX_VALUE);
+    }
+
+    /** 从桶里取出**最高档**的饵，最多 {@code max} 个。 */
+    public static ItemStack extract(ItemStack bucket, int max) {
         Item contained = containedBait(bucket);
-        if (contained == null) {
+        if (contained == null || max <= 0) {
             return ItemStack.EMPTY;
         }
-        int take = Math.min(countOf(bucket, contained), contained.getDefaultMaxStackSize());
+        int take = Math.min(Math.min(countOf(bucket, contained), max),
+                contained.getDefaultMaxStackSize());
         if (take <= 0) {
             return ItemStack.EMPTY;
         }
@@ -206,61 +212,109 @@ public class BaitBucketItem extends SimplePolymerItem {
         return remove(bucket, containedBait(bucket), n);
     }
 
-    /** 桶在手上，点到别的格子上。 */
+    /**
+     * 桶在光标上，点到别的格子上（原版收纳袋的交互）。
+     *
+     * <p>两个坑（原来都踩了）：
+     * <ol>
+     *   <li><b>取饵前必须先问目的地收不收</b>：原来是"先 extract 再 mayPlace"，
+     *       目的地拒收（比如只能放燃料/盔甲的格子）时饵已经被扣掉且 {@code taken}
+     *       被丢弃 → <b>白丢物品</b>；</li>
+     *   <li><b>处理过的点击要吃掉</b>：原来装不进去就 return false，默认逻辑接着跑，
+     *       会把光标上的桶和格子里的饵<b>对调</b>，玩家看着就是"桶跑进背包了"。</li>
+     * </ol>
+     */
     @Override
     public boolean overrideStackedOnOther(ItemStack bucket, Slot slot, ClickAction action, Player player) {
         ItemStack inSlot = slot.getItem();
         if (!inSlot.isEmpty()) {
-            // 桶点饵 → 装入（左键全装，右键装一个）
-            if (!FishingBait.isBait(inSlot.getItem()) || !slot.mayPickup(player)) {
-                return false;
+            // 桶点饵 → 装入（左键全装、右键装一个）
+            if (FishingBait.isBait(inSlot.getItem()) && slot.mayPickup(player)) {
+                int moved = insert(bucket, inSlot, action == ClickAction.PRIMARY
+                        ? Integer.MAX_VALUE : 1);
+                if (moved > 0) {
+                    slot.setChanged();
+                    playInsertSound(player);
+                } else {
+                    playInsertFailSound(player);
+                }
             }
-            int moved = insert(bucket, inSlot, action == ClickAction.PRIMARY ? Integer.MAX_VALUE : 1);
-            if (moved > 0) {
-                slot.setChanged();
-                return true;
-            }
-            return false;
+            // 格子不是空的就吃掉这次点击（原版收纳袋同语义）
+            return true;
         }
         // 桶右键点空格子 → 取一组放进那格
         if (action == ClickAction.SECONDARY) {
-            ItemStack taken = extract(bucket);
-            if (!taken.isEmpty() && slot.mayPlace(taken)) {
-                slot.safeInsert(taken);
+            Item held = containedBait(bucket);
+            if (held == null) {
+                return false;
+            }
+            int want = Math.min(countOf(bucket, held), held.getDefaultMaxStackSize());
+            if (!slot.mayPlace(new ItemStack(held, want))) {
+                return false;   // 目的地不收 → 一个都不许扣
+            }
+            ItemStack taken = extract(bucket, want);
+            if (!taken.isEmpty()) {
+                ItemStack left = slot.safeInsert(taken);
+                if (!left.isEmpty()) {
+                    // 理论上不会发生（空格子 + 一组 = 堆叠上限）；真发生了就塞回桶里，别丢
+                    insert(bucket, left, Integer.MAX_VALUE);
+                }
                 slot.setChanged();
+                playRemoveOneSound(player);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 别的东西点到桶上（桶在格子里）。
+     *
+     * <p>补了两处原版语义：取饵前检查 {@code slot.allowModification(player)}
+     * （只读格子不给取，否则是刷物品的缺口）；装入/取出都出声。
+     */
+    @Override
+    public boolean overrideOtherStackedOnMe(ItemStack bucket, ItemStack carried, Slot slot, ClickAction action,
+                                            Player player, SlotAccess carriedAccess) {
+        if (!carried.isEmpty()) {
+            if (!FishingBait.isBait(carried.getItem()) || !slot.allowModification(player)) {
+                return false;   // 不是饵 / 这个格子不让改 → 交回默认逻辑
+            }
+            int moved = insert(bucket, carried, action == ClickAction.PRIMARY ? Integer.MAX_VALUE : 1);
+            if (moved > 0) {
+                carriedAccess.set(carried.isEmpty() ? ItemStack.EMPTY : carried);
+                slot.setChanged();
+                playInsertSound(player);
+            } else {
+                playInsertFailSound(player);
+            }
+            return true;   // 吃掉点击，别让默认逻辑把饵和桶对调
+        }
+        // 空手右键点桶 → 取一组到手上
+        if (action == ClickAction.SECONDARY && slot.allowModification(player)) {
+            ItemStack taken = extract(bucket);
+            if (!taken.isEmpty()) {
+                carriedAccess.set(taken);
+                slot.setChanged();
+                playRemoveOneSound(player);
                 return true;
             }
         }
         return false;
     }
 
-    /** 别的东西点到桶上（桶在格子里）。 */
-    @Override
-    public boolean overrideOtherStackedOnMe(ItemStack bucket, ItemStack carried, Slot slot, ClickAction action,
-                                            Player player, SlotAccess carriedAccess) {
-        if (!carried.isEmpty()) {
-            // 饵点桶 → 装入
-            if (!FishingBait.isBait(carried.getItem())) {
-                return false;
-            }
-            int moved = insert(bucket, carried, action == ClickAction.PRIMARY ? Integer.MAX_VALUE : 1);
-            if (moved > 0) {
-                carriedAccess.set(carried.isEmpty() ? ItemStack.EMPTY : carried);
-                slot.setChanged();
-                return true;
-            }
-            return false;
-        }
-        // 空手右键点桶 → 取一组到手上
-        if (action == ClickAction.SECONDARY) {
-            ItemStack taken = extract(bucket);
-            if (!taken.isEmpty()) {
-                carriedAccess.set(taken);
-                slot.setChanged();
-                return true;
-            }
-        }
-        return false;
+    private static void playInsertSound(Player player) {
+        player.playSound(net.minecraft.sounds.SoundEvents.BUNDLE_INSERT, 0.8F,
+                0.8F + player.level().getRandom().nextFloat() * 0.4F);
+    }
+
+    private static void playInsertFailSound(Player player) {
+        player.playSound(net.minecraft.sounds.SoundEvents.BUNDLE_INSERT_FAIL, 1.0F, 1.0F);
+    }
+
+    private static void playRemoveOneSound(Player player) {
+        player.playSound(net.minecraft.sounds.SoundEvents.BUNDLE_REMOVE_ONE, 0.8F,
+                0.8F + player.level().getRandom().nextFloat() * 0.4F);
     }
 
     /**

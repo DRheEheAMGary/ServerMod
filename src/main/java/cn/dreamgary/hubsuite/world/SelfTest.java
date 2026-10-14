@@ -174,6 +174,7 @@ public final class SelfTest {
         step("渔桶：装饵 / 容量 / 钓鱼消耗", this::checkBaitBuckets);
         step("熔岩钓竿甩竿后浮标留得住", this::checkLavaRodCast);
         step("岩浆钓鱼：浮标不掉、不着火、能进浮漂状态", this::checkLavaFishing);
+        step("渔桶的点击交互（装 / 取 / 拒绝 / 只读格）", this::checkBaitBucketClicks);
         step("火能在本模组的维度里点燃传送门", this::checkFireCanIgnitePortal);
     }
 
@@ -329,6 +330,142 @@ public final class SelfTest {
         }
     }
 
+
+    /**
+     * 渔桶的**点击交互**（这一层以前完全没有自检，两个 bug 就是从这漏过去的）。
+     *
+     * <p>锁四件事：
+     * <ol>
+     *   <li>目的地格子**拒收**这种物品时，桶里的饵一个都不能少
+     *       （原来是"先扣再判"，拒收就白丢）；</li>
+     *   <li>空格子右键 → 取出一组；</li>
+     *   <li>光标上的饵点到桶上 → 装进去、光标扣掉；</li>
+     *   <li>{@code allowModification == false} 的只读格子 → 不许取出。</li>
+     * </ol>
+     */
+    private void checkBaitBucketClicks() {
+        var lobby = worlds.lobby().orElse(null);
+        if (lobby == null) {
+            fail("缺少大厅，跳过渔桶点击检查");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_bucketclick", lobby.level(), false);
+        if (probe == null) {
+            fail("渔桶点击检查用假玩家创建失败");
+            return;
+        }
+        try {
+            var bucketItem = (cn.dreamgary.hubsuite.feature.item.BaitBucketItem)
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET;
+            var container = new net.minecraft.world.SimpleContainer(1);
+
+            // 1) 目的地拒收 → 桶里必须一个不少
+            var bucket = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(bucket,
+                    new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 8), Integer.MAX_VALUE);
+            var refuse = new net.minecraft.world.inventory.Slot(container, 0, 0, 0) {
+                @Override
+                public boolean mayPlace(net.minecraft.world.item.ItemStack stack) {
+                    return false;
+                }
+            };
+            bucketItem.overrideStackedOnOther(bucket, refuse, net.minecraft.world.inventory.ClickAction.SECONDARY, probe);
+            if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket) != 8) {
+                fail("目的地格子拒收时，桶里的饵被扣掉了（丢物品）：只剩 "
+                        + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket));
+                return;
+            }
+
+            // 2) 正常空格子右键 → 取出一组（这里是 8 个）
+            var normal = new net.minecraft.world.inventory.Slot(container, 0, 0, 0);
+            bucketItem.overrideStackedOnOther(bucket, normal, net.minecraft.world.inventory.ClickAction.SECONDARY, probe);
+            if (normal.getItem().getItem() != cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT
+                    || normal.getItem().getCount() != 8
+                    || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket) != 0) {
+                fail("空格子取一组不对：格子=" + normal.getItem()
+                        + "，桶里剩 " + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket));
+                return;
+            }
+
+            // 3) 光标上的饵点到桶上（桶在格子里）
+            var bucket2 = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            var slot2 = new net.minecraft.world.inventory.Slot(container, 0, 0, 0);
+            slot2.set(bucket2);
+            final net.minecraft.world.item.ItemStack[] cursor = {
+                    new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_BAIT, 3)};
+            var access = new net.minecraft.world.entity.SlotAccess() {
+                @Override
+                public net.minecraft.world.item.ItemStack get() {
+                    return cursor[0];
+                }
+
+                @Override
+                public boolean set(net.minecraft.world.item.ItemStack stack) {
+                    cursor[0] = stack;
+                    return true;
+                }
+            };
+            bucketItem.overrideOtherStackedOnMe(bucket2, cursor[0], slot2,
+                    net.minecraft.world.inventory.ClickAction.PRIMARY, probe, access);
+            if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(bucket2,
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_BAIT) != 3
+                    || !cursor[0].isEmpty()) {
+                fail("饵点到桶上没装好：桶里 "
+                        + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(bucket2)
+                        + "，光标剩 " + cursor[0].getCount());
+                return;
+            }
+
+            // 4) 只读格子（allowModification=false）不许取出
+            var locked = new net.minecraft.world.inventory.Slot(container, 0, 0, 0) {
+                @Override
+                public boolean allowModification(net.minecraft.world.entity.player.Player p) {
+                    return false;
+                }
+            };
+            var bucket3 = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(bucket3,
+                    new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 5), Integer.MAX_VALUE);
+            locked.set(bucket3);
+            final net.minecraft.world.item.ItemStack[] empty = {net.minecraft.world.item.ItemStack.EMPTY};
+            var access2 = new net.minecraft.world.entity.SlotAccess() {
+                @Override
+                public net.minecraft.world.item.ItemStack get() {
+                    return empty[0];
+                }
+
+                @Override
+                public boolean set(net.minecraft.world.item.ItemStack stack) {
+                    empty[0] = stack;
+                    return true;
+                }
+            };
+            bucketItem.overrideOtherStackedOnMe(bucket3, net.minecraft.world.item.ItemStack.EMPTY, locked,
+                    net.minecraft.world.inventory.ClickAction.SECONDARY, probe, access2);
+            if (!empty[0].isEmpty()
+                    || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket3) != 5) {
+                fail("只读格子不该能取出饵：光标=" + empty[0]
+                        + "，桶里剩 " + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket3));
+                return;
+            }
+
+            ok("渔桶点击交互正常（拒收不丢饵、空格取一组、点桶装入、只读格不给取）");
+        } catch (Throwable t) {
+            fail("渔桶点击检查异常：" + t);
+        } finally {
+            try {
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 清理失败不影响结论
+            }
+        }
+    }
 
     /**
      * 岩浆钓鱼：浮标泡在岩浆里要能进入"浮漂（BOBBING）"状态、并且不着火。
