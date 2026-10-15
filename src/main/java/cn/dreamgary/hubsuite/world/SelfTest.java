@@ -1897,7 +1897,34 @@ public final class SelfTest {
                     + "，上限 " + tolerant.computedMaxDurability());
         }
 
-        // --- 6) NBT 键集合（改名 / 增删都会当场失败）+ 编码稳定性 ---
+        // --- 6) 渲染提示：4 个材质 id 进 custom_model_data 的字符串槽（客户端据此分层）---
+        var hintStack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        var hinted = cn.dreamgary.hubsuite.rod.RodData.defaults()
+                .withParts("diamond", "nether_string", "obsidian").withUpgrade("lapis");
+        hinted.writeTo(hintStack);
+        var hint = hintStack.get(net.minecraft.core.component.DataComponents.CUSTOM_MODEL_DATA);
+        List<String> hintWrong = new ArrayList<>();
+        if (hint == null) {
+            hintWrong.add("没有写 custom_model_data");
+        } else {
+            expectStr(hintWrong, "第 0 槽（杆）", "diamond", hint.getString(0));
+            expectStr(hintWrong, "第 1 槽（线）", "nether_string", hint.getString(1));
+            expectStr(hintWrong, "第 2 槽（钩）", "obsidian", hint.getString(2));
+            expectStr(hintWrong, "第 3 槽（升级）", "lapis", hint.getString(3));
+        }
+        if (hintWrong.isEmpty()) {
+            ok("渲染提示正确：custom_model_data 字符串槽 = 杆/线/钩/升级 的材质 id（客户端按 index 选层）");
+        } else {
+            fail("渲染提示不对：" + String.join("；", hintWrong) + " —— 客户端会选错层");
+        }
+        cn.dreamgary.hubsuite.rod.RodData.clear(hintStack);
+        if (hintStack.get(net.minecraft.core.component.DataComponents.CUSTOM_MODEL_DATA) == null) {
+            ok("清掉钓竿数据后渲染提示一起没了（还原成普通原版钓竿，客户端走 vanilla 模型）");
+        } else {
+            fail("clear() 之后 custom_model_data 还在，原版钓竿会被当成我们的竿渲染");
+        }
+
+        // --- 7) NBT 键集合（改名 / 增删都会当场失败）+ 编码稳定性 ---
         var rodTag = written.toTag();
         if (!ROD_NBT_KEYS.equals(rodTag.keySet())) {
             fail("钓竿数据 NBT 的键变了：" + rodTag.keySet() + "，契约里是 " + ROD_NBT_KEYS

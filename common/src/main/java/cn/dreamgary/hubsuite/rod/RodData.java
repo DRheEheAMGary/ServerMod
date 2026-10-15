@@ -1,9 +1,11 @@
 package cn.dreamgary.hubsuite.rod;
 
+import java.util.List;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
+import net.minecraft.world.item.component.CustomModelData;
 
 /**
  * 一根钓竿的全部自定义数据（见 docs/钓竿系统方案.md 第 2 节）。
@@ -219,14 +221,35 @@ public record RodData(String rod, String line, String hook, String upgrade,
         return fromTag(tag.getCompoundOrEmpty(TAG_ROOT));
     }
 
-    /** 写到物品上（覆盖）。 */
+    /** 写到物品上（覆盖）：数据本体 + 客户端渲染用的材质提示。 */
     public void writeTo(ItemStack stack) {
         CompoundTag tag = toTag();
         CustomData.update(DataComponents.CUSTOM_DATA, stack, custom -> custom.put(TAG_ROOT, tag));
+        stack.set(DataComponents.CUSTOM_MODEL_DATA, modelHint());
+    }
+
+    /**
+     * 渲染提示：把 4 个材质 id 依次放进 {@code custom_model_data} 的**字符串槽**。
+     *
+     * <p>客户端就用它分层：{@code assets/minecraft/items/fishing_rod.json} 里对
+     * index 0/1/2/3 各做一次 {@code minecraft:select}，再 {@code minecraft:composite} 叠起来。
+     * 认不出来的材质 id 在客户端会落到 {@code fallback}（占位图）—— 这就是契约里的
+     * "未知即占位"，而且是原版模型系统自己实现的，不需要我们写渲染代码。
+     *
+     * <p>升级槽空着时放空串：客户端那一层的 fallback 是 {@code minecraft:empty}（不画）。
+     */
+    public CustomModelData modelHint() {
+        return new CustomModelData(List.of(), List.of(), List.of(
+                safe(rod), safe(line), safe(hook), upgrade == null ? "" : upgrade.trim()), List.of());
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value.trim();
     }
 
     /** 抹掉钓竿数据（把竿还原成"没配置过的原版钓竿"）。 */
     public static void clear(ItemStack stack) {
         CustomData.update(DataComponents.CUSTOM_DATA, stack, custom -> custom.remove(TAG_ROOT));
+        stack.remove(DataComponents.CUSTOM_MODEL_DATA);
     }
 }

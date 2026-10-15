@@ -27,14 +27,45 @@ public final class DevAutoConnect {
     /** 触发用的系统属性名。 */
     public static final String PROPERTY = "hubsuite.autoconnect";
 
+    /** 开发服登录墙用的账号密码（只有开发模式才会发出去）。 */
+    private static final String DEV_PASSWORD = "hubsuite-dev";
+
     private static int ticks;
     private static boolean fired;
+    private static int joinedTicks;
 
     private DevAutoConnect() {
     }
 
     public static void register(String target) {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            /*
+             * 进服之后自动注册/登录。
+             *
+             * 开发服有登录墙，不登录的话屏幕上一直是注册表单 —— 看不到手里的东西、
+             * 也看不到任何渲染效果，无人值守截图就白截了。这里是开发模式专用
+             * （只有传了 -Dhubsuite.autoconnect 才会走到）。
+             */
+            if (fired && client.player != null) {
+                joinedTicks++;
+                if (joinedTicks == 40) {
+                    HubSuiteClient.LOGGER.info("开发模式：自动注册/登录 {}", client.player.getName().getString());
+                    client.player.connection.sendCommand("register " + DEV_PASSWORD + " " + DEV_PASSWORD);
+                } else if (joinedTicks == 120) {
+                    client.player.connection.sendCommand("login " + DEV_PASSWORD);
+                } else if (joinedTicks == 200) {
+                    /*
+                     * 用命令登录之后，服务器先前弹出的注册对话框**不会自己关掉**（它只认对话框那条路），
+                     * 于是屏幕上一直挂着一张表单，什么都看不见。开发模式里直接把它关掉 ——
+                     * 这也是实测发现的一个小毛病：走 /register 命令登录的玩家会看到一张过期的对话框。
+                     */
+                    if (client.screen != null) {
+                        HubSuiteClient.LOGGER.info("开发模式：关掉登录期间残留的界面 {}", client.screen.getClass().getName());
+                        client.setScreen(null);
+                    }
+                }
+                return;
+            }
             if (fired) {
                 return;
             }

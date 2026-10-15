@@ -38,9 +38,19 @@ public final class DevItemWatch {
                 }
                 String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
                 Identifier model = stack.get(DataComponents.ITEM_MODEL);
-                boolean ours = id.startsWith("hubsuite:") || (model != null && model.getNamespace().equals("hubsuite"));
+                var hint = stack.get(DataComponents.CUSTOM_MODEL_DATA);
+                boolean ours = id.startsWith("hubsuite:") || (model != null && model.getNamespace().equals("hubsuite"))
+                        || (hint != null && !hint.strings().isEmpty());
                 if (ours) {
-                    found.add(id + " x" + stack.getCount() + "（模型 " + (model == null ? "默认" : model) + "）");
+                    StringBuilder slots = new StringBuilder();
+                    if (hint != null) {
+                        for (int i = 0; i < hint.strings().size(); i++) {
+                            slots.append(i > 0 ? "/" : "").append(hint.getString(i));
+                        }
+                    }
+                    found.add(id + " x" + stack.getCount()
+                            + "（模型 " + (model == null ? "默认" : model)
+                            + "，渲染槽 " + (slots.length() == 0 ? "无" : slots.toString()) + "）");
                 }
             }
             String now = String.join("；", found);

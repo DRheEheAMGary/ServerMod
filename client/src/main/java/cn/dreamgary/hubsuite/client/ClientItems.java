@@ -77,10 +77,44 @@ public final class ClientItems {
                     }
                 }
             }
+            // 钓竿的分层渲染素材（全部是原版模型系统读的 JSON，不需要我们写渲染代码）
+            List<String> rodFiles = new ArrayList<>();
+            rodFiles.add("assets/minecraft/items/fishing_rod.json");   // 覆盖原版钓竿的物品定义
+            for (var m : cn.dreamgary.hubsuite.rod.RodMaterials.rods()) {
+                rodFiles.add("assets/hubsuite/models/item/rod/rod_" + m.id() + ".json");
+                rodFiles.add("assets/hubsuite/textures/item/rod/rod_" + m.id() + ".png");
+            }
+            for (var m : cn.dreamgary.hubsuite.rod.RodMaterials.lines()) {
+                rodFiles.add("assets/hubsuite/models/item/rod/line_" + m.id() + ".json");
+                rodFiles.add("assets/hubsuite/textures/item/rod/line_" + m.id() + ".png");
+            }
+            for (var m : cn.dreamgary.hubsuite.rod.RodMaterials.hooks()) {
+                rodFiles.add("assets/hubsuite/models/item/rod/hook_" + m.id() + ".json");
+                rodFiles.add("assets/hubsuite/textures/item/rod/hook_" + m.id() + ".png");
+            }
+            for (var m : cn.dreamgary.hubsuite.rod.RodMaterials.upgrades()) {
+                rodFiles.add("assets/hubsuite/models/item/rod/up_" + m.id() + ".json");
+                rodFiles.add("assets/hubsuite/textures/item/rod/up_" + m.id() + ".png");
+            }
+            rodFiles.add("assets/hubsuite/models/item/rod/unknown.json");
+            rodFiles.add("assets/hubsuite/textures/item/rod/unknown.png");
+            for (String path : rodFiles) {
+                // 形如 assets/<命名空间>/<资源路径>：**跳过 assets/** 再切，否则会把 "assets" 当成命名空间
+                // （写成从第一个斜杠切过一次，结果 35 个文件全报缺失，实测踩过）
+                String rest = path.startsWith("assets/") ? path.substring("assets/".length()) : path;
+                int slash = rest.indexOf('/');
+                Identifier id = Identifier.fromNamespaceAndPath(rest.substring(0, slash), rest.substring(slash + 1));
+                if (client.getResourceManager().getResourceStack(id).isEmpty()) {
+                    missing.add(path);
+                } else {
+                    found++;
+                }
+            }
+
             if (missing.isEmpty()) {
-                HubSuiteClient.LOGGER.info("真物品素材自检通过：{} 个文件都在（物品定义 + 模型 + 贴图）", found);
+                HubSuiteClient.LOGGER.info("客户端素材自检通过：{} 个文件都在（真物品三件套 + 钓竿分层模型与贴图 + 原版钓竿覆盖）", found);
             } else {
-                HubSuiteClient.LOGGER.error("真物品素材缺失 {} 个：{} —— 客户端 jar 里少了文件，游戏里会显示成紫黑格",
+                HubSuiteClient.LOGGER.error("客户端素材缺失 {} 个：{} —— jar 里少了文件，游戏里会显示成紫黑格或整根竿变样",
                         missing.size(), missing);
             }
         });

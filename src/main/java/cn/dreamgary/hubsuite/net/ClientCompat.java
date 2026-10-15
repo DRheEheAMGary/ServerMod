@@ -132,6 +132,18 @@ public final class ClientCompat {
         }
         known.put(player.getUUID(), info);
         ServerPlayNetworking.send(player, new HandshakePayloads.Welcome(true, ""));
+        /*
+         * 重发一次背包菜单。
+         *
+         * 进服时的第一次背包同步**早于**这次握手完成，那时服务端还不知道对方装了客户端，
+         * 只能按 Polymer 的原版映射发（实测：玩家背包里已有的自定义物品会显示成 trial_key，
+         * 要等下一次同步才变回真物品）。这里补一次全量同步，把已有物品立刻纠正过来。
+         */
+        try {
+            player.inventoryMenu.broadcastFullState();
+        } catch (Throwable t) {
+            HubSuite.logger().warn("握手后重发背包失败（已有物品可能要等下次同步才显示为真物品）：{}", t.toString());
+        }
         HubSuite.logger().info("客户端校验通过：{} —— {}", player.getName().getString(), info);
     }
 
