@@ -89,6 +89,25 @@ $env:JAVA_HOME = $j; $env:PATH = "$j\bin;$env:PATH"
 - 自检结果看 `run/logs/latest.log` 里的 `通过 235 项，失败 0 项`。
 - 控制台命令：`hub selftest`（也可在游戏内 `/hub selftest`）。
 
+### 起测试客户端（0.5.0 起）
+
+客户端模组在 **`client/` 子项目**里（`hubsuite-client`），与服务端各自独立版本号。
+
+```bash
+# Windows（作者机器）
+.\gradlew.bat :client:runClient --console=plain
+```
+
+- 客户端运行目录是 **`client/run`**（**不是** `run/`），日志在 `client/run/logs/latest.log`；
+- 加载成功的标志是日志里出现：
+  `[Render thread/INFO] (HubSuite-Client) HubSuite 客户端 <版本> 已加载`；
+- **首次**要下载约 400 MB 原版资源到 `~/.gradle/caches/fabric-loom/assets`（一次性；
+  小文件多、慢的时候十几分钟），之后启动约 30 秒；
+- 客户端**不会**自动连服：联调就在另一个终端起服务端（`run/`，端口 25566），
+  游戏里「多人游戏 → localhost:25566」；
+- 🔴 **跑完务必关掉客户端窗口**：它开着就一直占 Gradle 的构建锁，
+  再跑任何 Gradle 任务（包括服务端自检）都会卡在等锁上。
+
 ### 清档（改了地形 / 生成器才需要）
 
 ```bash
@@ -153,6 +172,8 @@ rm -f run/*/session.lock run/usercache.json run/ops.json
 | **`-Pport=` 无效** | 见「三」。端口改 `run/server.properties`；**绝不要占 25565** |
 | **`server.properties` 不能有非 ASCII** | Java Properties 按 ISO-8859-1 读，中文注释会 `MalformedInputException` |
 | **强杀后要删 `session.lock`** | 否则下次启动报存档被锁 |
+| **`:client:runClient` 占构建锁** | 客户端窗口不关，后续任何 Gradle 任务（含服务端自检）都会一直等锁 |
+| **pwsh 里 Gradle 的 `-D` 参数会被拆坏** | `.\gradlew.bat runServer -Dhubsuite.selftest=35` 在 pwsh 下会报 `Task '.selftest=35' not found`，要写 `.\gradlew.bat --% runServer -Dhubsuite.selftest=35` |
 | **文档目录里的 `.md` 是本轮重写的** | 旧文档有大量过期内容（命令表、版本号），以本文件与源码为准 |
 | `gh --jq` 引号易坏 | dump JSON 到文件再解析 |
 | **HuskHomes 必须 4.11+26.1.2** | 旧版用废弃 intermediary 名，26.1.2 上 `NoClassDefFoundError`，版本检查拦不住 |
