@@ -177,6 +177,7 @@ public final class SelfTest {
         step("渔桶的点击交互（装 / 取 / 拒绝 / 只读格）", this::checkBaitBucketClicks);
         step("火能在本模组的维度里点燃传送门", this::checkFireCanIgnitePortal);
         step("客户端握手契约（线格式 + 黄金字节 + 版本比较 + 判定表）", this::checkClientHandshake);
+        step("钓竿数据契约（部件表 + 属性公式 + NBT 线格式）", this::checkRodDataContract);
     }
 
 
@@ -1747,6 +1748,199 @@ public final class SelfTest {
             sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
         }
         return sb.toString();
+    }
+
+    /**
+     * 钓竿数据 NBT 的键集合 —— 这就是它的"线格式契约"。
+     *
+     * <p>为什么不是字节黄金：{@code CompoundTag} 内部是散列表，键序由它决定、新增键可能重排；
+     * 而 NBT 是**按名字读**的，顺序本来就不参与解析。所以契约是"键名与类型只增不改"。
+     */
+    private static final java.util.Set<String> ROD_NBT_KEYS =
+            java.util.Set.of("ver", "rod", "line", "hook", "up", "dur", "max");
+
+    /**
+     * 钓竿数据契约（0.5.0，见 docs/钓竿系统方案.md 第 1、2 节）。
+     *
+     * <p>锁四件事：部件表数值与方案一致、属性公式（含青金石负耐久的夹取）、
+     * 物品 → 材质的匹配（藤蔓三种算一种）、以及 NBT 线格式（往返 + 黄金字节 + 未知材质宽容）。
+     */
+    private void checkRodDataContract() {
+        var materials = cn.dreamgary.hubsuite.rod.RodMaterials.class;   // 只为可读性
+
+        // --- 1) 表就绪 ---
+        int rodCount = cn.dreamgary.hubsuite.rod.RodMaterials.rods().size();
+        int lineCount = cn.dreamgary.hubsuite.rod.RodMaterials.lines().size();
+        int hookCount = cn.dreamgary.hubsuite.rod.RodMaterials.hooks().size();
+        int upgradeCount = cn.dreamgary.hubsuite.rod.RodMaterials.upgrades().size();
+        if (rodCount != 4 || lineCount != 3 || hookCount != 5 || upgradeCount != 4) {
+            fail("部件表条目数不对：杆 " + rodCount + " / 线 " + lineCount + " / 钩 " + hookCount
+                    + " / 升级 " + upgradeCount + "（方案里是 4 / 3 / 5 / 4）");
+        } else {
+            ok("部件表就绪：杆 4 / 线 3 / 钩 5 / 升级 4（默认 "
+                    + cn.dreamgary.hubsuite.rod.RodMaterials.DEFAULT_ROD + " + "
+                    + cn.dreamgary.hubsuite.rod.RodMaterials.DEFAULT_LINE + " + "
+                    + cn.dreamgary.hubsuite.rod.RodMaterials.DEFAULT_HOOK + "）");
+        }
+
+        // --- 2) 抽查数值（乘数 ×10、概率 ‰）---
+        List<String> wrongTable = new ArrayList<>();
+        expectInt(wrongTable, "木杆耐久", 64, cn.dreamgary.hubsuite.rod.RodMaterials.rod("wood").baseDurability());
+        expectInt(wrongTable, "下界合金杆耐久", 2048, cn.dreamgary.hubsuite.rod.RodMaterials.rod("netherite").baseDurability());
+        expectInt(wrongTable, "地狱丝线耐久乘数", 20, cn.dreamgary.hubsuite.rod.RodMaterials.line("nether_string").durabilityMul());
+        expectInt(wrongTable, "地狱丝线断线‰", 7, cn.dreamgary.hubsuite.rod.RodMaterials.line("nether_string").breakPermille());
+        expectInt(wrongTable, "地狱丝线速度乘数", 12, cn.dreamgary.hubsuite.rod.RodMaterials.line("nether_string").speedMul());
+        expectInt(wrongTable, "藤蔓耐久乘数", 15, cn.dreamgary.hubsuite.rod.RodMaterials.line("vine").durabilityMul());
+        expectInt(wrongTable, "黑曜石钩速度乘数", 11, cn.dreamgary.hubsuite.rod.RodMaterials.hook("obsidian").speedMul());
+        expectBool(wrongTable, "黑曜石钩可钓岩浆", true, cn.dreamgary.hubsuite.rod.RodMaterials.hook("obsidian").lava());
+        expectBool(wrongTable, "钻石钩不可钓岩浆", false, cn.dreamgary.hubsuite.rod.RodMaterials.hook("diamond").lava());
+        expectInt(wrongTable, "绿宝石升级耐久加值", 768, cn.dreamgary.hubsuite.rod.RodMaterials.upgrade("emerald").durabilityAdd());
+        expectInt(wrongTable, "青金石升级耐久加值", -192, cn.dreamgary.hubsuite.rod.RodMaterials.upgrade("lapis").durabilityAdd());
+        expectInt(wrongTable, "钻石升级幸运加值", 2, cn.dreamgary.hubsuite.rod.RodMaterials.upgrade("diamond").luckAdd());
+        expectBool(wrongTable, "青金石升级提升附魔", true, cn.dreamgary.hubsuite.rod.RodMaterials.upgrade("lapis").boostsEnchant());
+        if (wrongTable.isEmpty()) {
+            ok("部件数值与方案一致（抽查 13 项：耐久 / 乘数 / 断线‰ / 岩浆 / 升级加值）");
+        } else {
+            fail("部件数值与方案不一致：" + String.join("；", wrongTable));
+        }
+
+        // --- 3) 属性公式（整数域）---
+        var defaults = cn.dreamgary.hubsuite.rod.RodData.defaults();
+        List<String> wrongMath = new ArrayList<>();
+        expectInt(wrongMath, "木杆+线+无升级 上限×10", 640, defaults.computedMaxDurability());
+        expectInt(wrongMath, "木杆+地狱丝线 上限×10", 1280,
+                defaults.withParts("wood", "nether_string", "string").computedMaxDurability());
+        expectInt(wrongMath, "木杆+地狱丝线+钻石升级 上限×10", 1536,
+                defaults.withParts("wood", "nether_string", "string").withUpgrade("diamond").computedMaxDurability());
+        expectInt(wrongMath, "木杆+绿宝石升级 上限×10", 8320,
+                defaults.withUpgrade("emerald").computedMaxDurability());
+        expectInt(wrongMath, "青金石 + 木杆 夹到下限 1", 1,
+                defaults.withUpgrade("lapis").computedMaxDurability());
+        expectInt(wrongMath, "速度 ×1000（线 10 × 钻石钩 14 × 无升级 10）", 1400,
+                defaults.withParts("wood", "string", "diamond").speedMilli());
+        expectInt(wrongMath, "速度 ×10 显示值", 14, defaults.withParts("wood", "string", "diamond").speedTenths());
+        expectInt(wrongMath, "红石升级提速 ×1000（10×10×30）", 3000,
+                defaults.withUpgrade("redstone").speedMilli());
+        expectInt(wrongMath, "幸运（钻石升级，基础 0）", 2000, defaults.withUpgrade("diamond").luckMilli());
+        expectInt(wrongMath, "幸运（钻石升级，基础 1000 → (1000+2000)×1.0）", 3000,
+                defaults.withUpgrade("diamond").luckMilli(1000));
+        expectInt(wrongMath, "断线‰（只看线）", 2, defaults.withParts("wood", "vine", "netherite").breakPermille());
+        expectBool(wrongMath, "岩浆可钓（只看钩）", true, defaults.withParts("wood", "vine", "netherite").lavaCapable());
+        if (wrongMath.isEmpty()) {
+            ok("属性公式 12 组全对（耐久 ×10 / 速度 ×1000 / 幸运 / 断线‰ / 岩浆；青金石负值夹到 1）");
+        } else {
+            fail("属性公式有误：" + String.join("；", wrongMath));
+        }
+
+        // --- 4) 物品 → 材质匹配 ---
+        List<String> wrongMatch = new ArrayList<>();
+        expectStr(wrongMatch, "木棍 → 杆", "wood",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.ROD, "minecraft:stick"));
+        expectStr(wrongMatch, "下界合金锭 → 杆", "netherite",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.ROD, "minecraft:netherite_ingot"));
+        expectStr(wrongMatch, "地狱丝线 → 线", "nether_string",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.LINE, "hubsuite:nether_string"));
+        expectStr(wrongMatch, "垂泪藤 → 线（藤蔓材质）", "vine",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.LINE, "minecraft:weeping_vines"));
+        expectStr(wrongMatch, "缠怨藤 → 线（藤蔓材质）", "vine",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.LINE, "minecraft:twisting_vines"));
+        expectStr(wrongMatch, "黑曜石 → 钩", "obsidian",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.HOOK, "minecraft:obsidian"));
+        expectStr(wrongMatch, "钻石在杆位是杆、在钩位是钩（靠部位区分）", "diamond",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.HOOK, "minecraft:diamond"));
+        if (cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.ROD, "minecraft:dirt") != null) {
+            wrongMatch.add("泥土被当成了杆材质");
+        }
+        expectStr(wrongMatch, "钻石 → 升级物", "diamond",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchUpgrade(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND)));
+        if (wrongMatch.isEmpty()) {
+            ok("物品 → 材质匹配 9 组全对（含藤蔓三别名、同材料按部位区分、非部件返回 null）");
+        } else {
+            fail("物品 → 材质匹配有误：" + String.join("；", wrongMatch));
+        }
+
+        // --- 5) NBT 往返 + 未知材质宽容 ---
+        var stack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        var written = cn.dreamgary.hubsuite.rod.RodData.defaults()
+                .withParts("diamond", "nether_string", "obsidian").withUpgrade("lapis");
+        written = written.refilled();
+        written.writeTo(stack);
+        var read = cn.dreamgary.hubsuite.rod.RodData.of(stack);
+        if (read == null || !read.equals(written)) {
+            fail("钓竿数据 NBT 往返不一致：写出 " + written + "，读回 " + read);
+        } else {
+            ok("钓竿数据 NBT 往返一致（" + written.rod() + "/" + written.line() + "/" + written.hook()
+                    + "/" + written.upgrade() + "，耐久 " + written.durability() + "/" + written.maxDurability()
+                    + "，上限 " + (written.maxDurability() / 10.0) + "）");
+        }
+        cn.dreamgary.hubsuite.rod.RodData.clear(stack);
+        if (cn.dreamgary.hubsuite.rod.RodData.of(stack) != null) {
+            fail("清掉钓竿数据后仍然读出了 RodData");
+        } else {
+            ok("没有数据的原版钓竿读出来是 null（不是「配置过的竿」）");
+        }
+
+        var unknown = new net.minecraft.nbt.CompoundTag();
+        unknown.putString("rod", "unobtainium");
+        unknown.putString("line", "future_line");
+        unknown.putString("hook", "future_hook");
+        unknown.putInt("dur", 500);
+        unknown.putInt("max", 0);
+        var tolerant = cn.dreamgary.hubsuite.rod.RodData.fromTag(unknown);
+        if (tolerant.rodMaterial().id().equals("wood") && tolerant.lineMaterial().id().equals("string")
+                && tolerant.hookMaterial().id().equals("string") && tolerant.computedMaxDurability() == 640) {
+            ok("未知材质 id 落回默认（unobtainium/future_* → 木杆 + 线 + 线钩），不崩、上限按默认算");
+        } else {
+            fail("未知材质没有被宽容处理：" + tolerant + " → " + tolerant.rodMaterial().id()
+                    + "/" + tolerant.lineMaterial().id() + "/" + tolerant.hookMaterial().id()
+                    + "，上限 " + tolerant.computedMaxDurability());
+        }
+
+        // --- 6) NBT 键集合（改名 / 增删都会当场失败）+ 编码稳定性 ---
+        var rodTag = written.toTag();
+        if (!ROD_NBT_KEYS.equals(rodTag.keySet())) {
+            fail("钓竿数据 NBT 的键变了：" + rodTag.keySet() + "，契约里是 " + ROD_NBT_KEYS
+                    + " —— 键名与类型只增不改（要加字段就同时改这里，并想清楚旧客户端读到会怎样）");
+        } else {
+            ok("钓竿数据 NBT 键集合固定（7 个）：" + rodTag.keySet() + " —— NBT 按名字读，键顺序不参与契约");
+        }
+        byte[] first = rodTagBytes(written);
+        byte[] second = rodTagBytes(written);
+        if (!java.util.Arrays.equals(first, second)) {
+            fail("同一份钓竿数据两次编码的字节不同（编码器不确定，落盘会无谓 diff）");
+        } else {
+            ok("钓竿数据编码稳定（两次编码逐字节一致，" + first.length + " 字节）：" + toHex(first).substring(0, 32) + "…");
+        }
+    }
+
+    private static byte[] rodTagBytes(cn.dreamgary.hubsuite.rod.RodData data) {
+        try {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+            net.minecraft.nbt.NbtIo.write(data.toTag(), out);
+            out.flush();
+            return bytes.toByteArray();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("写 NBT 失败", e);
+        }
+    }
+
+    private static void expectInt(List<String> wrong, String label, int expected, int actual) {
+        if (actual != expected) {
+            wrong.add(label + "=" + actual + " 期望 " + expected);
+        }
+    }
+
+    private static void expectBool(List<String> wrong, String label, boolean expected, boolean actual) {
+        if (actual != expected) {
+            wrong.add(label + "=" + actual + " 期望 " + expected);
+        }
+    }
+
+    private static void expectStr(List<String> wrong, String label, String expected, String actual) {
+        if (!java.util.Objects.equals(expected, actual)) {
+            wrong.add(label + "=" + actual + " 期望 " + expected);
+        }
     }
 
     private void step(String name, ThrowingRunnable body) {
