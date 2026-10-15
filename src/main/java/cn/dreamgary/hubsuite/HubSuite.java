@@ -112,6 +112,9 @@ public final class HubSuite implements ModInitializer {
                         ? rulesEngine.memorySpawn(player, sub, level.dimension())
                         : null);
 
+        // 装配台（0.5.0 先做菜单与界面，0.6 方块化）
+        cn.dreamgary.hubsuite.rod.AssemblyTable.register();
+
         // 未登录锁定 + 命令闸门 + 权限
         permissions = new cn.dreamgary.hubsuite.feature.PermissionService();
         lockdown = new cn.dreamgary.hubsuite.feature.LoginLockdown(worldsManager, authManager);

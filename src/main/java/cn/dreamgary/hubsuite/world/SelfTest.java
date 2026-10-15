@@ -179,6 +179,7 @@ public final class SelfTest {
         step("客户端握手契约（线格式 + 黄金字节 + 版本比较 + 判定表）", this::checkClientHandshake);
         step("钓竿数据契约（部件表 + 属性公式 + NBT 线格式）", this::checkRodDataContract);
         step("客户端真物品（共用定义 / 原型一致 / 素材齐全 / 能力名）", this::checkClientItemDefs);
+        step("装配台规则（修补 / 换底 / 换线 / 换钩 / 拒绝）", this::checkAssemblyRules);
     }
 
 
@@ -1911,12 +1912,26 @@ public final class SelfTest {
             expectStr(hintWrong, "第 1 槽（线）", "nether_string", hint.getString(1));
             expectStr(hintWrong, "第 2 槽（钩）", "obsidian", hint.getString(2));
             expectStr(hintWrong, "第 3 槽（升级）", "lapis", hint.getString(3));
+            expectStr(hintWrong, "第 4 槽（裂了标志，满耐久时为空）", "", hint.getString(4));
         }
         if (hintWrong.isEmpty()) {
             ok("渲染提示正确：custom_model_data 字符串槽 = 杆/线/钩/升级 的材质 id（客户端按 index 选层）");
         } else {
             fail("渲染提示不对：" + String.join("；", hintWrong) + " —— 客户端会选错层");
         }
+        var brokenStack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        var brokenRod = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "", 0, 640);
+        brokenRod.writeTo(brokenStack);
+        var brokenHint = brokenStack.get(net.minecraft.core.component.DataComponents.CUSTOM_MODEL_DATA);
+        String brokenSlot = brokenHint == null ? null : brokenHint.getString(4);
+        if (cn.dreamgary.hubsuite.rod.RodData.BROKEN_FLAG.equals(brokenSlot)) {
+            ok("耐久见底时渲染提示第 5 槽 = \"" + cn.dreamgary.hubsuite.rod.RodData.BROKEN_FLAG
+                    + "\"（客户端会多叠一层裂纹），且 broken() = " + brokenRod.broken());
+        } else {
+            fail("耐久见底（0/640）时第 5 槽应该是 " + cn.dreamgary.hubsuite.rod.RodData.BROKEN_FLAG
+                    + "，实测 " + brokenSlot);
+        }
+
         cn.dreamgary.hubsuite.rod.RodData.clear(hintStack);
         if (hintStack.get(net.minecraft.core.component.DataComponents.CUSTOM_MODEL_DATA) == null) {
             ok("清掉钓竿数据后渲染提示一起没了（还原成普通原版钓竿，客户端走 vanilla 模型）");
@@ -2097,6 +2112,58 @@ public final class SelfTest {
                     + "（老客户端没有 real_items 时，服务端继续发 Polymer 映射的原版物品）");
         } else {
             fail("能力名不合规：" + badCaps);
+        }
+    }
+
+    /**
+     * 装配台规则（0.5.0 先做规则与界面，方块在 0.6）。
+     *
+     * <p>锁方案第 3.2 节的四条：同种材料修满、不同种换底（耐久回满）、
+     * 线 / 钩只换属性**不动耐久**、以及"耐久已满还塞同种材料 → 不消耗、不变化"。
+     */
+    private void checkAssemblyRules() {
+        var rules = cn.dreamgary.hubsuite.rod.AssemblyRules.class;   // 只为可读性
+        var base = cn.dreamgary.hubsuite.rod.RodData.defaults();    // 木杆 + 线 + 线钩，满耐久 640
+        List<String> wrong = new ArrayList<>();
+
+        // --- 修补：同种材料 + 没满耐久 → 回满 ---
+        var worn = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "", 120, 640);
+        var repaired = cn.dreamgary.hubsuite.rod.AssemblyRules.applyRodMaterial(worn, "wood");
+        expectInt(wrong, "修补后耐久", 640, repaired.durability());
+        expectStr(wrong, "修补后杆材", "wood", repaired.rod());
+
+        // --- 耐久满 + 同种材料 → 不变化（调用方据此不消耗材料）---
+        var full = cn.dreamgary.hubsuite.rod.AssemblyRules.applyRodMaterial(base, "wood");
+        if (!full.equals(base)) {
+            wrong.add("耐久已满还塞同种材料，结果却变了：" + full);
+        }
+
+        // --- 换底：不同种材料 → 基数换掉 + 耐久回满 ---
+        var rebased = cn.dreamgary.hubsuite.rod.AssemblyRules.applyRodMaterial(worn, "netherite");
+        expectStr(wrong, "换底后杆材", "netherite", rebased.rod());
+        expectInt(wrong, "换底后上限", rebased.maxDurability(), rebased.durability());
+        expectInt(wrong, "换底后上限（下界合金 2048×10）", 20480, rebased.maxDurability());
+
+        // --- 线 / 钩：只换属性，耐久不动 ---
+        var rethread = cn.dreamgary.hubsuite.rod.AssemblyRules.applyLine(worn, "nether_string");
+        expectStr(wrong, "换线后线材", "nether_string", rethread.line());
+        expectInt(wrong, "换线后耐久不动", 120, rethread.durability());
+        expectInt(wrong, "换线后上限跟着涨（木杆 64 × 地狱丝线 2.0）", 1280, rethread.maxDurability());
+
+        var rehooked = cn.dreamgary.hubsuite.rod.AssemblyRules.applyHook(worn, "obsidian");
+        expectStr(wrong, "换钩后钩材", "obsidian", rehooked.hook());
+        expectInt(wrong, "换钩后耐久不动", 120, rehooked.durability());
+        expectBool(wrong, "换钩后能钓岩浆", true, rehooked.lavaCapable());
+
+        // --- 非法材料：原样返回 ---
+        if (!cn.dreamgary.hubsuite.rod.AssemblyRules.applyLine(base, "diamond").equals(base)) {
+            wrong.add("把杆材料塞进线位竟然生效了");
+        }
+
+        if (wrong.isEmpty()) {
+            ok("装配台规则 12 组全对（修补回满 / 满耐久不消耗 / 换底回满 / 换线换钩不动耐久 / 非法材料原样返回）");
+        } else {
+            fail("装配台规则有误：" + String.join("；", wrong));
         }
     }
 

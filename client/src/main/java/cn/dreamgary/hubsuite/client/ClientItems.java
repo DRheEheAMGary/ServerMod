@@ -98,6 +98,11 @@ public final class ClientItems {
             }
             rodFiles.add("assets/hubsuite/models/item/rod/unknown.json");
             rodFiles.add("assets/hubsuite/textures/item/rod/unknown.png");
+            // 抛竿时的钓线层 + 耐久见底的裂纹层
+            rodFiles.add("assets/hubsuite/models/item/rod/cast_line.json");
+            rodFiles.add("assets/hubsuite/textures/item/rod/cast_line.png");
+            rodFiles.add("assets/hubsuite/models/item/rod/broken_crack.json");
+            rodFiles.add("assets/hubsuite/textures/item/rod/broken_crack.png");
             for (String path : rodFiles) {
                 // 形如 assets/<命名空间>/<资源路径>：**跳过 assets/** 再切，否则会把 "assets" 当成命名空间
                 // （写成从第一个斜杠切过一次，结果 35 个文件全报缺失，实测踩过）

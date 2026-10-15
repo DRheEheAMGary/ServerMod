@@ -37,6 +37,9 @@ public record RodData(String rod, String line, String hook, String upgrade,
     private static final String KEY_DURABILITY = "dur";
     private static final String KEY_MAX = "max";
 
+    /** 渲染提示里第 5 个槽的值：耐久见底 → 客户端叠一层「裂了」。 */
+    public static final String BROKEN_FLAG = "broken";
+
     /** 默认竿：木杆 + 线 + 线钩、无升级、满耐久。 */
     public static RodData defaults() {
         return new RodData(RodMaterials.DEFAULT_ROD, RodMaterials.DEFAULT_LINE,
@@ -237,10 +240,15 @@ public record RodData(String rod, String line, String hook, String upgrade,
      * "未知即占位"，而且是原版模型系统自己实现的，不需要我们写渲染代码。
      *
      * <p>升级槽空着时放空串：客户端那一层的 fallback 是 {@code minecraft:empty}（不画）。
+     *
+     * <p>第 5 槽（index 4）是"{@link #BROKEN_FLAG 裂了}"标志：耐久 ≤ 0 时客户端多叠一层裂纹。
+     * 注意它是**写入时**的快照 —— 0.6 里耐久真正开始随钓鱼扣减时，扣完要重写一次提示
+     * （{@code writeTo}），否则裂纹不会出现。
      */
     public CustomModelData modelHint() {
         return new CustomModelData(List.of(), List.of(), List.of(
-                safe(rod), safe(line), safe(hook), upgrade == null ? "" : upgrade.trim()), List.of());
+                safe(rod), safe(line), safe(hook), upgrade == null ? "" : upgrade.trim(),
+                broken() ? BROKEN_FLAG : ""), List.of());
     }
 
     private static String safe(String value) {
