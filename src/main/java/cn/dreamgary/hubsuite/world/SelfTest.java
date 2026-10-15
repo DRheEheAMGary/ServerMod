@@ -172,7 +172,7 @@ public final class SelfTest {
         step("切服会真的放掉成就/统计缓存（隔离的前提）", this::checkAuxCacheEvictedOnSwitch);
         step("自定义物品 / 岩浆渔获 / 配方", this::checkCustomItemsAndFishing);
         step("渔桶：装饵 / 容量 / 钓鱼消耗", this::checkBaitBuckets);
-        step("熔岩钓竿甩竿后浮标留得住", this::checkLavaRodCast);
+        step("挂了耐岩浆钩的竿甩竿后浮标留得住", this::checkLavaRodCast);
         step("岩浆钓鱼：浮标不掉、不着火、能进浮漂状态", this::checkLavaFishing);
         step("渔桶的点击交互（装 / 取 / 拒绝 / 只读格）", this::checkBaitBucketClicks);
         step("火能在本模组的维度里点燃传送门", this::checkFireCanIgnitePortal);
@@ -184,6 +184,7 @@ public final class SelfTest {
         step("钓竿耐久与断线（扣耐久 / 断线边界 / 原版耐久条 / 坏了不能钓）", this::checkRodDurability);
         step("铁砧升级（单槽替换 / 累计惩罚 / 不归我们管的一律原样）", this::checkRodAnvil);
         step("青金石附魔（附魔台等价 / 宝藏池排除诅咒 / 概率边界）", this::checkRodEnchanting);
+        step("旧熔岩钓竿换算（钩决定岩浆 / 磨损比例照搬 / 配方已删）", this::checkLegacyLavaRod);
     }
 
 
@@ -197,7 +198,6 @@ public final class SelfTest {
         try {
             var items = new java.util.LinkedHashMap<String, net.minecraft.world.item.Item>();
             items.put("nether_string", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_STRING);
-            items.put("lava_rod", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD);
             items.put("wooden_fishing_bucket",
                     cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
             items.put("iron_fishing_bucket",
@@ -279,7 +279,7 @@ public final class SelfTest {
             ok("岩浆渔获表就绪（两个海岛下界，按群系分化的条目 " + totalBiomeEntries + " 条）");
 
             // 配方真的加载了（JSON 写错是静默失败）
-            String[] recipes = {"nether_string", "lava_rod",
+            String[] recipes = {"nether_string",
                     "wooden_fishing_bucket", "iron_fishing_bucket", "diamond_fishing_bucket",
                     "assembly_table"};
             var badRecipes = new StringBuilder();
@@ -537,11 +537,9 @@ public final class SelfTest {
             }
             probe.teleportTo(level, base.getX() + 2.5, base.getY() + 2.0, base.getZ() + 0.5,
                     java.util.Set.of(), 0.0F, 0.0F, false);
-            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND,
-                    new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD));
+            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, lavaCapableRod());
             probe.fishing = null;
-            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD
+            probe.getMainHandItem().getItem()
                     .use(level, probe, net.minecraft.world.InteractionHand.MAIN_HAND);
             net.minecraft.world.entity.projectile.FishingHook hook = probe.fishing;
             if (hook == null) {
@@ -600,7 +598,7 @@ public final class SelfTest {
     }
 
     /**
-     * 熔岩钓竿真的能甩出去、浮标留得住。
+     * 挂了耐岩浆钩（黑曜石）的竿真的能甩出去、浮标留得住。
      *
      * <p>锁住用户实测："熔岩钓竿一扔出去浮标就消失，我都没收杆"。
      *
@@ -626,18 +624,16 @@ public final class SelfTest {
         }
         try {
             var level = (net.minecraft.server.level.ServerLevel) probe.level();
-            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND,
-                    new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD));
+            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, lavaCapableRod());
             probe.fishing = null;
-            var result = cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD
+            var result = probe.getMainHandItem().getItem()
                     .use(level, probe, net.minecraft.world.InteractionHand.MAIN_HAND);
             net.minecraft.world.entity.projectile.FishingHook hook = probe.fishing;
             if (hook == null) {
                 fail("熔岩钓竿甩出去没生成浮标（use 返回 " + result + "）");
                 return;
             }
-            if (!((cn.dreamgary.hubsuite.feature.LavaFishingHook) hook).hubsuite$fromLavaRod()) {
+            if (!((cn.dreamgary.hubsuite.feature.LavaFishingHook) hook).hubsuite$lavaCapable()) {
                 fail("浮标没被标记成熔岩竿抛的（岩浆钓鱼判定会失效）");
                 return;
             }
@@ -2042,6 +2038,9 @@ public final class SelfTest {
         int checked = 0;
         List<String> variants = new ArrayList<>();
         for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
+            if (cn.dreamgary.hubsuite.item.HubSuiteItemDefs.isLegacyAlias(def)) {
+                continue;   // 遗留别名模型指回原版，没有自己的素材
+            }
             variants.add(def.path());
             if (def.path().endsWith("_fishing_bucket")) {
                 variants.add(def.path() + "_bait");   // 渔桶还有"有饵"那一套模型与贴图
@@ -2412,6 +2411,82 @@ public final class SelfTest {
                     + "15 与 30 级等价附魔都出得来 / 不可附魔的东西原样）");
         } else {
             fail("青金石附魔有误：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 一根挂了**黑曜石钩**的原版钓竿。
+     *
+     * <p>0.6 起「能不能钓岩浆」由**钩的材质**决定（{@code RodMaterials} 里黑曜石 / 下界合金带 lava），
+     * 不再有"熔岩钓竿"这个物品 —— 所以岩浆相关的用例都拿这根竿。
+     */
+    private static net.minecraft.world.item.ItemStack lavaCapableRod() {
+        var stack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        cn.dreamgary.hubsuite.rod.RodData.defaults()
+                .withParts("wood", "string", "obsidian")
+                .writeTo(stack);
+        return stack;
+    }
+
+    /**
+     * 旧熔岩钓竿的收尾（0.6 第 6 步）。
+     *
+     * <p>0.6 把「能不能钓岩浆」从专用竿改成**看钩**，所以那个物品被降级成遗留别名。
+     * 这里锁三件事：老竿还在注册表里（否则老存档里的东西会变成空气）、
+     * 换算出来的新竿**确实能钓岩浆**且磨损比例照搬、配方已经删掉（不再产出）。
+     */
+    private void checkLegacyLavaRod() {
+        List<String> wrong = new ArrayList<>();
+
+        // --- 遗留别名还在注册表里 ---
+        if (cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD == null) {
+            wrong.add("遗留的 lava_rod 没注册 —— 老存档里的旧竿会变成空气");
+        }
+        // --- 配方已经删掉（不再产出）---
+        var recipeKey = net.minecraft.resources.ResourceKey.create(
+                net.minecraft.core.registries.Registries.RECIPE,
+                net.minecraft.resources.Identifier.fromNamespaceAndPath("hubsuite", "lava_rod"));
+        if (server.getRecipeManager().byKey(recipeKey).isPresent()) {
+            wrong.add("lava_rod 的配方还在（应该已经删掉，不再产出）");
+        }
+
+        // --- 换算：旧竿（带磨损）→ 原版钓竿 + 黑曜石钩 ---
+        if (cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD != null) {
+            var legacy = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD);
+            legacy.set(net.minecraft.core.component.DataComponents.DAMAGE, 192);   // 256 里的 192 = 75% 磨损
+
+            var converted = cn.dreamgary.hubsuite.feature.LegacyItemMigration.convert(legacy);
+            expectBool(wrong, "换算后是原版钓竿", true,
+                    converted.is(net.minecraft.world.item.Items.FISHING_ROD));
+            var data = cn.dreamgary.hubsuite.rod.RodData.of(converted);
+            if (data == null) {
+                wrong.add("换算后的竿没有钓竿数据");
+            } else {
+                expectStr(wrong, "换算后的钩", "obsidian", data.hook());
+                expectBool(wrong, "换算后的竿能钓岩浆", true, data.lavaCapable());
+                // 旧竿剩 25%（64/256）→ 新竿上限 64.0 的 25% = 16.0
+                expectInt(wrong, "磨损比例照搬（×10）", 160, data.durability());
+            }
+
+            // 满耐久的旧竿 → 满耐久的新竿（别把好东西修坏）
+            var fresh = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD);
+            var freshData = cn.dreamgary.hubsuite.rod.RodData.of(
+                    cn.dreamgary.hubsuite.feature.LegacyItemMigration.convert(fresh));
+            expectInt(wrong, "满耐久旧竿换算后仍是满耐久", 640,
+                    freshData == null ? -1 : freshData.durability());
+        }
+
+        // --- 判定依据是"钩"：普通线钩的竿不能钓岩浆 ---
+        expectBool(wrong, "木杆 + 线钩不能钓岩浆", false,
+                cn.dreamgary.hubsuite.rod.RodData.defaults().lavaCapable());
+
+        if (wrong.isEmpty()) {
+            ok("旧熔岩钓竿收尾 7 组全对（遗留别名还在注册表 / 配方已删 / 换算成黑曜石钩且能钓岩浆 / "
+                    + "磨损比例照搬 / 满耐久不会被修坏 / 普通钩不能钓岩浆）");
+        } else {
+            fail("旧熔岩钓竿收尾有误：" + String.join("；", wrong));
         }
     }
 

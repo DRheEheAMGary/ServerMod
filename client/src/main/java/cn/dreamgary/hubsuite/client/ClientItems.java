@@ -66,6 +66,9 @@ public final class ClientItems {
             List<String> missing = new ArrayList<>();
             int found = 0;
             for (HubSuiteItemDefs.Def def : REGISTERED) {
+                if (HubSuiteItemDefs.isLegacyAlias(def)) {
+                    continue;   // 遗留别名模型指回原版，没有自己的素材
+                }
                 for (String file : List.of("items/" + def.path() + ".json",
                         "models/item/" + def.path() + ".json",
                         "textures/item/" + def.path() + ".png")) {

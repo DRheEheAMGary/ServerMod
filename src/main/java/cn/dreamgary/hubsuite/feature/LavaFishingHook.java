@@ -3,7 +3,10 @@ package cn.dreamgary.hubsuite.feature;
 import net.minecraft.world.entity.projectile.FishingHook;
 
 /**
- * 给 {@code FishingHook} 挂一个"这枚钩子是熔岩钓竿抛的"标记。
+ * 给 {@code FishingHook} 挂一个"这枚钩子耐岩浆"的标记。
+ *
+ * <p>0.6 起**不再有"熔岩钓竿"这个物品**：能不能钓岩浆由**钩的材质**决定
+ * （黑曜石钩 / 下界合金钩，见 {@code RodMaterials}）。
  *
  * <p><b>为什么放在业务包、而不是 {@code mixin} 包：</b>
  * 普通代码（{@link FishingGameplay}）要 {@code hook instanceof LavaFishingHook}，
@@ -15,7 +18,8 @@ import net.minecraft.world.entity.projectile.FishingHook;
  */
 public interface LavaFishingHook {
 
-    boolean hubsuite$fromLavaRod();
+    /** 抛它的那根竿挂的钩耐不耐岩浆（黑曜石 / 下界合金）。 */
+    boolean hubsuite$lavaCapable();
 
-    void hubsuite$setFromLavaRod(boolean value);
+    void hubsuite$setLavaCapable(boolean value);
 }

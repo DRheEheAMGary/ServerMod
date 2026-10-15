@@ -13,7 +13,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** 抛竿时给钩子打标记：这枚钩子是不是"熔岩钓竿"抛的。 */
+/** 抛竿时给钩子打标记：这枚钩子耐不耐岩浆（看竿挂的钩）。 */
 @Mixin(FishingRodItem.class)
 public abstract class FishingRodCastMixin {
 
@@ -45,7 +45,9 @@ public abstract class FishingRodCastMixin {
         if (hook == null) {
             return;
         }
-        ((LavaFishingHook) hook).hubsuite$setFromLavaRod(
-                player.getItemInHand(hand).is(HubSuiteItems.LAVA_ROD));
+        // 能不能钓岩浆，看的是**这根竿挂的钩**（0.6 起取消了专用竿）
+        cn.dreamgary.hubsuite.rod.RodData data =
+                cn.dreamgary.hubsuite.rod.RodData.of(player.getItemInHand(hand));
+        ((LavaFishingHook) hook).hubsuite$setLavaCapable(data != null && data.lavaCapable());
     }
 }
