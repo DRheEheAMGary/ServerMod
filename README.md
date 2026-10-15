@@ -102,6 +102,10 @@
 > HuskHomes 必须用 **Fabric 版 4.11+ 的 26.1 构建**。旧版（如 4.6）用已废弃的 intermediary 名，
 > 在 26.1.2 上会直接加载失败，且版本检查拦不住。
 
+**客户端（可选）**：同一份 Release 里的 `hubsuite-client-<版本>.jar` 放进玩家客户端的 `mods/`，
+就能看到真物品与逐层叠出来的钓竿；**不装也照常能玩**（服务端按玩家能力分流）。
+详见[安装部署](docs/安装部署.md)。
+
 ```text
 # 3. 首次启动，自动生成配置与独立存档
 #    config/hubsuite/ 下：config.json、accounts.db、last-locations.json、rules/、skyblock/

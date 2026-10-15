@@ -435,6 +435,8 @@ tag 带 `v`；服务端产物 `build/libs/hubsuite-<server_version>.jar`，客�
 2. 同步文档里的产物文件名（README.md / docs/**）
 3. 跑一次自检确认 失败 0 项
 4. 从 GitHub 真实下载校验：zip 有效、fabric.mod.json 的 version 对、类数对
+5. Release 挂**两份产物**（服务端 jar + 客户端 jar；客户端没变就挂同一份），
+   说明按 docs/分发与更新.md 的三档模板写（无需 / 建议 / 必须更新）
 ```
 **发布说明必须如实写**：哪些已验证、哪些没有、升级要不要删存档。不要为了让 release 好看而省略「未验证」。
 
