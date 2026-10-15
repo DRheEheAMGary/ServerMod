@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "R": "minecraft:fishing_rod",
+    "P": "#minecraft:planks",
+    "I": "minecraft:iron_ingot",
+    "C": "minecraft:crafting_table"
+  },
+  "pattern": [
+    " R ",
+    "PIP",
+    "PCP"
+  ],
+  "result": {
+    "id": "hubsuite:assembly_table"
+  }
+}

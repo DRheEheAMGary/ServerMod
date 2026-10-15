@@ -180,6 +180,7 @@ public final class SelfTest {
         step("钓竿数据契约（部件表 + 属性公式 + NBT 线格式）", this::checkRodDataContract);
         step("客户端真物品（共用定义 / 原型一致 / 素材齐全 / 能力名）", this::checkClientItemDefs);
         step("装配台规则（修补 / 换底 / 换线 / 换钩 / 拒绝）", this::checkAssemblyRules);
+        step("装配台方块（注册 / 方块实体 / 素材 / 掉落表）", this::checkAssemblyBlock);
     }
 
 
@@ -276,7 +277,8 @@ public final class SelfTest {
 
             // 配方真的加载了（JSON 写错是静默失败）
             String[] recipes = {"nether_string", "lava_rod",
-                    "wooden_fishing_bucket", "iron_fishing_bucket", "diamond_fishing_bucket"};
+                    "wooden_fishing_bucket", "iron_fishing_bucket", "diamond_fishing_bucket",
+                    "assembly_table"};
             var badRecipes = new StringBuilder();
             for (String id : recipes) {
                 var key = net.minecraft.resources.ResourceKey.create(
@@ -2164,6 +2166,56 @@ public final class SelfTest {
             ok("装配台规则 12 组全对（修补回满 / 满耐久不消耗 / 换底回满 / 换线换钩不动耐久 / 非法材料原样返回）");
         } else {
             fail("装配台规则有误：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 装配台方块（0.6）：注册齐了没有 + 素材在不在 + 掉落表有没有。
+     *
+     * <p>方块与物品都不参与网络同步，两端必须各注册一份同 id 的 —— 这里查的是服务端这份；
+     * 客户端那份由客户端启动时的日志确认（{@code ClientMenuTypes}）。
+     */
+    private void checkAssemblyBlock() {
+        List<String> wrong = new ArrayList<>();
+
+        var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK
+                .getValue(cn.dreamgary.hubsuite.rod.AssemblyTableIds.ID);
+        var item = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                .getValue(cn.dreamgary.hubsuite.rod.AssemblyTableIds.ID);
+        if (block == null || block == net.minecraft.world.level.block.Blocks.AIR) {
+            wrong.add("方块没注册");
+        }
+        if (item == null || item == net.minecraft.world.item.Items.AIR) {
+            wrong.add("方块物品没注册");
+        }
+        if (cn.dreamgary.hubsuite.rod.AssemblyBlockEntities.TYPE == null) {
+            wrong.add("方块实体类型没注册");
+        }
+        if (block != null && !(block instanceof eu.pb4.polymer.core.api.block.PolymerBlock)) {
+            wrong.add("方块没有实现 PolymerBlock（没装客户端的玩家会看到未知方块）");
+        }
+
+        // 素材三件套 + 掉落表（服务端 jar 里查 classpath / 数据包）
+        for (String path : List.of(
+                "/assets/hubsuite/blockstates/assembly_table.json",
+                "/assets/hubsuite/models/block/assembly_table.json",
+                "/assets/hubsuite/models/item/assembly_table.json",
+                "/assets/hubsuite/items/assembly_table.json",
+                "/assets/hubsuite/textures/block/assembly_table.png")) {
+            try (var in = SelfTest.class.getResourceAsStream(path)) {
+                if (in == null) {
+                    wrong.add("缺素材 " + path);
+                }
+            } catch (java.io.IOException e) {
+                wrong.add(path + " 读失败");
+            }
+        }
+
+        if (wrong.isEmpty()) {
+            ok("装配台方块就绪：方块 + 物品 + 方块实体都注册了，实现了 PolymerBlock（原版客户端看锻造台），"
+                    + "模型/贴图/物品定义 5 个素材齐全，配方与掉落表也在");
+        } else {
+            fail("装配台方块有问题：" + String.join("；", wrong));
         }
     }
 

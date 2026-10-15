@@ -53,17 +53,19 @@ public class AssemblyMenu extends AbstractContainerMenu {
                 new MenuType<>(AssemblyMenu::new, FeatureFlags.DEFAULT_FLAGS));
     }
 
-    private final SimpleContainer parts = new SimpleContainer(4);
-    private final Player owner;
+    private final Container parts;
+    private final Player player;
 
-    /** 客户端按 menuType 建菜单时走这个构造（容器 id + 玩家背包）。 */
+    /** 客户端按 menuType 建菜单时走这个构造：格子内容由服务端同步过来。 */
     public AssemblyMenu(int containerId, Inventory playerInventory) {
-        this(containerId, playerInventory, null);
+        this(containerId, playerInventory, new SimpleContainer(4));
     }
 
-    private AssemblyMenu(int containerId, Inventory playerInventory, Player owner) {
+    /** 方块打开的走这个：格子直接架在**方块实体**上（关界面前东西留在世界里）。 */
+    public AssemblyMenu(int containerId, Inventory playerInventory, Container parts) {
         super(menuType(), containerId);
-        this.owner = owner;
+        this.parts = parts;
+        this.player = playerInventory.player;
 
         addSlot(new Slot(parts, SLOT_ROD, SLOT_POSITIONS[SLOT_ROD][0], SLOT_POSITIONS[SLOT_ROD][1]) {
             @Override
@@ -112,7 +114,7 @@ public class AssemblyMenu extends AbstractContainerMenu {
     @Override
     public void slotsChanged(Container container) {
         super.slotsChanged(container);
-        if (owner == null || owner.level().isClientSide()) {
+        if (player == null || player.level().isClientSide()) {
             return;   // 只在服务端改数据
         }
         applyMaterials();
