@@ -19,4 +19,11 @@ public interface FishingHookAccessor {
 
     @Accessor("timeUntilLured")
     void hubsuite$setTimeUntilLured(int value);
+
+    /** 自检用：鱼靠近 / 正在咬钩的状态位。 */
+    @Accessor("nibble")
+    int hubsuite$getNibble();
+
+    @Accessor("biting")
+    boolean hubsuite$isBiting();
 }

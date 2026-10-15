@@ -30,24 +30,29 @@ import java.util.Map;
  * <ul>
  *   <li>背包里把钓饵"点"到桶上（或拿着桶点钓饵）→ 装入：左键全装、右键装一个；</li>
  *   <li>空手右键点桶（或拿着桶右键空格子）→ 取出一组（最多一个堆叠 16 个）；</li>
- *   <li><b>可以混装</b>：6 种饵（普通/地狱 × 普通/压缩/二重压缩）都能进，
+ *   <li><b>可以混装</b>：凡是加进了 item tag {@code #hubsuite:fishing_bait}
+ *       的物品都能进（tag 文件：{@code data/hubsuite/tags/item/fishing_bait.json}），
  *       容量按**总个数**算；</li>
- *   <li>钓鱼时桶放副手即可生效：按档次 <b>二重压缩 → 压缩 → 普通</b> 消耗
- *       （见 {@link FishingBait#select}）。</li>
+ *   <li>钓鱼时桶放副手即可生效：**当栈用** —— 最后放进去的那种在栈顶，
+ *       <b>先消耗栈顶</b>（同一种再装一次会置顶）；</li>
+ *   <li><b>栈顶环境不对就什么都不做</b>：不往下找、也不消耗（见
+ *       {@link FishingBait#select}）。</li>
  * </ul>
  *
  * <p>内容物存在原版的 {@code CUSTOM_DATA} 组件里（存档 / 背包同步都安全）：
- * {@code hubsuite_baits} = { 物品id: 个数 }（旧版单一种的字段读的时候会自动迁移）。
- * 客户端看到的仍是 Polymer 换出来的"试炼钥匙 + 模型"，内容物通过
- * {@link #modifyClientTooltip} 展示；模型按**桶里最高档**的那种饵切换。
+ * {@code hubsuite_baits} = { 物品id: 个数 }，{@code hubsuite_order} = 逗号分隔的
+ * 物品 id（**旧 → 新**，末尾 = 栈顶）。**0.x 阶段不做旧数据兼容**（改格式就是改格式）。
+ * 客户端看到的仍是 Polymer 换出来的"试炼钥匙 + 模型"，
+ * 内容物通过 {@link #modifyClientTooltip} 展示。
  */
 public class BaitBucketItem extends SimplePolymerItem {
 
     /** 新格式：{@code hubsuite_baits} = { 物品id: 个数 }（可以混装）。 */
     private static final String TAG_BAITS = "hubsuite_baits";
-    /** 旧格式（一桶一种）：只读，读到时迁移成新格式。 */
-    private static final String TAG_BAIT = "hubsuite_bait";
-    private static final String TAG_COUNT = "hubsuite_bait_count";
+    /** 栈序：逗号分隔的物品 id，**旧 → 新**（末尾 = 栈顶，下一个被消耗的）。 */
+    private static final String TAG_ORDER = "hubsuite_order";
+    /** 有饵时的模型后缀（渔桶只有空 / 有饵两种模型）。 */
+    private static final String SUFFIX_BAIT = "_bait";
 
     private final int capacity;
 
@@ -56,12 +61,44 @@ public class BaitBucketItem extends SimplePolymerItem {
         this.capacity = capacity;
     }
 
+    @Override
+    public Item getPolymerItem(ItemStack stack, PacketContext context) {
+        // 同上：装了客户端模组的玩家拿到真物品（空桶 / 有饵由 item_model 组件区分）
+        return cn.dreamgary.hubsuite.net.ClientCompat.useRealItems(context)
+                ? this
+                : super.getPolymerItem(stack, context);
+    }
+
+    /**
+     * 把"空 / 有饵"反映到**物品栈自己的 {@code item_model} 组件**上。
+     *
+     * <p>为什么改组件而不是让 Polymer 发包时替换：装了客户端模组的玩家收到的是**真物品**，
+     * 客户端直接读组件；原生客户端那边 Polymer 转发的也是同一个组件 —— 两条路共用一份逻辑，
+     * 不会出现"模组客户端看到空桶、原版客户端看到有饵桶"这种不一致。
+     */
+    private static void refreshModel(ItemStack bucket) {
+        Identifier base = bucket.get(DataComponents.ITEM_MODEL);
+        if (base == null) {
+            return;
+        }
+        String path = base.getPath();
+        if (path.endsWith(SUFFIX_BAIT)) {
+            path = path.substring(0, path.length() - SUFFIX_BAIT.length());
+        }
+        boolean hasBait = !contents(bucket).isEmpty();
+        Identifier target = Identifier.fromNamespaceAndPath(base.getNamespace(),
+                hasBait ? path + SUFFIX_BAIT : path);
+        if (!target.equals(base)) {
+            bucket.set(DataComponents.ITEM_MODEL, target);
+        }
+    }
+
     public int capacity() {
         return capacity;
     }
 
     /**
-     * 桶里的内容物：{@code 物品 → 个数}，按档次从高到低排（二重压缩 → 压缩 → 普通）。
+     * 桶里的内容物：{@code 物品 → 个数}，**按栈序排（栈顶在最前，即下一个会被消耗的）**。
      * 空桶 / 不是桶 → 空 Map。
      */
     public static Map<Item, Integer> contents(ItemStack bucket) {
@@ -81,26 +118,88 @@ public class BaitBucketItem extends SimplePolymerItem {
                         raw.merge(item, count, Integer::sum);
                     }
                 }
-                // 旧格式（一桶一种）迁移
-                if (raw.isEmpty()) {
-                    int old = tag.getIntOr(TAG_COUNT, 0);
-                    Item item = itemOf(tag.getStringOr(TAG_BAIT, ""));
-                    if (old > 0 && item != null && FishingBait.isBait(item)) {
-                        raw.put(item, old);
-                    }
+            }
+        }
+        // 先按"栈序"（旧 → 新）排，然后**倒过来**变成栈顶在前
+        List<Item> order = stackOrder(bucket, raw);
+        Map<Item, Integer> out = new LinkedHashMap<>();
+        for (int i = order.size() - 1; i >= 0; i--) {
+            Item item = order.get(i);
+            Integer count = raw.get(item);
+            if (count != null && count > 0) {
+                out.put(item, count);
+            }
+        }
+        // 兜底：栈序里没登记到的（异常数据 / 老桶），按物品 id 稳定追加
+        raw.entrySet().stream()
+                .filter(e -> !out.containsKey(e.getKey()))
+                .sorted(java.util.Comparator.comparing(e -> String.valueOf(BuiltInRegistries.ITEM.getKey(e.getKey()))))
+                .forEach(e -> out.put(e.getKey(), e.getValue()));
+        return out;
+    }
+
+    /**
+     * 栈序（**旧 → 新**，末尾 = 栈顶）。
+     *
+     * <p>迁移：没有 {@code hubsuite_order} 字段的老桶（v0.4.0-alpha.7 之前）→
+     * 按"稀有度从低到高"补一个顺序，玩家无感，不用清档。
+     */
+    private static List<Item> stackOrder(ItemStack bucket, Map<Item, Integer> raw) {
+        List<Item> out = new ArrayList<>();
+        CustomData data = bucket.get(DataComponents.CUSTOM_DATA);
+        if (data != null && !data.isEmpty()) {
+            String encoded = data.copyTag().getStringOr(TAG_ORDER, "");
+            for (String id : encoded.split(",")) {
+                if (id.isBlank()) {
+                    continue;
+                }
+                Item item = itemOf(id.trim());
+                if (item != null && raw.containsKey(item) && !out.contains(item)) {
+                    out.add(item);
                 }
             }
         }
-        // 按档次降序（同档按物品 id 稳定排序，tooltip 不会跳来跳去）
-        List<Map.Entry<Item, Integer>> list = new ArrayList<>(raw.entrySet());
-        list.sort((a, b) -> {
-            int byTier = Integer.compare(FishingBait.tierOf(b.getKey()), FishingBait.tierOf(a.getKey()));
-            return byTier != 0 ? byTier : String.valueOf(BuiltInRegistries.ITEM.getKey(a.getKey()))
-                    .compareTo(String.valueOf(BuiltInRegistries.ITEM.getKey(b.getKey())));
-        });
-        Map<Item, Integer> out = new LinkedHashMap<>();
-        for (Map.Entry<Item, Integer> e : list) {
-            out.put(e.getKey(), e.getValue());
+        // 栈序里没登记的（异常数据）：按 map 顺序补到末尾，不做任何"智能"排序
+        for (Item item : raw.keySet()) {
+            if (!out.contains(item)) {
+                out.add(item);
+            }
+        }
+        return out;
+    }
+
+    /** 写回栈序（空则删字段）。 */
+    private static void writeStackOrder(CompoundTag tag, List<Item> order) {
+        StringBuilder sb = new StringBuilder();
+        for (Item item : order) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(BuiltInRegistries.ITEM.getKey(item));
+        }
+        if (sb.length() == 0) {
+            tag.remove(TAG_ORDER);
+        } else {
+            tag.putString(TAG_ORDER, sb.toString());
+        }
+    }
+
+    /** 从 tag 里读栈序（不含兜底），供 insert / remove 改序用。 */
+    private static List<Item> readStackOrder(CompoundTag tag, Map<Item, Integer> raw) {
+        List<Item> out = new ArrayList<>();
+        for (String id : tag.getStringOr(TAG_ORDER, "").split(",")) {
+            if (id.isBlank()) {
+                continue;
+            }
+            Item item = itemOf(id.trim());
+            if (item != null && raw.containsKey(item) && !out.contains(item)) {
+                out.add(item);
+            }
+        }
+        for (Item item : raw.keySet()) {
+            if (!out.contains(item)) {
+                out.add(item);
+            }
         }
         return out;
     }
@@ -114,7 +213,7 @@ public class BaitBucketItem extends SimplePolymerItem {
         return total;
     }
 
-    /** 桶里**最高档**的那种饵（模型 / 取出 / 默认消耗都用它）；空桶 → null。 */
+    /** **栈顶**那种饵（模型 / 取出 / 默认消耗都用它）；空桶 → null。 */
     public static Item containedBait(ItemStack bucket) {
         var it = contents(bucket).entrySet().iterator();
         return it.hasNext() ? it.next().getKey() : null;
@@ -134,7 +233,7 @@ public class BaitBucketItem extends SimplePolymerItem {
      */
     public static int insert(ItemStack bucket, ItemStack source, int max) {
         if (!(bucket.getItem() instanceof BaitBucketItem bucketItem)
-                || source.isEmpty() || !FishingBait.isBait(source.getItem())) {
+                || !FishingBait.isBait(source)) {
             return 0;
         }
         int canTake = Math.min(Math.min(source.getCount(), max),
@@ -147,10 +246,21 @@ public class BaitBucketItem extends SimplePolymerItem {
             CompoundTag baits = tag.getCompoundOrEmpty(TAG_BAITS);
             baits.putInt(id, baits.getIntOr(id, 0) + canTake);
             tag.put(TAG_BAITS, baits);
-            tag.remove(TAG_BAIT);
-            tag.remove(TAG_COUNT);
+            // **置顶**：刚装进去的（或补货的）那种挪到栈顶
+            Map<Item, Integer> counts = new LinkedHashMap<>();
+            for (String key : baits.keySet()) {
+                Item item = itemOf(key);
+                if (item != null) {
+                    counts.put(item, baits.getIntOr(key, 0));
+                }
+            }
+            List<Item> order = readStackOrder(tag, counts);
+            order.remove(source.getItem());
+            order.add(source.getItem());
+            writeStackOrder(tag, order);
         });
         source.shrink(canTake);
+        refreshModel(bucket);
         return canTake;
     }
 
@@ -159,11 +269,17 @@ public class BaitBucketItem extends SimplePolymerItem {
      * 空桶返回 {@link ItemStack#EMPTY}。
      */
     public static ItemStack extract(ItemStack bucket) {
+        return extract(bucket, Integer.MAX_VALUE);
+    }
+
+    /** 从桶里取出**最高档**的饵，最多 {@code max} 个。 */
+    public static ItemStack extract(ItemStack bucket, int max) {
         Item contained = containedBait(bucket);
-        if (contained == null) {
+        if (contained == null || max <= 0) {
             return ItemStack.EMPTY;
         }
-        int take = Math.min(countOf(bucket, contained), contained.getDefaultMaxStackSize());
+        int take = Math.min(Math.min(countOf(bucket, contained), max),
+                contained.getDefaultMaxStackSize());
         if (take <= 0) {
             return ItemStack.EMPTY;
         }
@@ -190,14 +306,24 @@ public class BaitBucketItem extends SimplePolymerItem {
             } else {
                 baits.remove(id);
             }
+            Map<Item, Integer> counts = new LinkedHashMap<>();
+            for (String key : baits.keySet()) {
+                Item item = itemOf(key);
+                if (item != null && baits.getIntOr(key, 0) > 0) {
+                    counts.put(item, baits.getIntOr(key, 0));
+                }
+            }
             if (baits.isEmpty()) {
                 tag.remove(TAG_BAITS);
+                tag.remove(TAG_ORDER);
             } else {
                 tag.put(TAG_BAITS, baits);
+                List<Item> order = readStackOrder(tag, counts);
+                order.removeIf(item -> !counts.containsKey(item));
+                writeStackOrder(tag, order);
             }
-            tag.remove(TAG_BAIT);
-            tag.remove(TAG_COUNT);
         });
+        refreshModel(bucket);
         return take;
     }
 
@@ -206,79 +332,118 @@ public class BaitBucketItem extends SimplePolymerItem {
         return remove(bucket, containedBait(bucket), n);
     }
 
-    /** 桶在手上，点到别的格子上。 */
+    /**
+     * 桶在光标上，点到别的格子上（原版收纳袋的交互）。
+     *
+     * <p>两个坑（原来都踩了）：
+     * <ol>
+     *   <li><b>取饵前必须先问目的地收不收</b>：原来是"先 extract 再 mayPlace"，
+     *       目的地拒收（比如只能放燃料/盔甲的格子）时饵已经被扣掉且 {@code taken}
+     *       被丢弃 → <b>白丢物品</b>；</li>
+     *   <li><b>处理过的点击要吃掉</b>：原来装不进去就 return false，默认逻辑接着跑，
+     *       会把光标上的桶和格子里的饵<b>对调</b>，玩家看着就是"桶跑进背包了"。</li>
+     * </ol>
+     */
     @Override
     public boolean overrideStackedOnOther(ItemStack bucket, Slot slot, ClickAction action, Player player) {
         ItemStack inSlot = slot.getItem();
         if (!inSlot.isEmpty()) {
-            // 桶点饵 → 装入（左键全装，右键装一个）
-            if (!FishingBait.isBait(inSlot.getItem()) || !slot.mayPickup(player)) {
-                return false;
+            // 桶点饵 → 装入（左键全装、右键装一个）
+            if (FishingBait.isBait(inSlot.getItem()) && slot.mayPickup(player)) {
+                int moved = insert(bucket, inSlot, action == ClickAction.PRIMARY
+                        ? Integer.MAX_VALUE : 1);
+                if (moved > 0) {
+                    slot.setChanged();
+                    playInsertSound(player);
+                } else {
+                    playInsertFailSound(player);
+                }
             }
-            int moved = insert(bucket, inSlot, action == ClickAction.PRIMARY ? Integer.MAX_VALUE : 1);
-            if (moved > 0) {
-                slot.setChanged();
-                return true;
-            }
-            return false;
+            // 格子不是空的就吃掉这次点击（原版收纳袋同语义）
+            return true;
         }
         // 桶右键点空格子 → 取一组放进那格
         if (action == ClickAction.SECONDARY) {
-            ItemStack taken = extract(bucket);
-            if (!taken.isEmpty() && slot.mayPlace(taken)) {
-                slot.safeInsert(taken);
-                slot.setChanged();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** 别的东西点到桶上（桶在格子里）。 */
-    @Override
-    public boolean overrideOtherStackedOnMe(ItemStack bucket, ItemStack carried, Slot slot, ClickAction action,
-                                            Player player, SlotAccess carriedAccess) {
-        if (!carried.isEmpty()) {
-            // 饵点桶 → 装入
-            if (!FishingBait.isBait(carried.getItem())) {
+            Item held = containedBait(bucket);
+            if (held == null) {
                 return false;
             }
-            int moved = insert(bucket, carried, action == ClickAction.PRIMARY ? Integer.MAX_VALUE : 1);
-            if (moved > 0) {
-                carriedAccess.set(carried.isEmpty() ? ItemStack.EMPTY : carried);
-                slot.setChanged();
-                return true;
+            int want = Math.min(countOf(bucket, held), held.getDefaultMaxStackSize());
+            if (!slot.mayPlace(new ItemStack(held, want))) {
+                return false;   // 目的地不收 → 一个都不许扣
             }
-            return false;
-        }
-        // 空手右键点桶 → 取一组到手上
-        if (action == ClickAction.SECONDARY) {
-            ItemStack taken = extract(bucket);
+            ItemStack taken = extract(bucket, want);
             if (!taken.isEmpty()) {
-                carriedAccess.set(taken);
+                ItemStack left = slot.safeInsert(taken);
+                if (!left.isEmpty()) {
+                    // 理论上不会发生（空格子 + 一组 = 堆叠上限）；真发生了就塞回桶里，别丢
+                    insert(bucket, left, Integer.MAX_VALUE);
+                }
                 slot.setChanged();
-                return true;
+                playRemoveOneSound(player);
             }
+            return true;
         }
         return false;
     }
 
     /**
-     * 客户端模型只看"空 / 有饵"两种：空桶用 {@code hubsuite:<桶>}，
-     * **只要装了饵**（不管哪种、装了几种）都用 {@code hubsuite:<桶>_bait}。
+     * 别的东西点到桶上（桶在格子里）。
      *
-     * <p>用户定的：装了饵的桶就一张贴图，不按饵的种类分。资源包每只桶只要
-     * 2 个模型（空 + 有饵），见 {@code docs/自定义物品.md}。
+     * <p>补了两处原版语义：取饵前检查 {@code slot.allowModification(player)}
+     * （只读格子不给取，否则是刷物品的缺口）；装入/取出都出声。
      */
     @Override
-    public Identifier getPolymerItemModel(ItemStack stack, PacketContext context,
-                                          net.minecraft.core.HolderLookup.Provider registries) {
-        Identifier base = stack.get(DataComponents.ITEM_MODEL);
-        if (base == null || containedBait(stack) == null) {
-            return base;
+    public boolean overrideOtherStackedOnMe(ItemStack bucket, ItemStack carried, Slot slot, ClickAction action,
+                                            Player player, SlotAccess carriedAccess) {
+        if (!carried.isEmpty()) {
+            if (!FishingBait.isBait(carried.getItem()) || !slot.allowModification(player)) {
+                return false;   // 不是饵 / 这个格子不让改 → 交回默认逻辑
+            }
+            int moved = insert(bucket, carried, action == ClickAction.PRIMARY ? Integer.MAX_VALUE : 1);
+            if (moved > 0) {
+                carriedAccess.set(carried.isEmpty() ? ItemStack.EMPTY : carried);
+                slot.setChanged();
+                playInsertSound(player);
+            } else {
+                playInsertFailSound(player);
+            }
+            return true;   // 吃掉点击，别让默认逻辑把饵和桶对调
         }
-        return Identifier.fromNamespaceAndPath(base.getNamespace(), base.getPath() + "_bait");
+        // 空手右键点桶 → 取一组到手上
+        if (action == ClickAction.SECONDARY && slot.allowModification(player)) {
+            ItemStack taken = extract(bucket);
+            if (!taken.isEmpty()) {
+                carriedAccess.set(taken);
+                slot.setChanged();
+                playRemoveOneSound(player);
+                return true;
+            }
+        }
+        return false;
     }
+
+    private static void playInsertSound(Player player) {
+        player.playSound(net.minecraft.sounds.SoundEvents.BUNDLE_INSERT, 0.8F,
+                0.8F + player.level().getRandom().nextFloat() * 0.4F);
+    }
+
+    private static void playInsertFailSound(Player player) {
+        player.playSound(net.minecraft.sounds.SoundEvents.BUNDLE_INSERT_FAIL, 1.0F, 1.0F);
+    }
+
+    private static void playRemoveOneSound(Player player) {
+        player.playSound(net.minecraft.sounds.SoundEvents.BUNDLE_REMOVE_ONE, 0.8F,
+                0.8F + player.level().getRandom().nextFloat() * 0.4F);
+    }
+
+    /*
+     * 客户端模型只看"空 / 有饵"两种（用户定的）：空桶 {@code hubsuite:<桶>}，
+     * 装了饵（不管哪种、装几种）就是 {@code hubsuite:<桶>_bait}，每只桶只要 2 个模型。
+     *
+     * 以前是靠 Polymer 在发包时替换模型（只对原生客户端有效）；现在改成
+     * {@link #refreshModel} 直接维护物品栈的 {@code item_model} 组件 —— 两条路一份逻辑。
+     */
 
     /** 客户端 tooltip：总量 + 内容物明细（最多列 3 种）。 */
     @Override
@@ -291,6 +456,15 @@ public class BaitBucketItem extends SimplePolymerItem {
         }
         tooltip.add(Component.literal("内容物 " + containedCount(stack) + " / " + capacity)
                 .withStyle(ChatFormatting.GRAY));
+        Item top = containedBait(stack);
+        if (top != null) {
+            tooltip.add(Component.literal("栈顶（下一个消耗）：")
+                    .append(Component.translatable(top.getDescriptionId()))
+                    .append(Component.literal(" × " + countOf(stack, top)))
+                    .withStyle(ChatFormatting.GRAY));
+        }
+        tooltip.add(Component.literal("左键点=全装 · 右键点=装一个 · 右键空格子=取一组")
+                .withStyle(ChatFormatting.DARK_GRAY));
         int lines = 0;
         for (Map.Entry<Item, Integer> e : contents.entrySet()) {
             if (lines++ >= 3) {

@@ -55,11 +55,17 @@ public final class HubSuite implements ModInitializer {
     private cn.dreamgary.hubsuite.island.IslandService islands;
     private cn.dreamgary.hubsuite.integration.UpdateChecker updateChecker;
     private cn.dreamgary.hubsuite.integration.JeiIntegration jei;
+    /** 客户端模组校验（0.5.0 起）。 */
+    private cn.dreamgary.hubsuite.net.ClientCompat clientCompat;
 
     @Override
     public void onInitialize() {
         // 自定义物品必须先注册（Polymer 硬依赖，客户端侧由它映射成原版物品）
         cn.dreamgary.hubsuite.feature.item.HubSuiteItems.register();
+        // 模组自带的资源包素材（items/models/textures/lang）交给 Polymer 一起下发 ——
+        // 不做这一步，Polymer 生成的包只有 pack.mcmeta（实测 811 字节），客户端从服务器
+        // 拉下来一张贴图都没有（用户实测反馈过）。服主自己的资源包优先级更高，仍可覆盖。
+        registerResourcePackAssets();
         instance = this;
         LOGGER.info("{} 正在初始化……", MOD_NAME);
         logEnvironment();
@@ -112,6 +118,10 @@ public final class HubSuite implements ModInitializer {
         lockdown.register();
         commandGuard = new cn.dreamgary.hubsuite.feature.CommandGuard(worldsManager, lockdown, permissions);
         cn.dreamgary.hubsuite.feature.CommandGuardHolder.set(commandGuard);
+
+        // 客户端模组校验（0.5.0）：握手 + 按能力分叉。开发期默认只提示不拦。
+        clientCompat = new cn.dreamgary.hubsuite.net.ClientCompat(configManager.config().clientCompat);
+        clientCompat.register();
 
         // 集成：HuskHomes 与占位符
         huskHomes = new cn.dreamgary.hubsuite.integration.HuskHomesIntegration(worldsManager);
@@ -243,6 +253,25 @@ public final class HubSuite implements ModInitializer {
                 isLoaded("huskhomes"), isLoaded("placeholder-api"), isLoaded("luckperms"), isLoaded("fabric-permissions-api-v0"), isLoaded("jei"));
     }
 
+    /**
+     * 把模组 jar 里的 {@code assets/hubsuite/**} 交给 Polymer 的自动托管资源包。
+     *
+     * <p>Polymer 的 resource-pack 模块不一定在（有人只装 {@code polymer-core}），
+     * 所以先探测再调用，并且整体 try/catch：缺了只是"没有自定义外观"，不影响玩法。
+     */
+    private void registerResourcePackAssets() {
+        try {
+            if (!net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("polymer-resource-pack")) {
+                LOGGER.warn("未检测到 polymer-resource-pack：自定义物品的外观需要服主自行提供资源包");
+                return;
+            }
+            boolean added = eu.pb4.polymer.resourcepack.api.PolymerResourcePackUtils.addModAssets("hubsuite");
+            LOGGER.info("已把模组自带的资源包素材交给 Polymer 下发（added={}）", added);
+        } catch (Throwable t) {
+            LOGGER.warn("资源包素材注册失败（自定义外观会缺贴图）：{}", t.toString());
+        }
+    }
+
     private static boolean isLoaded(String modId) {
         return FabricLoader.getInstance().isModLoaded(modId);
     }
@@ -294,6 +323,11 @@ public final class HubSuite implements ModInitializer {
 
     public static cn.dreamgary.hubsuite.integration.JeiIntegration jei() {
         return get().jei;
+    }
+
+    /** 客户端模组校验；未初始化时为 null。 */
+    public static cn.dreamgary.hubsuite.net.ClientCompat clients() {
+        return instance == null ? null : instance.clientCompat;
     }
 
     public static cn.dreamgary.hubsuite.integration.HuskHomesIntegration huskHomes() {

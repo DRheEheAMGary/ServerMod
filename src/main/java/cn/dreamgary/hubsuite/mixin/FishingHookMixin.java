@@ -3,7 +3,9 @@ package cn.dreamgary.hubsuite.mixin;
 import cn.dreamgary.hubsuite.feature.FishingGameplay;
 import cn.dreamgary.hubsuite.feature.LavaFishingHook;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.FishingHook;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -46,7 +48,7 @@ public abstract class FishingHookMixin implements LavaFishingHook {
      * 所以熔岩竿抛出的钩子在两处都"岩浆也算水"。改之前先 javap 数一遍这两处，
      * 别顺手加 ordinal（加了就只剩一处生效，另一处会把钓鱼掐断）。
      */
-    @ModifyExpressionValue(method = "tick",
+    @ModifyExpressionValue(method = {"tick", "getOpenWaterTypeForBlock"},
             at = @At(value = "INVOKE",
                     target = "Lnet/minecraft/world/level/material/FluidState;is(Lnet/minecraft/tags/TagKey;)Z"))
     private boolean hubsuite$lavaCountsAsWater(boolean original) {
@@ -54,6 +56,90 @@ public abstract class FishingHookMixin implements LavaFishingHook {
             return true;
         }
         return FishingGameplay.canFishInLava((FishingHook) (Object) this);
+    }
+
+    /**
+     * 岩浆里别冒水花：把 {@code catchingFish} 里的 SPLASH / BUBBLE 粒子换成岩浆粒子。
+     *
+     * <p>用户要求"粒子改成岩浆"。只在"熔岩钓竿抛的钩子且真的泡在岩浆里"时替换，
+     * 普通水里还是原版水花。
+     */
+    @ModifyExpressionValue(method = "catchingFish",
+            at = @At(value = "FIELD",
+                    target = "Lnet/minecraft/core/particles/ParticleTypes;SPLASH:Lnet/minecraft/core/particles/SimpleParticleType;",
+                    opcode = org.objectweb.asm.Opcodes.GETSTATIC))
+    private net.minecraft.core.particles.SimpleParticleType hubsuite$lavaSplash(
+            net.minecraft.core.particles.SimpleParticleType original) {
+        return hubsuite$inLavaForEffects()
+                ? net.minecraft.core.particles.ParticleTypes.LAVA : original;
+    }
+
+    @ModifyExpressionValue(method = "catchingFish",
+            at = @At(value = "FIELD",
+                    target = "Lnet/minecraft/core/particles/ParticleTypes;BUBBLE:Lnet/minecraft/core/particles/SimpleParticleType;",
+                    opcode = org.objectweb.asm.Opcodes.GETSTATIC))
+    private net.minecraft.core.particles.SimpleParticleType hubsuite$lavaBubble(
+            net.minecraft.core.particles.SimpleParticleType original) {
+        return hubsuite$inLavaForEffects()
+                ? net.minecraft.core.particles.ParticleTypes.LAVA : original;
+    }
+
+    @Unique
+    private boolean hubsuite$inLavaForEffects() {
+        return FishingGameplay.canFishInLava((FishingHook) (Object) this);
+    }
+
+    /**
+     * 熔岩竿的钩子泡在岩浆里时**不着火**（用户要求："钓钩不要着火"）。
+     *
+     * <p>必须在 {@code tick} 的 **TAIL** 清：{@code FishingHook.tick} 内部会调
+     * {@code super.tick()} → {@code Entity.baseTick()} → {@code lavaHurt()}，
+     * 那里每 tick 都会 {@code setRemainingFireTicks(15)} —— 在 HEAD 清等于白清。
+     * {@code FishingHook} 不是 LivingEntity，所以只是"看起来着火"，清掉即可。
+     */
+    @Inject(method = "tick", at = @At("TAIL"))
+    private void hubsuite$noFireInLava(CallbackInfo ci) {
+        FishingHook self = (FishingHook) (Object) this;
+        // 快路径：绝大多数情况这里就是 0（没火），直接返回，一次字段读而已。
+        // 正常路径由 EntityLavaHurtMixin（fireImmune）挡住，这里只是双保险。
+        if (self.getRemainingFireTicks() == 0) {
+            return;
+        }
+        if (((LavaFishingHook) (Object) this).hubsuite$fromLavaRod()
+                && FishingGameplay.inFluid(self, net.minecraft.tags.FluidTags.LAVA)) {
+            self.clearFire();
+        }
+    }
+
+    /**
+     * 原版 {@code FishingHook.shouldStopFishing(Player)} 是**身份比较**：
+     *
+     * <pre>
+     * boolean mainRod = main.getMainHandItem().is(Items.FISHING_ROD);
+     * boolean offRod  = player.getOffhandItem().is(Items.FISHING_ROD);
+     * if ((mainRod || offRod) &amp;&amp; distanceToSqr(player) &lt;= 1024) return false;
+     * this.discard();   // ← 手里不是**原版**钓竿就立刻收掉
+     * </pre>
+     *
+     * <p>我们的熔岩钓竿是自有 id（{@code hubsuite:lava_rod}），这个检查必然为假 ——
+     * 症状就是实测的<b>"一甩竿浮标就消失，什么都没碰到"</b>（浮标下一 tick 就被
+     * {@code discard()}）。这里只在"手里确实拿着我们的竿"时接管：继续钓；
+     * 距离超 1024 / 玩家不能交互仍然按原版收掉。
+     */
+    @Inject(method = "shouldStopFishing", at = @At("HEAD"), cancellable = true)
+    private void hubsuite$ourRodCountsAsRod(Player player, CallbackInfoReturnable<Boolean> cir) {
+        if (!player.canInteractWithLevel()) {
+            return;
+        }
+        boolean ours = cn.dreamgary.hubsuite.feature.item.LavaRodItem.isLavaRod(player.getMainHandItem())
+                || cn.dreamgary.hubsuite.feature.item.LavaRodItem.isLavaRod(player.getOffhandItem());
+        if (!ours) {
+            return;
+        }
+        FishingHook self = (FishingHook) (Object) this;
+        if (self.distanceToSqr(player) <= 1024.0) {
+            cir.setReturnValue(false);
+        }
     }
 
     @Inject(method = "tick", at = @At("HEAD"))

@@ -10,3 +10,6 @@ pluginManagement {
 }
 
 rootProject.name = 'hubsuite'
+
+// 客户端模组（0.5.0）：与根项目（服务端）相互独立，各自版本号
+include 'client'

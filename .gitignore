@@ -21,3 +21,6 @@ libs/
 
 # macOS
 .DS_Store
+
+# IDE / build output
+bin/

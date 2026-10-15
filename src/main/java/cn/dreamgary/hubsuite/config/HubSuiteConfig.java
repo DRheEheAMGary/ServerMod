@@ -36,6 +36,9 @@ public final class HubSuiteConfig {
     /** 更新检查（启动时查一次，有新版本时提示管理员）。 */
     public UpdateConfig update = new UpdateConfig();
 
+    /** 客户端模组校验（0.5.0 起，见 docs/客户端契约.md 第 3.3 / 5 节）。 */
+    public ClientCompatConfig clientCompat = new ClientCompatConfig();
+
     /** 海岛渔获（按维度挂表，见 feature/FishingPresets）。 */
     public cn.dreamgary.hubsuite.feature.FishingPresets.FishingConfig fishing =
             cn.dreamgary.hubsuite.feature.FishingPresets.defaults();
@@ -68,6 +71,58 @@ public final class HubSuiteConfig {
         public boolean check = true;
         /** 是否也检查测试版（预发布）。{@link #check} 为 false 时本项无效。 */
         public boolean checkBeta = false;
+    }
+
+    /**
+     * 客户端模组校验（0.5.0 起，见 docs/客户端契约.md 第 3.3 / 5 节）。
+     *
+     * <p>玩家进服时服务端打招呼（{@code hubsuite:hello}），客户端回自己的
+     * 版本 / 协议号 / 指纹 / 能力清单；没应答（没装客户端模组）、协议对不上、
+     * 或版本低于 {@link #minClientVersion} 时，按 {@link #mode} 处理。
+     *
+     * <p><b>开发期默认 {@code warn}</b>：只提示不拦。等客户端模组真的随版本发出去
+     * （0.5.0-alpha.1）再改成 {@code enforce} —— 在那之前拦人只会把自己拦在门外。
+     */
+    public static final class ClientCompatConfig {
+
+        /** {@code off} = 不校验；{@code warn} = 提示 + 记日志；{@code enforce} = 踢出。 */
+        public String mode = "warn";
+
+        /** 进服要求的最低客户端版本；留空 = 不查版本（只查装没装）。 */
+        public String minClientVersion = "";
+
+        /** 等客户端应答的秒数（1..120）。 */
+        public int timeoutSeconds = 15;
+
+        /** 提示 / 踢出时给出的下载地址。 */
+        public String downloadUrl = "https://github.com/DRheEheAMGary/ServerMod/releases/latest";
+
+        /** 解析 {@link #mode}（认不出来一律按 warn）。 */
+        public cn.dreamgary.hubsuite.net.ClientCompat.Mode modeOf() {
+            if (mode == null) {
+                return cn.dreamgary.hubsuite.net.ClientCompat.Mode.WARN;
+            }
+            return switch (mode.trim().toLowerCase(java.util.Locale.ROOT)) {
+                case "off", "none", "false" -> cn.dreamgary.hubsuite.net.ClientCompat.Mode.OFF;
+                case "enforce", "strict", "true", "on" -> cn.dreamgary.hubsuite.net.ClientCompat.Mode.ENFORCE;
+                default -> cn.dreamgary.hubsuite.net.ClientCompat.Mode.WARN;
+            };
+        }
+
+        public void normalize() {
+            if (timeoutSeconds < 1) {
+                timeoutSeconds = 1;
+            }
+            if (timeoutSeconds > 120) {
+                timeoutSeconds = 120;
+            }
+            if (minClientVersion == null) {
+                minClientVersion = "";
+            }
+            if (downloadUrl == null || downloadUrl.isBlank()) {
+                downloadUrl = "https://github.com/DRheEheAMGary/ServerMod/releases/latest";
+            }
+        }
     }
 
     public static final class LobbyConfig {
@@ -413,6 +468,9 @@ public final class HubSuiteConfig {
             configVersion = 4;
         }
         fishing.normalize();
+        if (clientCompat != null) {
+            clientCompat.normalize();
+        }
         if (structureFoundations == null) {
             structureFoundations = new ArrayList<>(List.of("minecraft:bastion_remnant"));
         }

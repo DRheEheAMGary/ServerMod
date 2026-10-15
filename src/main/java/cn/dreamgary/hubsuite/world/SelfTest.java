@@ -172,7 +172,13 @@ public final class SelfTest {
         step("切服会真的放掉成就/统计缓存（隔离的前提）", this::checkAuxCacheEvictedOnSwitch);
         step("自定义物品 / 岩浆渔获 / 配方", this::checkCustomItemsAndFishing);
         step("渔桶：装饵 / 容量 / 钓鱼消耗", this::checkBaitBuckets);
+        step("熔岩钓竿甩竿后浮标留得住", this::checkLavaRodCast);
+        step("岩浆钓鱼：浮标不掉、不着火、能进浮漂状态", this::checkLavaFishing);
+        step("渔桶的点击交互（装 / 取 / 拒绝 / 只读格）", this::checkBaitBucketClicks);
         step("火能在本模组的维度里点燃传送门", this::checkFireCanIgnitePortal);
+        step("客户端握手契约（线格式 + 黄金字节 + 版本比较 + 判定表）", this::checkClientHandshake);
+        step("钓竿数据契约（部件表 + 属性公式 + NBT 线格式）", this::checkRodDataContract);
+        step("客户端真物品（共用定义 / 原型一致 / 素材齐全 / 能力名）", this::checkClientItemDefs);
     }
 
 
@@ -186,13 +192,6 @@ public final class SelfTest {
         try {
             var items = new java.util.LinkedHashMap<String, net.minecraft.world.item.Item>();
             items.put("nether_string", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_STRING);
-            items.put("bait", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT);
-            items.put("nether_bait", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_BAIT);
-            items.put("compressed_bait", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_BAIT);
-            items.put("compressed_nether_bait", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT);
-            items.put("double_compressed_bait", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT);
-            items.put("double_compressed_nether_bait",
-                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_NETHER_BAIT);
             items.put("lava_rod", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD);
             items.put("wooden_fishing_bucket",
                     cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
@@ -211,31 +210,42 @@ public final class SelfTest {
                 fail("这些自定义物品没注册上：" + missing.toString().trim());
                 return;
             }
-            ok("11 个自定义物品都注册上了（客户端显示由 Polymer 负责）");
+            ok(items.size() + " 个自定义物品都注册上了（客户端显示由 Polymer 负责）");
 
-            // 钓饵识别 + 水/岩浆分档
-            var bait = cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT;
-            var netherBait = cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_BAIT;
-            if (!cn.dreamgary.hubsuite.feature.FishingBait.isBait(bait)
-                    || !cn.dreamgary.hubsuite.feature.FishingBait.isBait(netherBait)) {
-                fail("钓饵没有被识别（FishingBait.speedupOf 返回 0）");
+            /*
+             * 钓饵判定现在是**数据驱动**的（v0.4.0-alpha.7 起自带的钓饵全部移除）：
+             *   #hubsuite:fishing_bait        —— 能不能进渔桶 / 当饵用
+             *   #hubsuite:fishing_bait_nether —— 是不是"岩浆那一族"
+             *   档次 = 物品稀有度（COMMON 1 / UNCOMMON 2 / RARE 3 / EPIC 4）
+             * 这里用 tag 默认内容里的原版物品来验证。
+             */
+            var fb = cn.dreamgary.hubsuite.feature.FishingBait.class;
+            var cod = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD);
+            var shell = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.NAUTILUS_SHELL);
+            var heart = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.NETHER_STAR);
+            var blaze = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.BLAZE_POWDER);
+            var dirt = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIRT);
+            if (!cn.dreamgary.hubsuite.feature.FishingBait.isBait(cod)
+                    || !cn.dreamgary.hubsuite.feature.FishingBait.isBait(blaze)
+                    || cn.dreamgary.hubsuite.feature.FishingBait.isBait(dirt)) {
+                fail("tag #hubsuite:fishing_bait 没生效（cod/blaze 应算饵，dirt 不算）"
+                        + " —— 检查 data/hubsuite/tags/item/fishing_bait.json");
                 return;
             }
-            if (cn.dreamgary.hubsuite.feature.FishingBait.isNetherBait(bait)
-                    || !cn.dreamgary.hubsuite.feature.FishingBait.isNetherBait(netherBait)) {
-                fail("普通/地狱钓饵分档不对");
+            if (cn.dreamgary.hubsuite.feature.FishingBait.isNetherBait(cod)
+                    || !cn.dreamgary.hubsuite.feature.FishingBait.isNetherBait(blaze)) {
+                fail("tag #hubsuite:fishing_bait_nether 没生效（cod 不该是岩浆族、blaze 应该是）");
                 return;
             }
-            double s1 = cn.dreamgary.hubsuite.feature.FishingBait.speedupOf(bait);
-            double s2 = cn.dreamgary.hubsuite.feature.FishingBait
-                    .speedupOf(cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_BAIT);
-            double s3 = cn.dreamgary.hubsuite.feature.FishingBait
-                    .speedupOf(cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT);
+            double s1 = cn.dreamgary.hubsuite.feature.FishingBait.speedupOf(cod);
+            double s2 = cn.dreamgary.hubsuite.feature.FishingBait.speedupOf(shell);
+            double s3 = cn.dreamgary.hubsuite.feature.FishingBait.speedupOf(heart);
             if (!(s1 < s2 && s2 < s3)) {
-                fail(String.format("钓饵加速档位不是递增的：%.2f / %.2f / %.2f", s1, s2, s3));
+                fail(String.format("饵的档次（按稀有度）不是递增的：%.2f / %.2f / %.2f", s1, s2, s3));
                 return;
             }
-            ok(String.format("钓饵分档正确（+%.0f%% / +%.0f%% / +%.0f%%）", s1 * 100, s2 * 100, s3 * 100));
+            ok(String.format("钓饵判定数据驱动：tag 生效、按稀有度分档"
+                    + "（+%.0f%% / +%.0f%% / +%.0f%%）", s1 * 100, s2 * 100, s3 * 100));
 
             // 岩浆渔获表（按群系分化）
             var config = HubSuite.fishing();
@@ -264,11 +274,7 @@ public final class SelfTest {
             ok("岩浆渔获表就绪（两个海岛下界，按群系分化的条目 " + totalBiomeEntries + " 条）");
 
             // 配方真的加载了（JSON 写错是静默失败）
-            String[] recipes = {"nether_string", "lava_rod", "bait", "nether_bait",
-                    "compressed_bait", "compressed_nether_bait",
-                    "double_compressed_bait", "double_compressed_nether_bait",
-                    "unpack_compressed_bait", "unpack_compressed_nether_bait",
-                    "unpack_double_compressed_bait", "unpack_double_compressed_nether_bait",
+            String[] recipes = {"nether_string", "lava_rod",
                     "wooden_fishing_bucket", "iron_fishing_bucket", "diamond_fishing_bucket"};
             var badRecipes = new StringBuilder();
             for (String id : recipes) {
@@ -329,6 +335,329 @@ public final class SelfTest {
 
 
     /**
+     * 渔桶的**点击交互**（这一层以前完全没有自检，两个 bug 就是从这漏过去的）。
+     *
+     * <p>锁四件事：
+     * <ol>
+     *   <li>目的地格子**拒收**这种物品时，桶里的饵一个都不能少
+     *       （原来是"先扣再判"，拒收就白丢）；</li>
+     *   <li>空格子右键 → 取出一组；</li>
+     *   <li>光标上的饵点到桶上 → 装进去、光标扣掉；</li>
+     *   <li>{@code allowModification == false} 的只读格子 → 不许取出。</li>
+     * </ol>
+     */
+    private void checkBaitBucketClicks() {
+        var lobby = worlds.lobby().orElse(null);
+        if (lobby == null) {
+            fail("缺少大厅，跳过渔桶点击检查");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_bucketclick", lobby.level(), false);
+        if (probe == null) {
+            fail("渔桶点击检查用假玩家创建失败");
+            return;
+        }
+        try {
+            var bucketItem = (cn.dreamgary.hubsuite.feature.item.BaitBucketItem)
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET;
+            var container = new net.minecraft.world.SimpleContainer(1);
+
+            // 1) 目的地拒收 → 桶里必须一个不少
+            var bucket = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(bucket,
+                    new net.minecraft.world.item.ItemStack(
+                            net.minecraft.world.item.Items.COD, 8), Integer.MAX_VALUE);
+            var refuse = new net.minecraft.world.inventory.Slot(container, 0, 0, 0) {
+                @Override
+                public boolean mayPlace(net.minecraft.world.item.ItemStack stack) {
+                    return false;
+                }
+            };
+            bucketItem.overrideStackedOnOther(bucket, refuse, net.minecraft.world.inventory.ClickAction.SECONDARY, probe);
+            if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket) != 8) {
+                fail("目的地格子拒收时，桶里的饵被扣掉了（丢物品）：只剩 "
+                        + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket));
+                return;
+            }
+
+            // 2) 正常空格子右键 → 取出一组（这里是 8 个）
+            var normal = new net.minecraft.world.inventory.Slot(container, 0, 0, 0);
+            bucketItem.overrideStackedOnOther(bucket, normal, net.minecraft.world.inventory.ClickAction.SECONDARY, probe);
+            if (normal.getItem().getItem() != net.minecraft.world.item.Items.COD
+                    || normal.getItem().getCount() != 8
+                    || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket) != 0) {
+                fail("空格子取一组不对：格子=" + normal.getItem()
+                        + "，桶里剩 " + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket));
+                return;
+            }
+
+            // 3) 光标上的饵点到桶上（桶在格子里）
+            var bucket2 = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            var slot2 = new net.minecraft.world.inventory.Slot(container, 0, 0, 0);
+            slot2.set(bucket2);
+            final net.minecraft.world.item.ItemStack[] cursor = {
+                    new net.minecraft.world.item.ItemStack(
+                            net.minecraft.world.item.Items.BLAZE_POWDER, 3)};
+            var access = new net.minecraft.world.entity.SlotAccess() {
+                @Override
+                public net.minecraft.world.item.ItemStack get() {
+                    return cursor[0];
+                }
+
+                @Override
+                public boolean set(net.minecraft.world.item.ItemStack stack) {
+                    cursor[0] = stack;
+                    return true;
+                }
+            };
+            bucketItem.overrideOtherStackedOnMe(bucket2, cursor[0], slot2,
+                    net.minecraft.world.inventory.ClickAction.PRIMARY, probe, access);
+            if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(bucket2,
+                    net.minecraft.world.item.Items.BLAZE_POWDER) != 3
+                    || !cursor[0].isEmpty()) {
+                fail("饵点到桶上没装好：桶里 "
+                        + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(bucket2)
+                        + "，光标剩 " + cursor[0].getCount());
+                return;
+            }
+
+            // 3b) 反向路径：桶在**光标**上、饵在格子里，左键应该整摞装进去
+            var bucket4 = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            var slot4 = new net.minecraft.world.inventory.Slot(container, 0, 0, 0);
+            slot4.set(new net.minecraft.world.item.ItemStack(
+                    net.minecraft.world.item.Items.NETHER_STAR, 12));
+            bucketItem.overrideStackedOnOther(bucket4, slot4,
+                    net.minecraft.world.inventory.ClickAction.PRIMARY, probe);
+            if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(bucket4,
+                    net.minecraft.world.item.Items.NETHER_STAR) != 12
+                    || !slot4.getItem().isEmpty()) {
+                fail("桶在光标上左键点整摞饵，应该 12 个全进去：桶里 "
+                        + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(bucket4)
+                        + "，格子里剩 " + slot4.getItem().getCount());
+                return;
+            }
+
+            // 4) 只读格子（allowModification=false）不许取出
+            var locked = new net.minecraft.world.inventory.Slot(container, 0, 0, 0) {
+                @Override
+                public boolean allowModification(net.minecraft.world.entity.player.Player p) {
+                    return false;
+                }
+            };
+            var bucket3 = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(bucket3,
+                    new net.minecraft.world.item.ItemStack(
+                            net.minecraft.world.item.Items.COD, 5), Integer.MAX_VALUE);
+            locked.set(bucket3);
+            final net.minecraft.world.item.ItemStack[] empty = {net.minecraft.world.item.ItemStack.EMPTY};
+            var access2 = new net.minecraft.world.entity.SlotAccess() {
+                @Override
+                public net.minecraft.world.item.ItemStack get() {
+                    return empty[0];
+                }
+
+                @Override
+                public boolean set(net.minecraft.world.item.ItemStack stack) {
+                    empty[0] = stack;
+                    return true;
+                }
+            };
+            bucketItem.overrideOtherStackedOnMe(bucket3, net.minecraft.world.item.ItemStack.EMPTY, locked,
+                    net.minecraft.world.inventory.ClickAction.SECONDARY, probe, access2);
+            if (!empty[0].isEmpty()
+                    || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket3) != 5) {
+                fail("只读格子不该能取出饵：光标=" + empty[0]
+                        + "，桶里剩 " + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(bucket3));
+                return;
+            }
+
+            ok("渔桶点击交互正常（拒收不丢饵、空格取一组、点桶装入、只读格不给取）");
+        } catch (Throwable t) {
+            fail("渔桶点击检查异常：" + t);
+        } finally {
+            try {
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 清理失败不影响结论
+            }
+        }
+    }
+
+    /**
+     * 岩浆钓鱼：浮标泡在岩浆里要能进入"浮漂（BOBBING）"状态、并且不着火。
+     *
+     * <p>锁住用户实测："好像是一直不咬钩" + "钓钩不要着火"。
+     * 原版判"水"的地方是 {@code FluidState.is(FluidTags.WATER)}（{@code tick} 两处 +
+     * {@code getOpenWaterTypeForBlock} 一处），我们按"熔岩竿抛的钩子 + 真的在岩浆里"全部放行；
+     * TAIL 清火焰；粒子换岩浆。
+     */
+    private void checkLavaFishing() {
+        var key = net.minecraft.resources.ResourceKey.create(
+                net.minecraft.core.registries.Registries.DIMENSION,
+                net.minecraft.resources.Identifier.parse("hubsuite:skyblock_ocean_nether"));
+        var level = server.getLevel(key);
+        if (level == null) {
+            fail("找不到海岛下界维度，跳过岩浆钓鱼检查");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_lavatest", level, false);
+        if (probe == null) {
+            fail("岩浆钓鱼检查用假玩家创建失败");
+            return;
+        }
+        var base = new net.minecraft.core.BlockPos(0, 200, 0);
+        try {
+            /*
+             * 搭个 5x5 石台 + 中间 3x3 岩浆池。
+             * 假玩家必须站在**实体方块**上：之前直接放在虚空空气里，它 80 tick 就掉到
+             * 离浮标 32 格以外，被原版 shouldStopFishing 的"超距"规则收掉了 —— 那是测试
+             * 自己的问题，不是玩法问题。
+             */
+            for (int dx = -2; dx <= 2; dx++) {
+                for (int dz = -2; dz <= 2; dz++) {
+                    boolean pool = Math.abs(dx) <= 1 && Math.abs(dz) <= 1;
+                    level.setBlockAndUpdate(base.offset(dx, 0, dz),
+                            net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+                    level.setBlockAndUpdate(base.offset(dx, 1, dz), pool
+                            ? net.minecraft.world.level.block.Blocks.LAVA.defaultBlockState()
+                            : net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+                    level.setBlockAndUpdate(base.offset(dx, 2, dz),
+                            net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                }
+            }
+            probe.teleportTo(level, base.getX() + 2.5, base.getY() + 2.0, base.getZ() + 0.5,
+                    java.util.Set.of(), 0.0F, 0.0F, false);
+            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND,
+                    new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD));
+            probe.fishing = null;
+            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD
+                    .use(level, probe, net.minecraft.world.InteractionHand.MAIN_HAND);
+            net.minecraft.world.entity.projectile.FishingHook hook = probe.fishing;
+            if (hook == null) {
+                fail("岩浆里甩竿没生成浮标");
+                return;
+            }
+            // 把浮标按进岩浆里
+            hook.setPos(base.getX() + 0.5, base.getY() + 1.9, base.getZ() + 0.5);
+            var accessor = (cn.dreamgary.hubsuite.mixin.FishingHookAccessor) hook;
+            // 原版第一次咬钩要等 5~30 秒（100~600 tick），窗口开大一点才有意义
+            boolean hooked = false;
+            int untilHooked = 0;
+            for (int i = 1; i <= 1200; i++) {
+                hook.tick();
+                if (hook.isRemoved()) {
+                    fail("浮标在岩浆里第 " + i + " tick 被收掉了");
+                    return;
+                }
+                untilHooked = Math.max(untilHooked, accessor.hubsuite$getTimeUntilHooked());
+                // nibble / biting / timeUntilHooked 任意一个动过，就说明"咬钩流程跑起来了"
+                if (accessor.hubsuite$getNibble() > 0 || accessor.hubsuite$isBiting() || untilHooked > 0) {
+                    hooked = true;
+                    break;
+                }
+            }
+            if (hook.getRemainingFireTicks() > 0) {
+                fail("浮标在岩浆里着火了（剩余 " + hook.getRemainingFireTicks() + " tick）");
+                return;
+            }
+            if (!hooked) {
+                fail("浮标在岩浆里 1200 tick 都没进入咬钩流程（nibble/biting/timeUntilHooked 全是 0）");
+                return;
+            }
+            ok("岩浆钓鱼：浮标不掉、不着火、进入了咬钩流程（timeUntilHooked=" + untilHooked
+                    + "，nibble=" + accessor.hubsuite$getNibble() + "）");
+        } catch (Throwable t) {
+            fail("岩浆钓鱼检查异常：" + t);
+        } finally {
+            try {
+                if (probe.fishing != null) {
+                    probe.fishing.discard();
+                }
+                for (int dx = -2; dx <= 2; dx++) {
+                    for (int dz = -2; dz <= 2; dz++) {
+                        level.setBlockAndUpdate(base.offset(dx, 0, dz),
+                                net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                        level.setBlockAndUpdate(base.offset(dx, 1, dz),
+                                net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                    }
+                }
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 清理失败不影响结论
+            }
+        }
+    }
+
+    /**
+     * 熔岩钓竿真的能甩出去、浮标留得住。
+     *
+     * <p>锁住用户实测："熔岩钓竿一扔出去浮标就消失，我都没收杆"。
+     *
+     * <p>根因是原版 {@code FishingHook.shouldStopFishing} 用的是**身份比较**
+     * {@code stack.is(Items.FISHING_ROD)}（见 {@code javap} 字节码：偏移 18/27 处
+     * {@code getstatic Items.FISHING_ROD} + {@code ItemStack.is(Object)}）——
+     * 手里拿的不是**原版**钓竿就立刻 {@code discard()}。我们的竿是自有 id
+     * （{@code hubsuite:lava_rod}），所以浮标生成后下一 tick 就被收掉。
+     *
+     * <p>这里直接复现：假玩家拿竿 → 调 {@code use} 甩出去 → 手动 tick 10 次，
+     * 浮标必须还在。
+     */
+    private void checkLavaRodCast() {
+        var lobby = worlds.lobby().orElse(null);
+        if (lobby == null) {
+            fail("缺少大厅，跳过熔岩钓竿甩竿检查");
+            return;
+        }
+        var probe = FakePlayers.spawn(server, "hubsuite_rodtest", lobby.level(), false);
+        if (probe == null) {
+            fail("熔岩钓竿检查用假玩家创建失败");
+            return;
+        }
+        try {
+            var level = (net.minecraft.server.level.ServerLevel) probe.level();
+            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND,
+                    new net.minecraft.world.item.ItemStack(
+                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD));
+            probe.fishing = null;
+            var result = cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD
+                    .use(level, probe, net.minecraft.world.InteractionHand.MAIN_HAND);
+            net.minecraft.world.entity.projectile.FishingHook hook = probe.fishing;
+            if (hook == null) {
+                fail("熔岩钓竿甩出去没生成浮标（use 返回 " + result + "）");
+                return;
+            }
+            if (!((cn.dreamgary.hubsuite.feature.LavaFishingHook) hook).hubsuite$fromLavaRod()) {
+                fail("浮标没被标记成熔岩竿抛的（岩浆钓鱼判定会失效）");
+                return;
+            }
+            for (int i = 1; i <= 10; i++) {
+                hook.tick();
+                if (hook.isRemoved()) {
+                    fail("浮标第 " + i + " tick 就被收掉了 —— 原版 shouldStopFishing 认为手里不是钓竿");
+                    return;
+                }
+            }
+            ok("熔岩钓竿甩竿正常：浮标留住 10 tick，且被标记为熔岩钩");
+        } catch (Throwable t) {
+            fail("熔岩钓竿甩竿检查异常：" + t);
+        } finally {
+            try {
+                if (probe.fishing != null) {
+                    probe.fishing.discard();
+                }
+                server.getPlayerList().remove(probe);
+            } catch (Throwable ignored) {
+                // 清理失败不影响结论
+            }
+        }
+    }
+
+    /**
      * 渔桶（钓饵收纳袋）。
      *
      * <p>锁四件事：装取纯逻辑（满 / 拒异种 / 压缩可进 / 容量分档）、堆叠数（饵 16、桶 1）、
@@ -347,22 +676,18 @@ public final class SelfTest {
             var wood = new net.minecraft.world.item.ItemStack(
                     cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
             var H = cn.dreamgary.hubsuite.feature.item.HubSuiteItems.class;
-            // 木桶容量 64：用 4 个"满堆叠"（钓饵堆叠上限 16）刚好装满
-            int moved = 0;
-            for (int i = 0; i < 4; i++) {
-                moved += cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
-                        wood, new net.minecraft.world.item.ItemStack(
-                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 16),
-                        Integer.MAX_VALUE);
-            }
+            // 木桶容量 64：用一摞 64 个 cod（原版鱼，在 tag #hubsuite:fishing_bait 里）装满
+            int moved = cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                    wood, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD, 64),
+                    Integer.MAX_VALUE);
             if (moved != 64
                     || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(wood) != 64) {
                 fail("木桶应正好装 64 个饵，实际装了 " + moved);
                 return;
             }
             if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
-                    wood, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 16), Integer.MAX_VALUE) != 0) {
+                    wood, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD, 64),
+                    Integer.MAX_VALUE) != 0) {
                 fail("木桶装满 64 后还能继续装");
                 return;
             }
@@ -370,15 +695,14 @@ public final class SelfTest {
             var mixed = new net.minecraft.world.item.ItemStack(
                     cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
             cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
-                    mixed, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 3), Integer.MAX_VALUE);
-            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
-                    mixed, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_BAIT, 2), Integer.MAX_VALUE);
-            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
-                    mixed, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT, 1),
+                    mixed, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD, 3),
                     Integer.MAX_VALUE);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                    mixed, new net.minecraft.world.item.ItemStack(
+                            net.minecraft.world.item.Items.BLAZE_POWDER, 2), Integer.MAX_VALUE);
+            cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                    mixed, new net.minecraft.world.item.ItemStack(
+                            net.minecraft.world.item.Items.NAUTILUS_SHELL, 1), Integer.MAX_VALUE);
             if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(mixed) != 6
                     || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(mixed).size() != 3) {
                 fail("渔桶不能混装三种饵，实际 "
@@ -386,15 +710,15 @@ public final class SelfTest {
                 return;
             }
             if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedBait(mixed)
-                    != cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT) {
-                fail("混装时桶里最高档的那种应是压缩地狱钓饵，实际 "
+                    != net.minecraft.world.item.Items.NAUTILUS_SHELL) {
+                fail("混装时桶里最高档的那种应是稀有度最高的（nautilus_shell），实际 "
                         + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedBait(mixed));
                 return;
             }
             var taken = cn.dreamgary.hubsuite.feature.item.BaitBucketItem.extract(wood);
-            if (taken.getItem() != cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT
-                    || taken.getCount() != 16
-                    || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(wood) != 48) {
+            if (taken.getItem() != net.minecraft.world.item.Items.COD
+                    || taken.getCount() != 64
+                    || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(wood) != 0) {
                 fail("从桶里取出的不对：" + taken);
                 return;
             }
@@ -402,9 +726,9 @@ public final class SelfTest {
                     cn.dreamgary.hubsuite.feature.item.HubSuiteItems.IRON_FISHING_BUCKET);
             if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                     iron, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_NETHER_BAIT, 8),
+                            net.minecraft.world.item.Items.NETHER_STAR, 8),
                     Integer.MAX_VALUE) != 8) {
-                fail("压缩饵放不进渔桶");
+                fail("稀有度高的饵放不进渔桶");
                 return;
             }
             if (((cn.dreamgary.hubsuite.feature.item.BaitBucketItem)
@@ -418,19 +742,14 @@ public final class SelfTest {
             }
             ok("渔桶装取逻辑正确（64 装满、可混装 3 种、压缩可进、容量 64/256/1024）");
 
-            // 2) 堆叠数
+            // 2) 堆叠数（饵现在是原版物品，只保证渔桶自己是 1）
             if (new net.minecraft.world.item.ItemStack(
-                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT).getMaxStackSize() != 16
-                    || new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_NETHER_BAIT)
-                            .getMaxStackSize() != 16
-                    || new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET)
-                            .getMaxStackSize() != 1) {
-                fail("堆叠数不对：饵应为 16、桶应为 1");
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET)
+                    .getMaxStackSize() != 1) {
+                fail("渔桶堆叠应为 1");
                 return;
             }
-            ok("钓饵全部堆叠 16，渔桶堆叠 1");
+            ok("渔桶堆叠 1（钓饵用原版物品自己的堆叠上限）");
 
             // 3) 假玩家：副手桶 → 加速按桶内饵档次、钓上来从桶里扣
             var probe = FakePlayers.spawn(server, "hubsuite_buckettest", lobby.level(), false);
@@ -443,12 +762,12 @@ public final class SelfTest {
                         cn.dreamgary.hubsuite.feature.item.HubSuiteItems.IRON_FISHING_BUCKET);
                 cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                         bucket, new net.minecraft.world.item.ItemStack(
-                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT, 8),
+                                net.minecraft.world.item.Items.MAGMA_CREAM, 8),
                         Integer.MAX_VALUE);
                 probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND, bucket);
                 double inLava = cn.dreamgary.hubsuite.feature.FishingBait.speedup(probe, true);
                 double expected = cn.dreamgary.hubsuite.feature.FishingBait.speedupOf(
-                        cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT);
+                        net.minecraft.world.item.Items.MAGMA_CREAM);
                 if (Math.abs(inLava - expected) > 0.0001) {
                     fail("副手桶在岩浆里应加速 " + expected + "，实际 " + inLava);
                     return;
@@ -479,48 +798,82 @@ public final class SelfTest {
                     return;
                 }
 
-                // 3c) 混装消耗顺序：二重压缩 → 压缩 → 普通
+                // 3c) 栈式消耗：后进先出（栈顶 = 最后放进去的），补货置顶
                 var order = new net.minecraft.world.item.ItemStack(
                         cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
                 cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
-                        order, new net.minecraft.world.item.ItemStack(
-                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 1), Integer.MAX_VALUE);
-                cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
-                        order, new net.minecraft.world.item.ItemStack(
-                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT, 1),
+                        order, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD, 1),
                         Integer.MAX_VALUE);
                 cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                         order, new net.minecraft.world.item.ItemStack(
-                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_BAIT, 1),
-                        Integer.MAX_VALUE);
+                                net.minecraft.world.item.Items.NETHER_STAR, 1), Integer.MAX_VALUE);
+                cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                        order, new net.minecraft.world.item.ItemStack(
+                                net.minecraft.world.item.Items.NAUTILUS_SHELL, 1), Integer.MAX_VALUE);
+                if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedBait(order)
+                        != net.minecraft.world.item.Items.NAUTILUS_SHELL) {
+                    fail("栈顶应是最后放进去的 nautilus_shell，实际 "
+                            + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedBait(order));
+                    return;
+                }
                 probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND, order);
                 double wantTop = cn.dreamgary.hubsuite.feature.FishingBait.speedupOf(
-                        cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT);
+                        net.minecraft.world.item.Items.NAUTILUS_SHELL);
                 double gotTop = cn.dreamgary.hubsuite.feature.FishingBait.speedup(probe, false);
                 if (Math.abs(gotTop - wantTop) > 0.0001) {
-                    fail("混装时应该按最高档加速 " + wantTop + "，实际 " + gotTop);
+                    fail("栈顶是 nautilus_shell，应按它的档次加速 " + wantTop + "，实际 " + gotTop);
                     return;
                 }
                 cn.dreamgary.hubsuite.feature.FishingBait.consume(probe, false);
                 if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(order,
-                        cn.dreamgary.hubsuite.feature.item.HubSuiteItems.DOUBLE_COMPRESSED_BAIT) != 0
+                        net.minecraft.world.item.Items.NAUTILUS_SHELL) != 0
                         || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(order,
-                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_BAIT) != 1
+                                net.minecraft.world.item.Items.NETHER_STAR) != 1
                         || cn.dreamgary.hubsuite.feature.item.BaitBucketItem.countOf(order,
-                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT) != 1) {
-                    fail("混装消耗顺序不是 二重压缩 → 压缩 → 普通，实际剩下 "
+                                net.minecraft.world.item.Items.COD) != 1) {
+                    fail("LIFO 应该只扣栈顶那种，实际剩下 "
                             + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(order));
                     return;
                 }
-                ok("桶里只有错误族的饵时完全不生效（不减速、不扣）；混装按 二重压缩 → 压缩 → 普通 消耗");
+                // 补货置顶：再塞 1 个 cod，它应该变成栈顶
+                cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                        order, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD, 1),
+                        Integer.MAX_VALUE);
+                if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedBait(order)
+                        != net.minecraft.world.item.Items.COD) {
+                    fail("补货应该置顶（cod 变成栈顶），实际 "
+                            + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.contents(order));
+                    return;
+                }
+
+                // 3d) 栈顶族不对 → 什么都不做，**而且不往下找**（下面还压着水里那一族的 cod）
+                var mixed2 = new net.minecraft.world.item.ItemStack(
+                        cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+                cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                        mixed2, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD, 2),
+                        Integer.MAX_VALUE);
+                cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                        mixed2, new net.minecraft.world.item.ItemStack(
+                                net.minecraft.world.item.Items.MAGMA_CREAM, 1), Integer.MAX_VALUE);
+                probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND, mixed2);
+                if (cn.dreamgary.hubsuite.feature.FishingBait.speedup(probe, false) != 0) {
+                    fail("栈顶是岩浆族的 magma_cream、人在水里：应该完全不生效，也不该往下找 cod");
+                    return;
+                }
+                cn.dreamgary.hubsuite.feature.FishingBait.consume(probe, false);
+                if (cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(mixed2) != 3) {
+                    fail("栈顶族不对时不该扣饵，实际剩 "
+                            + cn.dreamgary.hubsuite.feature.item.BaitBucketItem.containedCount(mixed2));
+                    return;
+                }
+                ok("栈式消耗：后进先出 + 补货置顶；栈顶族不对就什么都不做（不往下找、不扣）");
 
                 // 3d) 副手直接放散饵：水里 +；岩浆里（普通饵）减速，并且照样扣
                 probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND,
-                        new net.minecraft.world.item.ItemStack(
-                                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 3));
+                        new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD, 3));
                 double water = cn.dreamgary.hubsuite.feature.FishingBait.speedup(probe, false);
                 double wantWater = cn.dreamgary.hubsuite.feature.FishingBait.speedupOf(
-                        cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT);
+                        net.minecraft.world.item.Items.COD);
                 if (Math.abs(water - wantWater) > 0.0001) {
                     fail("副手散饵在水里应加速 " + wantWater + "，实际 " + water);
                     return;
@@ -550,7 +903,7 @@ public final class SelfTest {
             }
             cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                     emptyBucket, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 1), 1);
+                            net.minecraft.world.item.Items.COD, 1), 1);
             String mBait = String.valueOf(bucketItem.getPolymerItemModel(emptyBucket, null, null));
             if (!"hubsuite:wooden_fishing_bucket_bait".equals(mBait)) {
                 fail("装了普通钓饵的木桶模型应为 ..._bait，实际 " + mBait);
@@ -560,20 +913,20 @@ public final class SelfTest {
                     cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
             cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                     netherBucket, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT, 1), 1);
+                            net.minecraft.world.item.Items.MAGMA_CREAM, 1), 1);
             String mNether = String.valueOf(bucketItem.getPolymerItemModel(netherBucket, null, null));
             if (!"hubsuite:wooden_fishing_bucket_bait".equals(mNether)) {
-                fail("装了压缩地狱钓饵的木桶模型也应为 ..._bait（不按饵种类分），实际 " + mNether);
+                fail("装了岩浆族饵的木桶模型也应为 ..._bait（不按饵种类分），实际 " + mNether);
                 return;
             }
             var mixedBucket = new net.minecraft.world.item.ItemStack(
                     cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
             cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                     mixedBucket, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.BAIT, 1), 1);
+                            net.minecraft.world.item.Items.COD, 1), 1);
             cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                     mixedBucket, new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.COMPRESSED_NETHER_BAIT, 1), 1);
+                            net.minecraft.world.item.Items.MAGMA_CREAM, 1), 1);
             String mMixed = String.valueOf(bucketItem.getPolymerItemModel(mixedBucket, null, null));
             if (!"hubsuite:wooden_fishing_bucket_bait".equals(mMixed)) {
                 fail("混装的木桶模型也应为 ..._bait，实际 " + mMixed);
@@ -1217,6 +1570,533 @@ public final class SelfTest {
                     + ") 地形不同：" + differing + "/" + compared + " 个采样点高度不一致");
         } catch (Throwable t) {
             fail("比对各子服地形时出错：" + t);
+        }
+    }
+
+    /** 握手 HelloAck 固定样本的黄金字节（25 字节）。改线格式会让它变 —— 那正是本用例要抓的。 */
+    private static final String GOLDEN_ACK_HEX = "0105312e302e300861626364656630310107626173655f7631";
+
+    /**
+     * 客户端握手契约（0.5.0，见 docs/客户端契约.md）。
+     *
+     * <p>锁四件事：
+     * <ol>
+     *   <li>payload 编解码往返一致（两端共用 common/ 的同一份定义）；</li>
+     *   <li><b>黄金字节</b>：固定样本编码后的字节逐字节一致 —— 没有旧客户端在手上时，
+     *       这是唯一能自动守住线格式的防线（改字段顺序 / 改类型 / 删字段，这里当场失败）；</li>
+     *   <li>版本比较与判定表；</li>
+     *   <li>假人豁免：自检全程跑过很多假人，客户端校验里一个都不该有。</li>
+     * </ol>
+     */
+    private void checkClientHandshake() {
+        // --- 1) 往返 ---
+        var hello = new cn.dreamgary.hubsuite.net.HandshakePayloads.Hello(
+                cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "0.5.0-SNAPSHOT", "0.5.0-alpha.1", 15);
+        var helloBack = decodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.Hello.CODEC,
+                encodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.Hello.CODEC, hello));
+        if (!hello.equals(helloBack)) {
+            fail("握手 Hello 往返不一致：" + hello + " != " + helloBack);
+        } else {
+            ok("握手 Hello 编解码往返一致（协议 " + helloBack.protocol() + "，最低客户端 "
+                    + helloBack.minClient() + "，等待 " + helloBack.timeoutSeconds() + " 秒）");
+        }
+
+        var ack = new cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck(
+                cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "0.5.0-alpha.2", "0123456789abcdef",
+                List.of(cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE));
+        byte[] ackBytes = encodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck.CODEC, ack);
+        var ackBack = decodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck.CODEC, ackBytes);
+        if (!ack.equals(ackBack)) {
+            fail("握手 HelloAck 往返不一致：" + ack + " != " + ackBack);
+        } else {
+            ok("握手 HelloAck 编解码往返一致（" + ackBytes.length + " 字节，能力 " + ackBack.caps() + "）");
+        }
+
+        // --- 2) 黄金字节 ---
+        var sample = new cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck(
+                cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "1.0.0", "abcdef01",
+                List.of(cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE));
+        String hex = toHex(encodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck.CODEC, sample));
+        if (!GOLDEN_ACK_HEX.equals(hex)) {
+            fail("握手 HelloAck 线格式变了！黄金字节 " + GOLDEN_ACK_HEX + "，实测 " + hex
+                    + " —— 字段只能追加在末尾，不能改序 / 改型 / 删除（docs/客户端契约.md 第 3.1 节）");
+        } else {
+            ok("握手 HelloAck 与黄金字节逐字节一致（" + (hex.length() / 2) + " 字节）：" + hex);
+        }
+
+        // --- 3) 只增不改：旧字段前缀稳定 ---
+        var longer = new cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck(
+                cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "1.0.0", "abcdef01",
+                List.of(cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE, "future_v9"));
+        String longerHex = toHex(encodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck.CODEC, longer));
+        String prefix = GOLDEN_ACK_HEX.substring(0, 32);   // 协议 + 版本 + 指纹 = 16 字节
+        if (!longerHex.startsWith(prefix)) {
+            fail("追加能力后旧字段前缀变了：" + longerHex + "（期望以 " + prefix + " 开头）");
+        } else {
+            ok("追加能力只出现在末尾，旧字段（协议 / 版本 / 指纹）前缀逐字节不变");
+        }
+
+        // --- 4) 版本比较 ---
+        String[][] versionCases = {
+                {"0.5.0", "0.5.0", "true"},
+                {"0.5.1", "0.5.0", "true"},
+                {"0.4.9", "0.5.0", "false"},
+                {"0.5.0-alpha.2", "0.5.0-alpha.1", "true"},
+                {"0.5.0-alpha.1", "0.5.0-beta.1", "false"},
+                {"0.5.0-rc.1", "0.5.0-pre.9", "true"},
+                {"0.5.0", "0.5.0-rc.1", "true"},
+                {"0.5.0-SNAPSHOT", "0.5.0-alpha.1", "true"},
+                {"1.0.0-alpha.1", "0.5.0", "true"},
+                {"9.9.9", "", "true"},
+                {"", "0.5.0", "false"},
+        };
+        List<String> wrongVersions = new ArrayList<>();
+        for (String[] c : versionCases) {
+            boolean expected = Boolean.parseBoolean(c[2]);
+            boolean actual = cn.dreamgary.hubsuite.net.ClientVersions.atLeast(c[0], c[1]);
+            if (actual != expected) {
+                wrongVersions.add("atLeast(" + (c[0].isEmpty() ? "空" : c[0]) + ", "
+                        + (c[1].isEmpty() ? "空" : c[1]) + ")=" + actual + " 期望 " + expected);
+            }
+        }
+        if (wrongVersions.isEmpty()) {
+            ok("版本比较 " + versionCases.length + " 组全对（alpha < beta < pre < rc < 正式；SNAPSHOT 视作同版本正式版）");
+        } else {
+            fail("版本比较有误：" + String.join("；", wrongVersions));
+        }
+
+        // --- 5) 判定表 ---
+        var clientSide = cn.dreamgary.hubsuite.net.ClientCompat.class;   // 仅为可读性
+        Object[][] decisions = {
+                {cn.dreamgary.hubsuite.net.ClientCompat.Mode.OFF, Boolean.FALSE, cn.dreamgary.hubsuite.net.ClientCompat.Action.ALLOW},
+                {cn.dreamgary.hubsuite.net.ClientCompat.Mode.WARN, Boolean.FALSE, cn.dreamgary.hubsuite.net.ClientCompat.Action.WARN},
+                {cn.dreamgary.hubsuite.net.ClientCompat.Mode.ENFORCE, Boolean.FALSE, cn.dreamgary.hubsuite.net.ClientCompat.Action.KICK},
+                {cn.dreamgary.hubsuite.net.ClientCompat.Mode.WARN, Boolean.TRUE, cn.dreamgary.hubsuite.net.ClientCompat.Action.ALLOW},
+                {cn.dreamgary.hubsuite.net.ClientCompat.Mode.ENFORCE, Boolean.TRUE, cn.dreamgary.hubsuite.net.ClientCompat.Action.ALLOW},
+        };
+        List<String> wrongDecisions = new ArrayList<>();
+        for (Object[] d : decisions) {
+            var mode = (cn.dreamgary.hubsuite.net.ClientCompat.Mode) d[0];
+            boolean okClient = (Boolean) d[1];
+            var expected = (cn.dreamgary.hubsuite.net.ClientCompat.Action) d[2];
+            var actual = cn.dreamgary.hubsuite.net.ClientCompat.decide(mode, okClient);
+            if (actual != expected) {
+                wrongDecisions.add(mode + "/" + (okClient ? "通过" : "不通过") + "=" + actual + " 期望 " + expected);
+            }
+        }
+        if (wrongDecisions.isEmpty()) {
+            ok("客户端校验判定表 " + decisions.length + " 组全对（off 不拦 / warn 只提示 / enforce 踢出；通过一律放行）");
+        } else {
+            fail("客户端校验判定表有误：" + String.join("；", wrongDecisions));
+        }
+
+        // --- 6) 假人豁免 + 配置默认值 + 能力名 ---
+        var clients = HubSuite.clients();
+        if (clients == null) {
+            fail("客户端校验没有初始化（HubSuite.clients() 为 null）");
+        } else if (clients.knownCount() != 0 || clients.waitingCount() != 0) {
+            fail("有假人被卷进了客户端校验（已通过 " + clients.knownCount() + " / 等待中 " + clients.waitingCount()
+                    + "）—— 假人没有网络连接，必须豁免（否则会被反复发消息甚至断开）");
+        } else {
+            ok("假人已豁免：自检跑了 20+ 个假人，客户端校验里一个都没进（模式 " + clients.mode() + "）");
+        }
+
+        var cfg = new cn.dreamgary.hubsuite.config.HubSuiteConfig().clientCompat;
+        if (cfg == null || cfg.timeoutSeconds < 1 || cfg.timeoutSeconds > 120
+                || cfg.downloadUrl == null || cfg.downloadUrl.isBlank()) {
+            fail("clientCompat 默认值不合理：" + cfg);
+        } else {
+            ok("clientCompat 默认值合理（模式 " + cfg.modeOf() + "，超时 " + cfg.timeoutSeconds
+                    + " 秒，下载地址 " + cfg.downloadUrl + "）");
+        }
+
+        String cap = cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE;
+        if (!cap.matches("[a-z0-9_]+")) {
+            fail("能力名不合规（只能小写字母 / 数字 / 下划线）：" + cap);
+        } else {
+            ok("能力名合规：" + cap + "（协议号 " + cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL + "）");
+        }
+    }
+
+    private static <T extends net.minecraft.network.protocol.common.custom.CustomPacketPayload> byte[] encodePayload(
+            net.minecraft.network.codec.StreamCodec<net.minecraft.network.RegistryFriendlyByteBuf, T> codec, T payload) {
+        var buf = new net.minecraft.network.RegistryFriendlyByteBuf(
+                io.netty.buffer.Unpooled.buffer(), serverRegistry());
+        codec.encode(buf, payload);
+        byte[] out = new byte[buf.readableBytes()];
+        buf.readBytes(out);
+        return out;
+    }
+
+    private static <T extends net.minecraft.network.protocol.common.custom.CustomPacketPayload> T decodePayload(
+            net.minecraft.network.codec.StreamCodec<net.minecraft.network.RegistryFriendlyByteBuf, T> codec, byte[] bytes) {
+        var buf = new net.minecraft.network.RegistryFriendlyByteBuf(
+                io.netty.buffer.Unpooled.wrappedBuffer(bytes), serverRegistry());
+        return codec.decode(buf);
+    }
+
+    private static net.minecraft.core.RegistryAccess serverRegistry() {
+        var server = HubSuite.worlds() == null ? null : HubSuite.worlds().server();
+        if (server == null) {
+            throw new IllegalStateException("服务端还没起来，拿不到 RegistryAccess");
+        }
+        return server.registryAccess();
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 钓竿数据 NBT 的键集合 —— 这就是它的"线格式契约"。
+     *
+     * <p>为什么不是字节黄金：{@code CompoundTag} 内部是散列表，键序由它决定、新增键可能重排；
+     * 而 NBT 是**按名字读**的，顺序本来就不参与解析。所以契约是"键名与类型只增不改"。
+     */
+    private static final java.util.Set<String> ROD_NBT_KEYS =
+            java.util.Set.of("ver", "rod", "line", "hook", "up", "dur", "max");
+
+    /**
+     * 钓竿数据契约（0.5.0，见 docs/钓竿系统方案.md 第 1、2 节）。
+     *
+     * <p>锁四件事：部件表数值与方案一致、属性公式（含青金石负耐久的夹取）、
+     * 物品 → 材质的匹配（藤蔓三种算一种）、以及 NBT 线格式（往返 + 黄金字节 + 未知材质宽容）。
+     */
+    private void checkRodDataContract() {
+        var materials = cn.dreamgary.hubsuite.rod.RodMaterials.class;   // 只为可读性
+
+        // --- 1) 表就绪 ---
+        int rodCount = cn.dreamgary.hubsuite.rod.RodMaterials.rods().size();
+        int lineCount = cn.dreamgary.hubsuite.rod.RodMaterials.lines().size();
+        int hookCount = cn.dreamgary.hubsuite.rod.RodMaterials.hooks().size();
+        int upgradeCount = cn.dreamgary.hubsuite.rod.RodMaterials.upgrades().size();
+        if (rodCount != 4 || lineCount != 3 || hookCount != 5 || upgradeCount != 4) {
+            fail("部件表条目数不对：杆 " + rodCount + " / 线 " + lineCount + " / 钩 " + hookCount
+                    + " / 升级 " + upgradeCount + "（方案里是 4 / 3 / 5 / 4）");
+        } else {
+            ok("部件表就绪：杆 4 / 线 3 / 钩 5 / 升级 4（默认 "
+                    + cn.dreamgary.hubsuite.rod.RodMaterials.DEFAULT_ROD + " + "
+                    + cn.dreamgary.hubsuite.rod.RodMaterials.DEFAULT_LINE + " + "
+                    + cn.dreamgary.hubsuite.rod.RodMaterials.DEFAULT_HOOK + "）");
+        }
+
+        // --- 2) 抽查数值（乘数 ×10、概率 ‰）---
+        List<String> wrongTable = new ArrayList<>();
+        expectInt(wrongTable, "木杆耐久", 64, cn.dreamgary.hubsuite.rod.RodMaterials.rod("wood").baseDurability());
+        expectInt(wrongTable, "下界合金杆耐久", 2048, cn.dreamgary.hubsuite.rod.RodMaterials.rod("netherite").baseDurability());
+        expectInt(wrongTable, "地狱丝线耐久乘数", 20, cn.dreamgary.hubsuite.rod.RodMaterials.line("nether_string").durabilityMul());
+        expectInt(wrongTable, "地狱丝线断线‰", 7, cn.dreamgary.hubsuite.rod.RodMaterials.line("nether_string").breakPermille());
+        expectInt(wrongTable, "地狱丝线速度乘数", 12, cn.dreamgary.hubsuite.rod.RodMaterials.line("nether_string").speedMul());
+        expectInt(wrongTable, "藤蔓耐久乘数", 15, cn.dreamgary.hubsuite.rod.RodMaterials.line("vine").durabilityMul());
+        expectInt(wrongTable, "黑曜石钩速度乘数", 11, cn.dreamgary.hubsuite.rod.RodMaterials.hook("obsidian").speedMul());
+        expectBool(wrongTable, "黑曜石钩可钓岩浆", true, cn.dreamgary.hubsuite.rod.RodMaterials.hook("obsidian").lava());
+        expectBool(wrongTable, "钻石钩不可钓岩浆", false, cn.dreamgary.hubsuite.rod.RodMaterials.hook("diamond").lava());
+        expectInt(wrongTable, "绿宝石升级耐久加值", 768, cn.dreamgary.hubsuite.rod.RodMaterials.upgrade("emerald").durabilityAdd());
+        expectInt(wrongTable, "青金石升级耐久加值", -192, cn.dreamgary.hubsuite.rod.RodMaterials.upgrade("lapis").durabilityAdd());
+        expectInt(wrongTable, "钻石升级幸运加值", 2, cn.dreamgary.hubsuite.rod.RodMaterials.upgrade("diamond").luckAdd());
+        expectBool(wrongTable, "青金石升级提升附魔", true, cn.dreamgary.hubsuite.rod.RodMaterials.upgrade("lapis").boostsEnchant());
+        if (wrongTable.isEmpty()) {
+            ok("部件数值与方案一致（抽查 13 项：耐久 / 乘数 / 断线‰ / 岩浆 / 升级加值）");
+        } else {
+            fail("部件数值与方案不一致：" + String.join("；", wrongTable));
+        }
+
+        // --- 3) 属性公式（整数域）---
+        var defaults = cn.dreamgary.hubsuite.rod.RodData.defaults();
+        List<String> wrongMath = new ArrayList<>();
+        expectInt(wrongMath, "木杆+线+无升级 上限×10", 640, defaults.computedMaxDurability());
+        expectInt(wrongMath, "木杆+地狱丝线 上限×10", 1280,
+                defaults.withParts("wood", "nether_string", "string").computedMaxDurability());
+        expectInt(wrongMath, "木杆+地狱丝线+钻石升级 上限×10", 1536,
+                defaults.withParts("wood", "nether_string", "string").withUpgrade("diamond").computedMaxDurability());
+        expectInt(wrongMath, "木杆+绿宝石升级 上限×10", 8320,
+                defaults.withUpgrade("emerald").computedMaxDurability());
+        expectInt(wrongMath, "青金石 + 木杆 夹到下限 1", 1,
+                defaults.withUpgrade("lapis").computedMaxDurability());
+        expectInt(wrongMath, "速度 ×1000（线 10 × 钻石钩 14 × 无升级 10）", 1400,
+                defaults.withParts("wood", "string", "diamond").speedMilli());
+        expectInt(wrongMath, "速度 ×10 显示值", 14, defaults.withParts("wood", "string", "diamond").speedTenths());
+        expectInt(wrongMath, "红石升级提速 ×1000（10×10×30）", 3000,
+                defaults.withUpgrade("redstone").speedMilli());
+        expectInt(wrongMath, "幸运（钻石升级，基础 0）", 2000, defaults.withUpgrade("diamond").luckMilli());
+        expectInt(wrongMath, "幸运（钻石升级，基础 1000 → (1000+2000)×1.0）", 3000,
+                defaults.withUpgrade("diamond").luckMilli(1000));
+        expectInt(wrongMath, "断线‰（只看线）", 2, defaults.withParts("wood", "vine", "netherite").breakPermille());
+        expectBool(wrongMath, "岩浆可钓（只看钩）", true, defaults.withParts("wood", "vine", "netherite").lavaCapable());
+        if (wrongMath.isEmpty()) {
+            ok("属性公式 12 组全对（耐久 ×10 / 速度 ×1000 / 幸运 / 断线‰ / 岩浆；青金石负值夹到 1）");
+        } else {
+            fail("属性公式有误：" + String.join("；", wrongMath));
+        }
+
+        // --- 4) 物品 → 材质匹配 ---
+        List<String> wrongMatch = new ArrayList<>();
+        expectStr(wrongMatch, "木棍 → 杆", "wood",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.ROD, "minecraft:stick"));
+        expectStr(wrongMatch, "下界合金锭 → 杆", "netherite",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.ROD, "minecraft:netherite_ingot"));
+        expectStr(wrongMatch, "地狱丝线 → 线", "nether_string",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.LINE, "hubsuite:nether_string"));
+        expectStr(wrongMatch, "垂泪藤 → 线（藤蔓材质）", "vine",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.LINE, "minecraft:weeping_vines"));
+        expectStr(wrongMatch, "缠怨藤 → 线（藤蔓材质）", "vine",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.LINE, "minecraft:twisting_vines"));
+        expectStr(wrongMatch, "黑曜石 → 钩", "obsidian",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.HOOK, "minecraft:obsidian"));
+        expectStr(wrongMatch, "钻石在杆位是杆、在钩位是钩（靠部位区分）", "diamond",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.HOOK, "minecraft:diamond"));
+        if (cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.ROD, "minecraft:dirt") != null) {
+            wrongMatch.add("泥土被当成了杆材质");
+        }
+        expectStr(wrongMatch, "钻石 → 升级物", "diamond",
+                cn.dreamgary.hubsuite.rod.RodMaterials.matchUpgrade(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND)));
+        if (wrongMatch.isEmpty()) {
+            ok("物品 → 材质匹配 9 组全对（含藤蔓三别名、同材料按部位区分、非部件返回 null）");
+        } else {
+            fail("物品 → 材质匹配有误：" + String.join("；", wrongMatch));
+        }
+
+        // --- 5) NBT 往返 + 未知材质宽容 ---
+        var stack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        var written = cn.dreamgary.hubsuite.rod.RodData.defaults()
+                .withParts("diamond", "nether_string", "obsidian").withUpgrade("lapis");
+        written = written.refilled();
+        written.writeTo(stack);
+        var read = cn.dreamgary.hubsuite.rod.RodData.of(stack);
+        if (read == null || !read.equals(written)) {
+            fail("钓竿数据 NBT 往返不一致：写出 " + written + "，读回 " + read);
+        } else {
+            ok("钓竿数据 NBT 往返一致（" + written.rod() + "/" + written.line() + "/" + written.hook()
+                    + "/" + written.upgrade() + "，耐久 " + written.durability() + "/" + written.maxDurability()
+                    + "，上限 " + (written.maxDurability() / 10.0) + "）");
+        }
+        cn.dreamgary.hubsuite.rod.RodData.clear(stack);
+        if (cn.dreamgary.hubsuite.rod.RodData.of(stack) != null) {
+            fail("清掉钓竿数据后仍然读出了 RodData");
+        } else {
+            ok("没有数据的原版钓竿读出来是 null（不是「配置过的竿」）");
+        }
+
+        var unknown = new net.minecraft.nbt.CompoundTag();
+        unknown.putString("rod", "unobtainium");
+        unknown.putString("line", "future_line");
+        unknown.putString("hook", "future_hook");
+        unknown.putInt("dur", 500);
+        unknown.putInt("max", 0);
+        var tolerant = cn.dreamgary.hubsuite.rod.RodData.fromTag(unknown);
+        if (tolerant.rodMaterial().id().equals("wood") && tolerant.lineMaterial().id().equals("string")
+                && tolerant.hookMaterial().id().equals("string") && tolerant.computedMaxDurability() == 640) {
+            ok("未知材质 id 落回默认（unobtainium/future_* → 木杆 + 线 + 线钩），不崩、上限按默认算");
+        } else {
+            fail("未知材质没有被宽容处理：" + tolerant + " → " + tolerant.rodMaterial().id()
+                    + "/" + tolerant.lineMaterial().id() + "/" + tolerant.hookMaterial().id()
+                    + "，上限 " + tolerant.computedMaxDurability());
+        }
+
+        // --- 6) 渲染提示：4 个材质 id 进 custom_model_data 的字符串槽（客户端据此分层）---
+        var hintStack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        var hinted = cn.dreamgary.hubsuite.rod.RodData.defaults()
+                .withParts("diamond", "nether_string", "obsidian").withUpgrade("lapis");
+        hinted.writeTo(hintStack);
+        var hint = hintStack.get(net.minecraft.core.component.DataComponents.CUSTOM_MODEL_DATA);
+        List<String> hintWrong = new ArrayList<>();
+        if (hint == null) {
+            hintWrong.add("没有写 custom_model_data");
+        } else {
+            expectStr(hintWrong, "第 0 槽（杆）", "diamond", hint.getString(0));
+            expectStr(hintWrong, "第 1 槽（线）", "nether_string", hint.getString(1));
+            expectStr(hintWrong, "第 2 槽（钩）", "obsidian", hint.getString(2));
+            expectStr(hintWrong, "第 3 槽（升级）", "lapis", hint.getString(3));
+        }
+        if (hintWrong.isEmpty()) {
+            ok("渲染提示正确：custom_model_data 字符串槽 = 杆/线/钩/升级 的材质 id（客户端按 index 选层）");
+        } else {
+            fail("渲染提示不对：" + String.join("；", hintWrong) + " —— 客户端会选错层");
+        }
+        cn.dreamgary.hubsuite.rod.RodData.clear(hintStack);
+        if (hintStack.get(net.minecraft.core.component.DataComponents.CUSTOM_MODEL_DATA) == null) {
+            ok("清掉钓竿数据后渲染提示一起没了（还原成普通原版钓竿，客户端走 vanilla 模型）");
+        } else {
+            fail("clear() 之后 custom_model_data 还在，原版钓竿会被当成我们的竿渲染");
+        }
+
+        // --- 7) NBT 键集合（改名 / 增删都会当场失败）+ 编码稳定性 ---
+        var rodTag = written.toTag();
+        if (!ROD_NBT_KEYS.equals(rodTag.keySet())) {
+            fail("钓竿数据 NBT 的键变了：" + rodTag.keySet() + "，契约里是 " + ROD_NBT_KEYS
+                    + " —— 键名与类型只增不改（要加字段就同时改这里，并想清楚旧客户端读到会怎样）");
+        } else {
+            ok("钓竿数据 NBT 键集合固定（7 个）：" + rodTag.keySet() + " —— NBT 按名字读，键顺序不参与契约");
+        }
+        byte[] first = rodTagBytes(written);
+        byte[] second = rodTagBytes(written);
+        if (!java.util.Arrays.equals(first, second)) {
+            fail("同一份钓竿数据两次编码的字节不同（编码器不确定，落盘会无谓 diff）");
+        } else {
+            ok("钓竿数据编码稳定（两次编码逐字节一致，" + first.length + " 字节）：" + toHex(first).substring(0, 32) + "…");
+        }
+    }
+
+    private static byte[] rodTagBytes(cn.dreamgary.hubsuite.rod.RodData data) {
+        try {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+            net.minecraft.nbt.NbtIo.write(data.toTag(), out);
+            out.flush();
+            return bytes.toByteArray();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("写 NBT 失败", e);
+        }
+    }
+
+    private static void expectInt(List<String> wrong, String label, int expected, int actual) {
+        if (actual != expected) {
+            wrong.add(label + "=" + actual + " 期望 " + expected);
+        }
+    }
+
+    private static void expectBool(List<String> wrong, String label, boolean expected, boolean actual) {
+        if (actual != expected) {
+            wrong.add(label + "=" + actual + " 期望 " + expected);
+        }
+    }
+
+    private static void expectStr(List<String> wrong, String label, String expected, String actual) {
+        if (!java.util.Objects.equals(expected, actual)) {
+            wrong.add(label + "=" + actual + " 期望 " + expected);
+        }
+    }
+
+    /**
+     * 客户端真物品（0.5.0）：共用定义 → 服务端物品原型 → 素材 → 能力名。
+     *
+     * <p>为什么必须锁"原型一致"：物品栈的网络同步只发**与原型不同的组件**。
+     * 客户端用 {@code common/} 里的定义构造自己的物品，所以只要服务端注册的物品
+     * 与那份定义一致，两端重建出来的栈就是同一个东西；一旦哪边偷偷改了堆叠上限 /
+     * 稀有度 / 模型，玩家就会看到"同一叠东西两边不一样"这种极难查的问题。
+     */
+    private void checkClientItemDefs() {
+        // --- 1) 注册齐全 ---
+        List<String> wrongIds = new ArrayList<>();
+        for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
+            var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(def.id());
+            if (item == null || item == net.minecraft.world.item.Items.AIR) {
+                wrongIds.add(def.path() + " 没注册");
+            }
+        }
+        if (wrongIds.isEmpty()) {
+            ok("共用定义里的 " + cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL.size()
+                    + " 个物品在服务端都注册上了（id 与 common/ 的定义一致）");
+        } else {
+            fail("有物品没按共用定义注册：" + String.join("；", wrongIds));
+        }
+
+        // --- 2) 原型一致（客户端会按同一份定义重建）---
+        List<String> wrongProtos = new ArrayList<>();
+        for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
+            var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(def.id());
+            var stack = new net.minecraft.world.item.ItemStack(item);
+            expectInt(wrongProtos, def.path() + " 堆叠上限", def.maxStack(), stack.getMaxStackSize());
+            expectStr(wrongProtos, def.path() + " 稀有度", def.rarity().name(), stack.getRarity().name());
+            expectStr(wrongProtos, def.path() + " 物品模型", def.id().toString(),
+                    String.valueOf(stack.get(net.minecraft.core.component.DataComponents.ITEM_MODEL)));
+            expectStr(wrongProtos, def.path() + " 名字", String.valueOf(def.name()),
+                    String.valueOf(stack.get(net.minecraft.core.component.DataComponents.ITEM_NAME)));
+            if (def.durability() > 0) {
+                expectStr(wrongProtos, def.path() + " 耐久上限", String.valueOf(def.durability()),
+                        String.valueOf(stack.get(net.minecraft.core.component.DataComponents.MAX_DAMAGE)));
+            }
+        }
+        if (wrongProtos.isEmpty()) {
+            ok("物品原型与共用定义逐项一致（堆叠上限 / 稀有度 / 名字 / 模型 / 耐久）—— 客户端重建出来的是同一个东西");
+        } else {
+            fail("物品原型与共用定义不一致（客户端会显示成另一个东西）：" + String.join("；", wrongProtos));
+        }
+
+        // --- 3) 素材三件套真的打进 jar 了 ---
+        List<String> missing = new ArrayList<>();
+        int checked = 0;
+        List<String> variants = new ArrayList<>();
+        for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
+            variants.add(def.path());
+            if (def.path().endsWith("_fishing_bucket")) {
+                variants.add(def.path() + "_bait");   // 渔桶还有"有饵"那一套模型与贴图
+            }
+        }
+        for (String variant : variants) {
+            for (String file : List.of("items/" + variant + ".json",
+                    "models/item/" + variant + ".json",
+                    "textures/item/" + variant + ".png")) {
+                checked++;
+                String path = "/assets/" + cn.dreamgary.hubsuite.item.HubSuiteItemDefs.NAMESPACE + "/" + file;
+                try (var in = SelfTest.class.getResourceAsStream(path)) {
+                    if (in == null) {
+                        missing.add(file);
+                    }
+                } catch (java.io.IOException e) {
+                    missing.add(file + "(" + e + ")");
+                }
+            }
+        }
+        if (missing.isEmpty()) {
+            ok("物品素材齐全：" + checked + " 个文件都在 jar 里（每件 = 物品定义 + 模型 + 贴图，双端共用同一份）");
+        } else {
+            fail("物品素材缺失：" + String.join("；", missing) + " —— 游戏里会显示成紫黑格");
+        }
+
+        // --- 4) 每个物品都还实现了 PolymerItem（原版客户端那条路不能断）---
+        List<String> notPolymer = new ArrayList<>();
+        for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
+            var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(def.id());
+            if (!(item instanceof eu.pb4.polymer.core.api.item.PolymerItem)) {
+                notPolymer.add(def.path());
+            }
+        }
+        if (notPolymer.isEmpty()) {
+            ok("5 个物品都实现了 PolymerItem：没装客户端的玩家照旧看到原版映射，两条路并存");
+        } else {
+            fail("这些物品不再走 Polymer，原版客户端会看到未知物品：" + String.join("、", notPolymer));
+        }
+
+        // --- 5) 渔桶的模型提示：装了饵 → _bait，掏空 → 变回来 ---
+        var bucket = new net.minecraft.world.item.ItemStack(
+                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+        String plain = String.valueOf(bucket.get(net.minecraft.core.component.DataComponents.ITEM_MODEL));
+        int inserted = cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                bucket, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD), 64);
+        String bait = String.valueOf(bucket.get(net.minecraft.core.component.DataComponents.ITEM_MODEL));
+        cn.dreamgary.hubsuite.feature.item.BaitBucketItem.remove(
+                bucket, net.minecraft.world.item.Items.COD, inserted);
+        String emptied = String.valueOf(bucket.get(net.minecraft.core.component.DataComponents.ITEM_MODEL));
+        List<String> bucketWrong = new ArrayList<>();
+        expectStr(bucketWrong, "空桶模型", "hubsuite:wooden_fishing_bucket", plain);
+        expectStr(bucketWrong, "装了饵的模型", "hubsuite:wooden_fishing_bucket_bait", bait);
+        expectStr(bucketWrong, "掏空后回到", "hubsuite:wooden_fishing_bucket", emptied);
+        if (bucketWrong.isEmpty()) {
+            ok("渔桶模型跟着内容物走（空 → " + plain + "，有饵 → " + bait + "，掏空 → " + emptied
+                    + "）：模组客户端读组件、原版客户端走 Polymer，同一份逻辑");
+        } else {
+            fail("渔桶模型提示不对：" + String.join("；", bucketWrong));
+        }
+
+        // --- 6) 能力名 ---
+        List<String> badCaps = new ArrayList<>();
+        for (String cap : List.of(cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE,
+                cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_REAL_ITEMS)) {
+            if (!cap.matches("[a-z0-9_]+")) {
+                badCaps.add(cap);
+            }
+        }
+        if (badCaps.isEmpty()) {
+            ok("客户端能力名合法：" + cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE + " / "
+                    + cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_REAL_ITEMS
+                    + "（老客户端没有 real_items 时，服务端继续发 Polymer 映射的原版物品）");
+        } else {
+            fail("能力名不合规：" + badCaps);
         }
     }
 

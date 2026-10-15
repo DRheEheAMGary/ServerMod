@@ -23,6 +23,19 @@ public class LavaRodItem extends FishingRodItem implements PolymerItem {
 
     @Override
     public Item getPolymerItem(ItemStack stack, PacketContext context) {
-        return Items.FISHING_ROD;
+        // 装了客户端模组（且声明 real_items）的玩家：发真物品，自己渲染（含甩竿态，见 lava_rod.json）；
+        // 其余客户端：照旧映射成原版钓竿 + 资源包模型（甩竿/钓鱼属性都对）。
+        return cn.dreamgary.hubsuite.net.ClientCompat.useRealItems(context) ? this : Items.FISHING_ROD;
+    }
+
+    /**
+     * 这个物品栈是不是"我们的钓竿"。
+     *
+     * <p>用来补原版的**身份比较**：{@code FishingHook.shouldStopFishing} 判的是
+     * {@code stack.is(Items.FISHING_ROD)}（原版物品本身），我们的竿是自有 id，
+     * 不改就会被当成"手里没拿竿"→ 浮标生成后立刻被 {@code discard()}。
+     */
+    public static boolean isLavaRod(ItemStack stack) {
+        return stack != null && !stack.isEmpty() && stack.getItem() instanceof LavaRodItem;
     }
 }

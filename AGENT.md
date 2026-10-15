@@ -25,11 +25,11 @@
 | 项 | 值 |
 |---|---|
 | 模组 id / 组 | `hubsuite` / `cn.dreamgary` |
-| 版本 | `gradle.properties` 的 `mod_version` = **0.4.0-alpha.6** |
+| 版本 | `gradle.properties` 的 `server_version` = **0.5.0-SNAPSHOT**；客户端 `client_version` 独立递增（见 docs/分发与更新.md） |
 | 构建 | Gradle 9.7.1 + Loom 1.18-SNAPSHOT |
 | 映射 | **官方 Mojang 名，不 remap**（26.1 起官方不再混淆；build.gradle 无 mappings、无 remapJar） |
 | 产物 | `build/libs/hubsuite-<版本>.jar`（另有 `-sources.jar`） |
-| 规模 | 112 个 Java 文件 / 27 个 Mixin / 自检 232 项 |
+| 规模 | 服务端 116 个 Java 文件 / 28 个 Mixin；共用契约 4 个（`common/`，双端各编译一份）；客户端 3 个；自检 261 项 |
 
 ### 架构要点（改之前必须理解）
 
@@ -86,8 +86,41 @@ $env:JAVA_HOME = $j; $env:PATH = "$j\bin;$env:PATH"
 ```
 
 - 服务端是 `online-mode=false`，机器人可直连。
-- 自检结果看 `run/logs/latest.log` 里的 `通过 232 项，失败 0 项`。
+- 自检结果看 `run/logs/latest.log` 里的 `通过 261 项，失败 0 项`。
 - 控制台命令：`hub selftest`（也可在游戏内 `/hub selftest`）。
+- **无人值守发命令**：`pwsh -File scripts/rcon.ps1 -Command "give Player123 hubsuite:nether_string 3"`
+  （RCON 25575，密码在 `run/server.properties`；26.1.2 的回包时序很挑，所以只保证命令发出去）。
+
+### 起测试客户端（0.5.0 起）
+
+客户端模组在 **`client/` 子项目**里（`hubsuite-client`），与服务端各自独立版本号。
+
+```bash
+# Windows（作者机器）
+.\gradlew.bat :client:runClient --console=plain
+```
+
+- 客户端运行目录是 **`client/run`**（**不是** `run/`），日志在 `client/run/logs/latest.log`；
+- 加载成功的标志是日志里出现：
+  `[Render thread/INFO] (HubSuite-Client) HubSuite 客户端 <版本> 已加载`；
+- **首次**要下载约 400 MB 原版资源到 `~/.gradle/caches/fabric-loom/assets`（一次性；
+  小文件多、慢的时候十几分钟），之后启动约 30 秒；
+- 客户端**不会**自动连服：联调就在另一个终端起服务端（`run/`，端口 25566），
+  游戏里「多人游戏 → localhost:25566」；
+- 🔴 **跑完务必关掉客户端窗口**：它开着就一直占 Gradle 的构建锁，
+  再跑任何 Gradle 任务（包括服务端自检）都会卡在等锁上。
+- **自动连服（开发用）**：`:client:runClientAuto` 带 `-Dhubsuite.autoconnect=localhost:25566`，
+  客户端初始加载结束就自动连本机测试服（先起服务端）。手动用 `:client:runClient` 也可以，
+  但进服时**必须接受服务器资源包**（Polymer 下发的那个），否则会卡在配置阶段直到掉线 ——
+  自动连服这条路会自己选"启用"。
+- 原版的 `--quickPlayMultiplayer` 在 26.1 上实测**不生效**（参数进了命令行也不连），
+  所以自动连服是本模组自己实现的（`DevAutoConnect`）。
+- **开发模式下客户端会自动注册/登录**（`hubsuite-dev`），并关掉登录期间残留的对话框 ——
+  不这样，屏幕上一直挂着注册表单，什么都看不到（顺带发现：走 `/register` **命令**登录时，
+  服务端先前弹出的对话框不会自己关）。
+- **无人值守看效果**：把游戏窗口切到前台再截图，然后裁切放大：
+  `[W]::SetForegroundWindow((Get-Process | Where-Object { $_.MainWindowTitle -like 'Minecraft*' }).MainWindowHandle)`
+  → `Graphics.CopyFromScreen` → 用 `System.Drawing` 裁 36×36 再放大 10 倍（NearestNeighbor）看图标。
 
 ### 清档（改了地形 / 生成器才需要）
 
@@ -152,7 +185,10 @@ rm -f run/*/session.lock run/usercache.json run/ops.json
 |---|---|
 | **`-Pport=` 无效** | 见「三」。端口改 `run/server.properties`；**绝不要占 25565** |
 | **`server.properties` 不能有非 ASCII** | Java Properties 按 ISO-8859-1 读，中文注释会 `MalformedInputException` |
+| **`.ps1` 必须带 UTF-8 BOM** | 这台机器上 `pwsh` 其实是 Windows PowerShell **5.1**，无 BOM 的 UTF-8 脚本会被当 ANSI 读：中文注释变乱码、吞掉引号 → 解析中断（症状是"函数找不到"这种莫名其妙的报错）。写 `.ps1` 后补 BOM：`[System.IO.File]::WriteAllText($p, $t, (New-Object System.Text.UTF8Encoding($true)))` |
 | **强杀后要删 `session.lock`** | 否则下次启动报存档被锁 |
+| **`:client:runClient` 占构建锁** | 客户端窗口不关，后续任何 Gradle 任务（含服务端自检）都会一直等锁 |
+| **pwsh 里 Gradle 的 `-D` 参数会被拆坏** | `.\gradlew.bat runServer -Dhubsuite.selftest=35` 在 pwsh 下会报 `Task '.selftest=35' not found`，要写 `.\gradlew.bat --% runServer -Dhubsuite.selftest=35` |
 | **文档目录里的 `.md` 是本轮重写的** | 旧文档有大量过期内容（命令表、版本号），以本文件与源码为准 |
 | `gh --jq` 引号易坏 | dump JSON 到文件再解析 |
 | **HuskHomes 必须 4.11+26.1.2** | 旧版用废弃 intermediary 名，26.1.2 上 `NoClassDefFoundError`，版本检查拦不住 |
@@ -226,14 +262,14 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 | `world/PlayerDataRouter.java` + `world/PlayerStateStash.java` + `mixin/PlayerListStorageMixin.java` | 背包 / 经验按子服隔离（内存暂存 + 磁盘两份） |
 | `world/PlayerRouter.java` | 切服主流程（`sendTo`） |
 | `world/ServerInternals.java` / `ServerLevelsAccess.java` / `PlayerListAccess.java` | 访问原版内部字段的唯一出口（放业务包，见「十」） |
-| `world/SelfTest.java` | **全部自检**（232 项）。加检查看这里 |
+| `world/SelfTest.java` | **全部自检**（261 项）。加检查看这里 |
 | `island/IslandService.java` + `island/IslandManager.java` | 空岛：建岛、归属、出生点（**保护已删**） |
 | `world/IslandSideWorlds.java` + `world/LavaSeaGenerator.java` | 岛屿维度各自的下界/末地（空岛虚空式、海岛岩浆海） |
 | `world/NaturalIslandPlacer.java` | 自然岛：地形 + 宝箱 + 刷怪笼 + **结构模板与底座**（跨 tick 补铺、落盘去重） |
 | `world/StructureFoundations.java` | 悬空结构的底座（区块加载时按 `structureFoundations` 名单补，默认猪灵堡垒、不含要塞） |
 | `feature/FishingLoot.java` + `feature/FishingPresets.java` + `mixin/FishingHookLootMixin.java` | 渔获：按维度挂表、按群系分池、稀有度（含岩浆表） |
-| `feature/FishingBait.java` + `feature/FishingGameplay.java` | 副手钓饵（水/岩浆分档加速、钓到才扣）与岩浆可钓判定 |
-| `feature/item/HubSuiteItems.java` + `feature/item/LavaRodItem.java` | 8 个自定义物品（Polymer 映射；`Item.Properties.setId` 必填） |
+| `feature/FishingBait.java` + `feature/FishingGameplay.java` | 副手钓饵（**tag 驱动** `#hubsuite:fishing_bait` / `#hubsuite:fishing_bait_nether`，档次=稀有度；水/岩浆分族加速、钓到才扣）与岩浆可钓判定 |
+| `feature/item/HubSuiteItems.java` + `feature/item/LavaRodItem.java` | 5 个自定义物品（Polymer 映射；`Item.Properties.setId` 必填） |
 | `mixin/FishingHookMixin.java` + `FishingHookAccessor.java` + `FishingRodCastMixin.java` + `LavaFishingHook.java` | 岩浆算水（`tick` 里两处 `FluidState.is` 都要改）、钓饵加速、抛竿打标记 |
 | `feature/CommandGuard.java` | 命令闸门（创造服屏蔽 40+ 条作弊指令） |
 | `feature/PermissionService.java` | 三级权限降级 |
@@ -384,21 +420,23 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 
 ### 版本号在各分支上的落点
 
-| 分支 | `mod_version` |
+| 分支 | `server_version` / `client_version` |
 |---|---|
-| `dev` | `0.4.0-SNAPSHOT`（下一个正式版目标） |
-| `next` | 发测试版时：`0.3.0-rc.1`，tag `v0.3.0-rc.1` |
-| `main` | 发正式版时：`0.3.0`，tag `v0.3.0` |
+| `dev` | `0.5.0-SNAPSHOT` / `0.5.0-SNAPSHOT`（下一个正式版目标） |
+| `next` | 发测试版时：`0.5.0-alpha.1`；客户端只在真改动时抬版本，tag `v0.5.0-alpha.1` |
+| `main` | 发正式版时：`0.3.0`，tag `v0.3.0`（0.4 线不发正式版，下次正式版是 1.0） |
 
-tag 带 `v`；产物名跟随 `mod_version`（`hubsuite-0.3.0-rc.1.jar` / `hubsuite-0.4.0-alpha.6.jar`）。
+tag 带 `v`；服务端产物 `build/libs/hubsuite-<server_version>.jar`，客户端产物 `client/build/libs/hubsuite-client-<client_version>.jar`（两个项目各自独立）。
 
 ### 发版前固定步骤
 
 ```text
-1. 改 gradle.properties 的 mod_version
+1. 改 gradle.properties 的 server_version（客户端有改动时同时抬 client_version）
 2. 同步文档里的产物文件名（README.md / docs/**）
 3. 跑一次自检确认 失败 0 项
 4. 从 GitHub 真实下载校验：zip 有效、fabric.mod.json 的 version 对、类数对
+5. Release 挂**两份产物**（服务端 jar + 客户端 jar；客户端没变就挂同一份），
+   说明按 docs/分发与更新.md 的三档模板写（无需 / 建议 / 必须更新）
 ```
 **发布说明必须如实写**：哪些已验证、哪些没有、升级要不要删存档。不要为了让 release 好看而省略「未验证」。
 
@@ -458,7 +496,7 @@ release 的**提交信息、tag message、release notes** 都是给**使用者�
 - 大厅 NPC 用真 `ServerPlayer` 假人；空岛只做 classic + ocean，不做单方块
 - 扩展性要求：新增子服尽量只改配置
 
-**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 当前 **232**。
+**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 0.4 收尾 235 → 客户端握手 **244** → 钓竿数据契约 **253** → 客户端真物品 **257** → 钓竿分层渲染 **259** → 物品全量迁移 **261**。
 
 **已修复且经作者实测的关键问题**：
 
