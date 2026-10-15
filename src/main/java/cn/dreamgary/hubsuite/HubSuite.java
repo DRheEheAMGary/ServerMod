@@ -55,6 +55,8 @@ public final class HubSuite implements ModInitializer {
     private cn.dreamgary.hubsuite.island.IslandService islands;
     private cn.dreamgary.hubsuite.integration.UpdateChecker updateChecker;
     private cn.dreamgary.hubsuite.integration.JeiIntegration jei;
+    /** 客户端模组校验（0.5.0 起）。 */
+    private cn.dreamgary.hubsuite.net.ClientCompat clientCompat;
 
     @Override
     public void onInitialize() {
@@ -116,6 +118,10 @@ public final class HubSuite implements ModInitializer {
         lockdown.register();
         commandGuard = new cn.dreamgary.hubsuite.feature.CommandGuard(worldsManager, lockdown, permissions);
         cn.dreamgary.hubsuite.feature.CommandGuardHolder.set(commandGuard);
+
+        // 客户端模组校验（0.5.0）：握手 + 按能力分叉。开发期默认只提示不拦。
+        clientCompat = new cn.dreamgary.hubsuite.net.ClientCompat(configManager.config().clientCompat);
+        clientCompat.register();
 
         // 集成：HuskHomes 与占位符
         huskHomes = new cn.dreamgary.hubsuite.integration.HuskHomesIntegration(worldsManager);
@@ -317,6 +323,11 @@ public final class HubSuite implements ModInitializer {
 
     public static cn.dreamgary.hubsuite.integration.JeiIntegration jei() {
         return get().jei;
+    }
+
+    /** 客户端模组校验；未初始化时为 null。 */
+    public static cn.dreamgary.hubsuite.net.ClientCompat clients() {
+        return instance == null ? null : instance.clientCompat;
     }
 
     public static cn.dreamgary.hubsuite.integration.HuskHomesIntegration huskHomes() {

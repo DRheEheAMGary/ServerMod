@@ -107,6 +107,12 @@ $env:JAVA_HOME = $j; $env:PATH = "$j\bin;$env:PATH"
   游戏里「多人游戏 → localhost:25566」；
 - 🔴 **跑完务必关掉客户端窗口**：它开着就一直占 Gradle 的构建锁，
   再跑任何 Gradle 任务（包括服务端自检）都会卡在等锁上。
+- **自动连服（开发用）**：`:client:runClientAuto` 带 `-Dhubsuite.autoconnect=localhost:25566`，
+  客户端初始加载结束就自动连本机测试服（先起服务端）。手动用 `:client:runClient` 也可以，
+  但进服时**必须接受服务器资源包**（Polymer 下发的那个），否则会卡在配置阶段直到掉线 ——
+  自动连服这条路会自己选"启用"。
+- 原版的 `--quickPlayMultiplayer` 在 26.1 上实测**不生效**（参数进了命令行也不连），
+  所以自动连服是本模组自己实现的（`DevAutoConnect`）。
 
 ### 清档（改了地形 / 生成器才需要）
 

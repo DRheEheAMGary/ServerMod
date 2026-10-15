@@ -26,6 +26,7 @@
 		"fabric-api": "*"
 	},
 	"custom": {
-		"hubsuite:protocol": 1
+		"hubsuite:protocol": 1,
+		"hubsuite:fingerprint": "`{fingerprint}"
 	}
 }

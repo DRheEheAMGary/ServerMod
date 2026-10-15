@@ -7,6 +7,44 @@ version = project.client_version
 group = project.maven_group
 base.archivesName = 'hubsuite-client'
 
+// 与服务端共用的契约源码（线格式只有一个来源）
+sourceSets {
+	main {
+		java.srcDir '../common/src/main/java'
+	}
+}
+
+/**
+ * 客户端指纹：对"客户端源码 + 素材 + 共用契约"算 SHA-256，取前 16 位十六进制，
+ * 写进 fabric.mod.json；运行期由客户端报给服务端（见 docs/分发与更新.md 第 4 节）。
+ *
+ * 用途一：排查时一眼看出玩家在跑哪个客户端；
+ * 用途二：发版时对比上一版的指纹，就知道"这一版客户端有没有变"。
+ */
+def clientFingerprint = providers.provider {
+	def digest = java.security.MessageDigest.getInstance('SHA-256')
+	def files = (fileTree('src/main/java') + fileTree('src/main/resources')
+			+ fileTree('../common/src/main/java')).files.sort { it.path }
+	files.each { f ->
+		digest.update(f.path.replace(File.separator, '/').getBytes('UTF-8'))
+		digest.update(f.bytes)
+	}
+	digest.digest().encodeHex().toString().substring(0, 16)
+}
+
+loom {
+	runs {
+		// 开发用：起客户端后直接连本机测试服（先起 run/ 那个服务端，端口 25566）。
+		// 任务名：:client:runClientAuto
+		clientAuto {
+			client()
+			configName = 'Client (自动连服 25566)'
+			// 原版的 quickPlay 参数在 26.1 上实测不生效，改用本模组自己的自动连服
+			vmArgs '-Dhubsuite.autoconnect=localhost:25566'
+		}
+	}
+}
+
 dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
@@ -16,11 +54,15 @@ dependencies {
 processResources {
 	def props = [
 		version      : project.version,
+		fingerprint  : clientFingerprint.get(),
 		loaderVersion: project.loader_version,
 		mcVersion    : project.minecraft_version
 	]
 	inputs.properties props
 	filesMatching('fabric.mod.json') {
+		expand props
+	}
+	filesMatching('hubsuite-client.properties') {
 		expand props
 	}
 }

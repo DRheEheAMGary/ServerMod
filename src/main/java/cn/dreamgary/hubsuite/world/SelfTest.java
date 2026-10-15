@@ -176,6 +176,7 @@ public final class SelfTest {
         step("岩浆钓鱼：浮标不掉、不着火、能进浮漂状态", this::checkLavaFishing);
         step("渔桶的点击交互（装 / 取 / 拒绝 / 只读格）", this::checkBaitBucketClicks);
         step("火能在本模组的维度里点燃传送门", this::checkFireCanIgnitePortal);
+        step("客户端握手契约（线格式 + 黄金字节 + 版本比较 + 判定表）", this::checkClientHandshake);
     }
 
 
@@ -1568,6 +1569,184 @@ public final class SelfTest {
         } catch (Throwable t) {
             fail("比对各子服地形时出错：" + t);
         }
+    }
+
+    /** 握手 HelloAck 固定样本的黄金字节（25 字节）。改线格式会让它变 —— 那正是本用例要抓的。 */
+    private static final String GOLDEN_ACK_HEX = "0105312e302e300861626364656630310107626173655f7631";
+
+    /**
+     * 客户端握手契约（0.5.0，见 docs/客户端契约.md）。
+     *
+     * <p>锁四件事：
+     * <ol>
+     *   <li>payload 编解码往返一致（两端共用 common/ 的同一份定义）；</li>
+     *   <li><b>黄金字节</b>：固定样本编码后的字节逐字节一致 —— 没有旧客户端在手上时，
+     *       这是唯一能自动守住线格式的防线（改字段顺序 / 改类型 / 删字段，这里当场失败）；</li>
+     *   <li>版本比较与判定表；</li>
+     *   <li>假人豁免：自检全程跑过很多假人，客户端校验里一个都不该有。</li>
+     * </ol>
+     */
+    private void checkClientHandshake() {
+        // --- 1) 往返 ---
+        var hello = new cn.dreamgary.hubsuite.net.HandshakePayloads.Hello(
+                cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "0.5.0-SNAPSHOT", "0.5.0-alpha.1", 15);
+        var helloBack = decodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.Hello.CODEC,
+                encodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.Hello.CODEC, hello));
+        if (!hello.equals(helloBack)) {
+            fail("握手 Hello 往返不一致：" + hello + " != " + helloBack);
+        } else {
+            ok("握手 Hello 编解码往返一致（协议 " + helloBack.protocol() + "，最低客户端 "
+                    + helloBack.minClient() + "，等待 " + helloBack.timeoutSeconds() + " 秒）");
+        }
+
+        var ack = new cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck(
+                cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "0.5.0-alpha.2", "0123456789abcdef",
+                List.of(cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE));
+        byte[] ackBytes = encodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck.CODEC, ack);
+        var ackBack = decodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck.CODEC, ackBytes);
+        if (!ack.equals(ackBack)) {
+            fail("握手 HelloAck 往返不一致：" + ack + " != " + ackBack);
+        } else {
+            ok("握手 HelloAck 编解码往返一致（" + ackBytes.length + " 字节，能力 " + ackBack.caps() + "）");
+        }
+
+        // --- 2) 黄金字节 ---
+        var sample = new cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck(
+                cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "1.0.0", "abcdef01",
+                List.of(cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE));
+        String hex = toHex(encodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck.CODEC, sample));
+        if (!GOLDEN_ACK_HEX.equals(hex)) {
+            fail("握手 HelloAck 线格式变了！黄金字节 " + GOLDEN_ACK_HEX + "，实测 " + hex
+                    + " —— 字段只能追加在末尾，不能改序 / 改型 / 删除（docs/客户端契约.md 第 3.1 节）");
+        } else {
+            ok("握手 HelloAck 与黄金字节逐字节一致（" + (hex.length() / 2) + " 字节）：" + hex);
+        }
+
+        // --- 3) 只增不改：旧字段前缀稳定 ---
+        var longer = new cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck(
+                cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "1.0.0", "abcdef01",
+                List.of(cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE, "future_v9"));
+        String longerHex = toHex(encodePayload(cn.dreamgary.hubsuite.net.HandshakePayloads.HelloAck.CODEC, longer));
+        String prefix = GOLDEN_ACK_HEX.substring(0, 32);   // 协议 + 版本 + 指纹 = 16 字节
+        if (!longerHex.startsWith(prefix)) {
+            fail("追加能力后旧字段前缀变了：" + longerHex + "（期望以 " + prefix + " 开头）");
+        } else {
+            ok("追加能力只出现在末尾，旧字段（协议 / 版本 / 指纹）前缀逐字节不变");
+        }
+
+        // --- 4) 版本比较 ---
+        String[][] versionCases = {
+                {"0.5.0", "0.5.0", "true"},
+                {"0.5.1", "0.5.0", "true"},
+                {"0.4.9", "0.5.0", "false"},
+                {"0.5.0-alpha.2", "0.5.0-alpha.1", "true"},
+                {"0.5.0-alpha.1", "0.5.0-beta.1", "false"},
+                {"0.5.0-rc.1", "0.5.0-pre.9", "true"},
+                {"0.5.0", "0.5.0-rc.1", "true"},
+                {"0.5.0-SNAPSHOT", "0.5.0-alpha.1", "true"},
+                {"1.0.0-alpha.1", "0.5.0", "true"},
+                {"9.9.9", "", "true"},
+                {"", "0.5.0", "false"},
+        };
+        List<String> wrongVersions = new ArrayList<>();
+        for (String[] c : versionCases) {
+            boolean expected = Boolean.parseBoolean(c[2]);
+            boolean actual = cn.dreamgary.hubsuite.net.ClientVersions.atLeast(c[0], c[1]);
+            if (actual != expected) {
+                wrongVersions.add("atLeast(" + (c[0].isEmpty() ? "空" : c[0]) + ", "
+                        + (c[1].isEmpty() ? "空" : c[1]) + ")=" + actual + " 期望 " + expected);
+            }
+        }
+        if (wrongVersions.isEmpty()) {
+            ok("版本比较 " + versionCases.length + " 组全对（alpha < beta < pre < rc < 正式；SNAPSHOT 视作同版本正式版）");
+        } else {
+            fail("版本比较有误：" + String.join("；", wrongVersions));
+        }
+
+        // --- 5) 判定表 ---
+        var clientSide = cn.dreamgary.hubsuite.net.ClientCompat.class;   // 仅为可读性
+        Object[][] decisions = {
+                {cn.dreamgary.hubsuite.net.ClientCompat.Mode.OFF, Boolean.FALSE, cn.dreamgary.hubsuite.net.ClientCompat.Action.ALLOW},
+                {cn.dreamgary.hubsuite.net.ClientCompat.Mode.WARN, Boolean.FALSE, cn.dreamgary.hubsuite.net.ClientCompat.Action.WARN},
+                {cn.dreamgary.hubsuite.net.ClientCompat.Mode.ENFORCE, Boolean.FALSE, cn.dreamgary.hubsuite.net.ClientCompat.Action.KICK},
+                {cn.dreamgary.hubsuite.net.ClientCompat.Mode.WARN, Boolean.TRUE, cn.dreamgary.hubsuite.net.ClientCompat.Action.ALLOW},
+                {cn.dreamgary.hubsuite.net.ClientCompat.Mode.ENFORCE, Boolean.TRUE, cn.dreamgary.hubsuite.net.ClientCompat.Action.ALLOW},
+        };
+        List<String> wrongDecisions = new ArrayList<>();
+        for (Object[] d : decisions) {
+            var mode = (cn.dreamgary.hubsuite.net.ClientCompat.Mode) d[0];
+            boolean okClient = (Boolean) d[1];
+            var expected = (cn.dreamgary.hubsuite.net.ClientCompat.Action) d[2];
+            var actual = cn.dreamgary.hubsuite.net.ClientCompat.decide(mode, okClient);
+            if (actual != expected) {
+                wrongDecisions.add(mode + "/" + (okClient ? "通过" : "不通过") + "=" + actual + " 期望 " + expected);
+            }
+        }
+        if (wrongDecisions.isEmpty()) {
+            ok("客户端校验判定表 " + decisions.length + " 组全对（off 不拦 / warn 只提示 / enforce 踢出；通过一律放行）");
+        } else {
+            fail("客户端校验判定表有误：" + String.join("；", wrongDecisions));
+        }
+
+        // --- 6) 假人豁免 + 配置默认值 + 能力名 ---
+        var clients = HubSuite.clients();
+        if (clients == null) {
+            fail("客户端校验没有初始化（HubSuite.clients() 为 null）");
+        } else if (clients.knownCount() != 0 || clients.waitingCount() != 0) {
+            fail("有假人被卷进了客户端校验（已通过 " + clients.knownCount() + " / 等待中 " + clients.waitingCount()
+                    + "）—— 假人没有网络连接，必须豁免（否则会被反复发消息甚至断开）");
+        } else {
+            ok("假人已豁免：自检跑了 20+ 个假人，客户端校验里一个都没进（模式 " + clients.mode() + "）");
+        }
+
+        var cfg = new cn.dreamgary.hubsuite.config.HubSuiteConfig().clientCompat;
+        if (cfg == null || cfg.timeoutSeconds < 1 || cfg.timeoutSeconds > 120
+                || cfg.downloadUrl == null || cfg.downloadUrl.isBlank()) {
+            fail("clientCompat 默认值不合理：" + cfg);
+        } else {
+            ok("clientCompat 默认值合理（模式 " + cfg.modeOf() + "，超时 " + cfg.timeoutSeconds
+                    + " 秒，下载地址 " + cfg.downloadUrl + "）");
+        }
+
+        String cap = cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE;
+        if (!cap.matches("[a-z0-9_]+")) {
+            fail("能力名不合规（只能小写字母 / 数字 / 下划线）：" + cap);
+        } else {
+            ok("能力名合规：" + cap + "（协议号 " + cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL + "）");
+        }
+    }
+
+    private static <T extends net.minecraft.network.protocol.common.custom.CustomPacketPayload> byte[] encodePayload(
+            net.minecraft.network.codec.StreamCodec<net.minecraft.network.RegistryFriendlyByteBuf, T> codec, T payload) {
+        var buf = new net.minecraft.network.RegistryFriendlyByteBuf(
+                io.netty.buffer.Unpooled.buffer(), serverRegistry());
+        codec.encode(buf, payload);
+        byte[] out = new byte[buf.readableBytes()];
+        buf.readBytes(out);
+        return out;
+    }
+
+    private static <T extends net.minecraft.network.protocol.common.custom.CustomPacketPayload> T decodePayload(
+            net.minecraft.network.codec.StreamCodec<net.minecraft.network.RegistryFriendlyByteBuf, T> codec, byte[] bytes) {
+        var buf = new net.minecraft.network.RegistryFriendlyByteBuf(
+                io.netty.buffer.Unpooled.wrappedBuffer(bytes), serverRegistry());
+        return codec.decode(buf);
+    }
+
+    private static net.minecraft.core.RegistryAccess serverRegistry() {
+        var server = HubSuite.worlds() == null ? null : HubSuite.worlds().server();
+        if (server == null) {
+            throw new IllegalStateException("服务端还没起来，拿不到 RegistryAccess");
+        }
+        return server.registryAccess();
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
     }
 
     private void step(String name, ThrowingRunnable body) {

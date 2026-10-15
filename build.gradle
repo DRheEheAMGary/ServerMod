@@ -58,6 +58,14 @@ processResources {
 	}
 }
 
+// 双端共用的契约源码（payload 结构 / 版本比较）：两个 jar 各自编译同一份，
+// 线格式只有一个来源，不可能各写一份然后漂移（见 docs/客户端契约.md）。
+sourceSets {
+	main {
+		java.srcDir 'common/src/main/java'
+	}
+}
+
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 25
 	it.options.encoding = 'UTF-8'
