@@ -25,7 +25,7 @@
 | 项 | 值 |
 |---|---|
 | 模组 id / 组 | `hubsuite` / `cn.dreamgary` |
-| 版本 | `gradle.properties` 的 `mod_version` = **0.4.0-SNAPSHOT** |
+| 版本 | `gradle.properties` 的 `server_version` = **0.5.0-SNAPSHOT**；客户端 `client_version` 独立递增（见 docs/分发与更新.md） |
 | 构建 | Gradle 9.7.1 + Loom 1.18-SNAPSHOT |
 | 映射 | **官方 Mojang 名，不 remap**（26.1 起官方不再混淆；build.gradle 无 mappings、无 remapJar） |
 | 产物 | `build/libs/hubsuite-<版本>.jar`（另有 `-sources.jar`） |
@@ -384,18 +384,18 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 
 ### 版本号在各分支上的落点
 
-| 分支 | `mod_version` |
+| 分支 | `server_version` / `client_version` |
 |---|---|
-| `dev` | `0.4.0-SNAPSHOT`（下一个正式版目标） |
-| `next` | 发测试版时：`0.3.0-rc.1`，tag `v0.3.0-rc.1` |
-| `main` | 发正式版时：`0.3.0`，tag `v0.3.0` |
+| `dev` | `0.5.0-SNAPSHOT` / `0.5.0-SNAPSHOT`（下一个正式版目标） |
+| `next` | 发测试版时：`0.5.0-alpha.1`；客户端只在真改动时抬版本，tag `v0.5.0-alpha.1` |
+| `main` | 发正式版时：`0.3.0`，tag `v0.3.0`（0.4 线不发正式版，下次正式版是 1.0） |
 
-tag 带 `v`；产物名跟随 `mod_version`（`hubsuite-0.3.0-rc.1.jar` / `hubsuite-0.4.0-SNAPSHOT.jar`）。
+tag 带 `v`；服务端产物 `build/libs/hubsuite-<server_version>.jar`，客户端产物 `client/build/libs/hubsuite-client-<client_version>.jar`（两个项目各自独立）。
 
 ### 发版前固定步骤
 
 ```text
-1. 改 gradle.properties 的 mod_version
+1. 改 gradle.properties 的 server_version（客户端有改动时同时抬 client_version）
 2. 同步文档里的产物文件名（README.md / docs/**）
 3. 跑一次自检确认 失败 0 项
 4. 从 GitHub 真实下载校验：zip 有效、fabric.mod.json 的 version 对、类数对

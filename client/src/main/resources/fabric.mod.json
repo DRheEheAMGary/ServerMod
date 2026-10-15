@@ -1,0 +1,31 @@
+{
+	"schemaVersion": 1,
+	"id": "hubsuite-client",
+	"version": "${version}",
+	"name": "HubSuite Client",
+	"description": "HubSuite 服务端的客户端配套模组：自定义物品的分层渲染、装配台等自定义界面。强制安装（见 docs/客户端契约.md）。",
+	"authors": [
+		"DreamGary"
+	],
+	"contact": {
+		"homepage": "https://dreamgary.cn/",
+		"sources": "https://dreamgary.cn/"
+	},
+	"license": "MIT",
+	"icon": "assets/hubsuite-client/icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"cn.dreamgary.hubsuite.client.HubSuiteClient"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=${loaderVersion}",
+		"minecraft": "${mcVersion}",
+		"java": ">=25",
+		"fabric-api": "*"
+	},
+	"custom": {
+		"hubsuite:protocol": 1
+	}
+}

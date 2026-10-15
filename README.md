@@ -81,14 +81,14 @@
 ```bash
 # 1. 编译（需要 JDK 25）
 ./gradlew build
-# 产物：build/libs/hubsuite-0.4.0-SNAPSHOT.jar
+# 产物：build/libs/hubsuite-0.5.0-SNAPSHOT.jar
 ```
 
 把 jar 和依赖放进服务端 `mods/`：
 
 | jar | 必需 | 用途 |
 |---|---|---|
-| `hubsuite-0.4.0-SNAPSHOT.jar` | 必需 | 本模组 |
+| `hubsuite-0.5.0-SNAPSHOT.jar` | 必需 | 本模组 |
 | `fabric-api-0.155.3+26.1.2.jar` | 必需 | Fabric API |
 | `polymer-bundled-0.16.5+26.1.2.jar` | **必需** | 自定义物品的客户端映射；**缺了模组不会加载** |
 | `HuskHomes-Fabric-4.11+mc.26.1.2.jar` | 建议 | 家 / 传送点 / Tpa / Warp 指令 |

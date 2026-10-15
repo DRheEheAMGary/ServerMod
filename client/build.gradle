@@ -1,0 +1,43 @@
+plugins {
+	// 版本号由根项目的 plugins 块统一提供，子项目里不能再写 version
+	id 'net.fabricmc.fabric-loom'
+}
+
+version = project.client_version
+group = project.maven_group
+base.archivesName = 'hubsuite-client'
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+}
+
+processResources {
+	def props = [
+		version      : project.version,
+		loaderVersion: project.loader_version,
+		mcVersion    : project.minecraft_version
+	]
+	inputs.properties props
+	filesMatching('fabric.mod.json') {
+		expand props
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+	it.options.encoding = 'UTF-8'
+}
+
+java {
+	withSourcesJar()
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+jar {
+	from(rootProject.file('LICENSE')) {
+		rename { "${it}_${project.base.archivesName.get()}" }
+	}
+}

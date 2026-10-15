@@ -2,7 +2,7 @@ plugins {
 	id 'net.fabricmc.fabric-loom' version "${loom_version}"
 }
 
-version = project.mod_version
+version = project.server_version
 group = project.maven_group
 base.archivesName = project.archives_base_name
 
