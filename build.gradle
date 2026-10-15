@@ -6,6 +6,11 @@ version = project.server_version
 group = project.maven_group
 base.archivesName = project.archives_base_name
 
+loom {
+	// 原版把附魔台算附魔的方法私有化了，用访问加宽开放出来（见 hubsuite.accesswidener）
+	accessWidenerPath = file('src/main/resources/hubsuite.accesswidener')
+}
+
 repositories {
 	// HuskHomes (William278) —— 官方 Fabric 构建
 	maven {

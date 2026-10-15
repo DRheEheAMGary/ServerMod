@@ -183,6 +183,7 @@ public final class SelfTest {
         step("装配台方块（注册 / 方块实体 / 素材 / 掉落表）", this::checkAssemblyBlock);
         step("钓竿耐久与断线（扣耐久 / 断线边界 / 原版耐久条 / 坏了不能钓）", this::checkRodDurability);
         step("铁砧升级（单槽替换 / 累计惩罚 / 不归我们管的一律原样）", this::checkRodAnvil);
+        step("青金石附魔（附魔台等价 / 宝藏池排除诅咒 / 概率边界）", this::checkRodEnchanting);
     }
 
 
@@ -2335,6 +2336,82 @@ public final class SelfTest {
                     + "非钓竿或非升级物一律原样交给原版）");
         } else {
             fail("铁砧升级有误：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 青金石附魔（0.6，方案第 6 节）。
+     *
+     * <p>锁三件事：**宝藏池 = 宝藏标签减去两个诅咒**（不是"标签里只有 5 个"，
+     * 所以顺便断言两个诅咒确实在标签里、只是被我们滤掉了）、追加概率的边界、
+     * 以及"等价附魔台"真的能给出附魔（不重写原版算法，直接调它自己的方法）。
+     */
+    private void checkRodEnchanting() {
+        List<String> wrong = new ArrayList<>();
+        var registries = server.registryAccess();
+        var lookup = registries.lookupOrThrow(net.minecraft.core.registries.Registries.ENCHANTMENT);
+
+        // --- 宝藏池：标签里的 7 个，减去 binding_curse / vanishing_curse = 5 ---
+        var raw = new ArrayList<String>();
+        for (var holder : lookup.getOrThrow(net.minecraft.tags.EnchantmentTags.TREASURE)) {
+            raw.add(holder.unwrapKey().map(k -> k.identifier().getPath()).orElse("?"));
+        }
+        var pool = cn.dreamgary.hubsuite.feature.RodEnchanting.treasurePool(registries);
+        var poolNames = new ArrayList<String>();
+        for (var holder : pool) {
+            poolNames.add(holder.unwrapKey().map(k -> k.identifier().getPath()).orElse("?"));
+        }
+        expectInt(wrong, "宝藏标签里的附魔个数", 7, raw.size());
+        expectInt(wrong, "滤掉诅咒后的宝藏池大小", 5, pool.size());
+        for (String curse : List.of("binding_curse", "vanishing_curse")) {
+            if (!raw.contains(curse)) {
+                wrong.add(curse + " 居然不在宝藏标签里（测试前提变了）");
+            }
+            if (poolNames.contains(curse)) {
+                wrong.add("宝藏池里混进了诅咒 " + curse);
+            }
+        }
+
+        // --- 概率边界：抽签 0 必中、抽签 1 必不中 ---
+        // 假玩家跟其它用例一样留在那儿，由自检收尾统一清（FakePlayers 只有 spawn，没有 despawn）
+        ServerPlayer probe = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_enchantest",
+                server.overworld(), false);
+        {
+            var sword = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_SWORD);
+            expectBool(wrong, "抽签 0 → 加上宝藏附魔", true,
+                    cn.dreamgary.hubsuite.feature.RodEnchanting.addTreasure(server.overworld(), sword, 0.0F));
+            var sword2 = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_SWORD);
+            expectBool(wrong, "抽签 1 → 不加", false,
+                    cn.dreamgary.hubsuite.feature.RodEnchanting.addTreasure(server.overworld(), sword2, 1.0F));
+
+            // --- 等价附魔台：多试几个种子，至少要出一次附魔（附魔台 15 级对剑几乎必出）---
+            boolean everEnchanted = false;
+            for (int i = 0; i < 5 && !everEnchanted; i++) {
+                var item = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_SWORD);
+                cn.dreamgary.hubsuite.feature.RodEnchanting.enchantCatch(
+                        server.overworld(), probe, item,
+                        cn.dreamgary.hubsuite.feature.RodEnchanting.NORMAL_LEVEL
+                                == cn.dreamgary.hubsuite.feature.RodEnchanting.NORMAL_LEVEL);
+                everEnchanted = item.isEnchanted();
+            }
+            expectBool(wrong, "普通竿（15 级等价）能钓出附魔装备", true, everEnchanted);
+
+            // 青金石 = 30 级等价：同样要能出
+            var boost = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_CHESTPLATE);
+            cn.dreamgary.hubsuite.feature.RodEnchanting.enchantCatch(server.overworld(), probe, boost, true);
+            expectBool(wrong, "青金石（30 级等价）能钓出附魔装备", true, boost.isEnchanted());
+
+            // 不可附魔的东西原样返回
+            var junk = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.LILY_PAD);
+            cn.dreamgary.hubsuite.feature.RodEnchanting.enchantCatch(server.overworld(), probe, junk, true);
+            expectBool(wrong, "睡莲不会被附魔", false, junk.isEnchanted());
+        }
+
+        if (wrong.isEmpty()) {
+            ok("青金石附魔 8 组全对（宝藏池 7→5 且两个诅咒被滤掉 / 概率边界 / "
+                    + "15 与 30 级等价附魔都出得来 / 不可附魔的东西原样）");
+        } else {
+            fail("青金石附魔有误：" + String.join("；", wrong));
         }
     }
 

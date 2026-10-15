@@ -88,6 +88,17 @@ public abstract class FishingHookLootMixin {
                 }
                 result.add(c.stack());
             }
+            /*
+             * 青金石附魔（方案第 6 节）：钓上来的**装备**按附魔台等价附魔 ——
+             * 普通竿 15 级，青金石升级 30 级 + 有概率追加一个宝藏附魔（排除诅咒）。
+             * 不可附魔的东西（垃圾渔获）会自动跳过。
+             */
+            if (owner instanceof ServerPlayer sp) {
+                boolean lapis = cn.dreamgary.hubsuite.feature.RodEnchanting.boostsEnchant(sp);
+                for (ItemStack stack : result) {
+                    cn.dreamgary.hubsuite.feature.RodEnchanting.enchantCatch(level, sp, stack, lapis);
+                }
+            }
             return result.isEmpty() ? original : result;
         } catch (Throwable t) {
             HubSuite.logger().debug("自定义渔获失败，沿用原版：{}", t.toString());

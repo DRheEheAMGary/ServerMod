@@ -14,6 +14,7 @@
 	"license": "MIT",
 	"icon": "assets/hubsuite/icon.png",
 	"environment": "*",
+	"accessWidener": "hubsuite.accesswidener",
 	"entrypoints": {
 		"main": [
 			"cn.dreamgary.hubsuite.HubSuite"
