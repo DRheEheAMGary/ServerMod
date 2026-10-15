@@ -63,6 +63,8 @@ processResources {
 sourceSets {
 	main {
 		java.srcDir 'common/src/main/java'
+		// 双端共用的素材（物品模型 / 贴图 / 语言文件）：两个 jar 都带上
+		resources.srcDir 'common/resources'
 	}
 }
 

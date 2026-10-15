@@ -24,12 +24,15 @@ public final class HubSuiteClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        ClientItems.register();
+        ClientItems.registerAssetCheck();
         ClientHandshake.register();
 
         // 开发用自动连服（不传 -Dhubsuite.autoconnect 就什么都不做）
         String autoConnect = System.getProperty(DevAutoConnect.PROPERTY, "");
         if (!autoConnect.isBlank()) {
             DevAutoConnect.register(autoConnect);
+            DevItemWatch.register();
         }
 
         LOGGER.info("HubSuite 客户端 {} 已加载（握手已就绪；渲染与界面尚未实现）", version());

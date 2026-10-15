@@ -25,6 +25,13 @@ public final class HandshakePayloads {
     /** 能力名（caps）命名：小写 + 下划线。**只增不减** —— 废弃的能力要留在列表里。 */
     public static final String CAP_BASE = "base_v1";
 
+    /**
+     * 客户端注册了本模组的**真物品**（自带模型贴图），服务端可以不再用 Polymer 把它映射成原版物品。
+     *
+     * <p>老客户端没有这个能力 → 服务端继续发映射过的原版物品，它照旧能玩（客户端契约 v1 第 5 节）。
+     */
+    public static final String CAP_REAL_ITEMS = "real_items_v1";
+
     private HandshakePayloads() {
     }
 

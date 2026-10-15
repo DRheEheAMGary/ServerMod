@@ -178,6 +178,7 @@ public final class SelfTest {
         step("火能在本模组的维度里点燃传送门", this::checkFireCanIgnitePortal);
         step("客户端握手契约（线格式 + 黄金字节 + 版本比较 + 判定表）", this::checkClientHandshake);
         step("钓竿数据契约（部件表 + 属性公式 + NBT 线格式）", this::checkRodDataContract);
+        step("客户端真物品（共用定义 / 原型一致 / 素材齐全 / 能力名）", this::checkClientItemDefs);
     }
 
 
@@ -1940,6 +1941,93 @@ public final class SelfTest {
     private static void expectStr(List<String> wrong, String label, String expected, String actual) {
         if (!java.util.Objects.equals(expected, actual)) {
             wrong.add(label + "=" + actual + " 期望 " + expected);
+        }
+    }
+
+    /**
+     * 客户端真物品（0.5.0）：共用定义 → 服务端物品原型 → 素材 → 能力名。
+     *
+     * <p>为什么必须锁"原型一致"：物品栈的网络同步只发**与原型不同的组件**。
+     * 客户端用 {@code common/} 里的定义构造自己的物品，所以只要服务端注册的物品
+     * 与那份定义一致，两端重建出来的栈就是同一个东西；一旦哪边偷偷改了堆叠上限 /
+     * 稀有度 / 模型，玩家就会看到"同一叠东西两边不一样"这种极难查的问题。
+     */
+    private void checkClientItemDefs() {
+        // --- 1) 注册齐全 ---
+        List<String> wrongIds = new ArrayList<>();
+        for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
+            var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(def.id());
+            if (item == null || item == net.minecraft.world.item.Items.AIR) {
+                wrongIds.add(def.path() + " 没注册");
+            }
+        }
+        if (wrongIds.isEmpty()) {
+            ok("共用定义里的 " + cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL.size()
+                    + " 个物品在服务端都注册上了（id 与 common/ 的定义一致）");
+        } else {
+            fail("有物品没按共用定义注册：" + String.join("；", wrongIds));
+        }
+
+        // --- 2) 原型一致（客户端会按同一份定义重建）---
+        List<String> wrongProtos = new ArrayList<>();
+        for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
+            var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(def.id());
+            var stack = new net.minecraft.world.item.ItemStack(item);
+            expectInt(wrongProtos, def.path() + " 堆叠上限", def.maxStack(), stack.getMaxStackSize());
+            expectStr(wrongProtos, def.path() + " 稀有度", def.rarity().name(), stack.getRarity().name());
+            expectStr(wrongProtos, def.path() + " 物品模型", def.id().toString(),
+                    String.valueOf(stack.get(net.minecraft.core.component.DataComponents.ITEM_MODEL)));
+            expectStr(wrongProtos, def.path() + " 名字", String.valueOf(def.name()),
+                    String.valueOf(stack.get(net.minecraft.core.component.DataComponents.ITEM_NAME)));
+            if (def.durability() > 0) {
+                expectStr(wrongProtos, def.path() + " 耐久上限", String.valueOf(def.durability()),
+                        String.valueOf(stack.get(net.minecraft.core.component.DataComponents.MAX_DAMAGE)));
+            }
+        }
+        if (wrongProtos.isEmpty()) {
+            ok("物品原型与共用定义逐项一致（堆叠上限 / 稀有度 / 名字 / 模型 / 耐久）—— 客户端重建出来的是同一个东西");
+        } else {
+            fail("物品原型与共用定义不一致（客户端会显示成另一个东西）：" + String.join("；", wrongProtos));
+        }
+
+        // --- 3) 素材三件套真的打进 jar 了 ---
+        List<String> missing = new ArrayList<>();
+        int checked = 0;
+        for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
+            for (String file : List.of("items/" + def.path() + ".json",
+                    "models/item/" + def.path() + ".json",
+                    "textures/item/" + def.path() + ".png")) {
+                checked++;
+                String path = "/assets/" + cn.dreamgary.hubsuite.item.HubSuiteItemDefs.NAMESPACE + "/" + file;
+                try (var in = SelfTest.class.getResourceAsStream(path)) {
+                    if (in == null) {
+                        missing.add(file);
+                    }
+                } catch (java.io.IOException e) {
+                    missing.add(file + "(" + e + ")");
+                }
+            }
+        }
+        if (missing.isEmpty()) {
+            ok("物品素材齐全：" + checked + " 个文件都在 jar 里（每件 = 物品定义 + 模型 + 贴图，双端共用同一份）");
+        } else {
+            fail("物品素材缺失：" + String.join("；", missing) + " —— 游戏里会显示成紫黑格");
+        }
+
+        // --- 4) 能力名 ---
+        List<String> badCaps = new ArrayList<>();
+        for (String cap : List.of(cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE,
+                cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_REAL_ITEMS)) {
+            if (!cap.matches("[a-z0-9_]+")) {
+                badCaps.add(cap);
+            }
+        }
+        if (badCaps.isEmpty()) {
+            ok("客户端能力名合法：" + cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE + " / "
+                    + cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_REAL_ITEMS
+                    + "（老客户端没有 real_items 时，服务端继续发 Polymer 映射的原版物品）");
+        } else {
+            fail("能力名不合规：" + badCaps);
         }
     }
 

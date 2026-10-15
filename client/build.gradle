@@ -11,6 +11,8 @@ base.archivesName = 'hubsuite-client'
 sourceSets {
 	main {
 		java.srcDir '../common/src/main/java'
+		// 双端共用的素材：客户端要用它渲染真物品（同一份文件，不会两边各画一张）
+		resources.srcDir '../common/resources'
 	}
 }
 

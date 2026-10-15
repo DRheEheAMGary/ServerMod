@@ -14,7 +14,9 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 public final class ClientHandshake {
 
     /** 本客户端支持的能力。**只增不减**：废弃的留在列表里，服务端不再依赖即可。 */
-    public static final List<String> CAPS = List.of(HandshakePayloads.CAP_BASE);
+    public static final List<String> CAPS = List.of(
+            HandshakePayloads.CAP_BASE,
+            HandshakePayloads.CAP_REAL_ITEMS);
 
     private ClientHandshake() {
     }
