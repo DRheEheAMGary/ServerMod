@@ -1,0 +1,8 @@
+accessWidener v2 official
+
+# 本模组用官方 Mojang 名、不 remap（见 AGENT.md），所以命名空间是 official 而不是 named。
+# （注意：头部必须**第一行**；注释写在前面会让 Loom 认不出这个文件。）
+#
+# 钓鱼要把「钓上来的装备」按附魔台 N 级等价附魔，而原版把算附魔的方法私有化了。
+# 与其自己重写一遍附魔台算法（容易跟原版跑偏），不如直接把原版那个方法开放出来用。
+accessible method net/minecraft/world/inventory/EnchantmentMenu getEnchantmentList (Lnet/minecraft/core/RegistryAccess;Lnet/minecraft/world/item/ItemStack;II)Ljava/util/List;

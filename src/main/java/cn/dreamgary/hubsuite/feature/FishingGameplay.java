@@ -24,11 +24,11 @@ public final class FishingGameplay {
     /**
      * 这枚浮漂能不能在**岩浆**里咬钩。
      *
-     * <p>三个条件缺一不可：这枚钩子是用**熔岩钓竿**抛的、所在维度配了渔获表、
+     * <p>三个条件缺一不可：抛它的那根竿挂的是**耐岩浆的钩**（黑曜石 / 下界合金）、所在维度配了渔获表、
      * 而且真的泡在岩浆里。
      */
     public static boolean canFishInLava(FishingHook hook) {
-        if (!(hook instanceof LavaFishingHook duck) || !duck.hubsuite$fromLavaRod()) {
+        if (!(hook instanceof LavaFishingHook duck) || !duck.hubsuite$lavaCapable()) {
             return false;
         }
         if (!(hook.level() instanceof ServerLevel level)) {

@@ -35,7 +35,7 @@ public abstract class EntityLavaHurtMixin {
         if (!(((Object) this) instanceof FishingHook hook)) {
             return false;
         }
-        return ((LavaFishingHook) hook).hubsuite$fromLavaRod()
+        return ((LavaFishingHook) hook).hubsuite$lavaCapable()
                 && FishingGameplay.inFluid(hook, FluidTags.LAVA);
     }
 }

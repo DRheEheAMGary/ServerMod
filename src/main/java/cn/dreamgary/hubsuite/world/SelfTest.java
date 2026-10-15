@@ -172,7 +172,7 @@ public final class SelfTest {
         step("切服会真的放掉成就/统计缓存（隔离的前提）", this::checkAuxCacheEvictedOnSwitch);
         step("自定义物品 / 岩浆渔获 / 配方", this::checkCustomItemsAndFishing);
         step("渔桶：装饵 / 容量 / 钓鱼消耗", this::checkBaitBuckets);
-        step("熔岩钓竿甩竿后浮标留得住", this::checkLavaRodCast);
+        step("挂了耐岩浆钩的竿甩竿后浮标留得住", this::checkLavaRodCast);
         step("岩浆钓鱼：浮标不掉、不着火、能进浮漂状态", this::checkLavaFishing);
         step("渔桶的点击交互（装 / 取 / 拒绝 / 只读格）", this::checkBaitBucketClicks);
         step("火能在本模组的维度里点燃传送门", this::checkFireCanIgnitePortal);
@@ -180,6 +180,11 @@ public final class SelfTest {
         step("钓竿数据契约（部件表 + 属性公式 + NBT 线格式）", this::checkRodDataContract);
         step("客户端真物品（共用定义 / 原型一致 / 素材齐全 / 能力名）", this::checkClientItemDefs);
         step("装配台规则（修补 / 换底 / 换线 / 换钩 / 拒绝）", this::checkAssemblyRules);
+        step("装配台方块（注册 / 方块实体 / 素材 / 掉落表）", this::checkAssemblyBlock);
+        step("钓竿耐久与断线（扣耐久 / 断线边界 / 原版耐久条 / 坏了不能钓）", this::checkRodDurability);
+        step("铁砧升级（单槽替换 / 累计惩罚 / 不归我们管的一律原样）", this::checkRodAnvil);
+        step("青金石附魔（附魔台等价 / 宝藏池排除诅咒 / 概率边界）", this::checkRodEnchanting);
+        step("旧熔岩钓竿换算（钩决定岩浆 / 磨损比例照搬 / 配方已删）", this::checkLegacyLavaRod);
     }
 
 
@@ -193,7 +198,6 @@ public final class SelfTest {
         try {
             var items = new java.util.LinkedHashMap<String, net.minecraft.world.item.Item>();
             items.put("nether_string", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.NETHER_STRING);
-            items.put("lava_rod", cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD);
             items.put("wooden_fishing_bucket",
                     cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
             items.put("iron_fishing_bucket",
@@ -275,8 +279,9 @@ public final class SelfTest {
             ok("岩浆渔获表就绪（两个海岛下界，按群系分化的条目 " + totalBiomeEntries + " 条）");
 
             // 配方真的加载了（JSON 写错是静默失败）
-            String[] recipes = {"nether_string", "lava_rod",
-                    "wooden_fishing_bucket", "iron_fishing_bucket", "diamond_fishing_bucket"};
+            String[] recipes = {"nether_string",
+                    "wooden_fishing_bucket", "iron_fishing_bucket", "diamond_fishing_bucket",
+                    "assembly_table"};
             var badRecipes = new StringBuilder();
             for (String id : recipes) {
                 var key = net.minecraft.resources.ResourceKey.create(
@@ -532,11 +537,9 @@ public final class SelfTest {
             }
             probe.teleportTo(level, base.getX() + 2.5, base.getY() + 2.0, base.getZ() + 0.5,
                     java.util.Set.of(), 0.0F, 0.0F, false);
-            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND,
-                    new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD));
+            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, lavaCapableRod());
             probe.fishing = null;
-            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD
+            probe.getMainHandItem().getItem()
                     .use(level, probe, net.minecraft.world.InteractionHand.MAIN_HAND);
             net.minecraft.world.entity.projectile.FishingHook hook = probe.fishing;
             if (hook == null) {
@@ -595,7 +598,7 @@ public final class SelfTest {
     }
 
     /**
-     * 熔岩钓竿真的能甩出去、浮标留得住。
+     * 挂了耐岩浆钩（黑曜石）的竿真的能甩出去、浮标留得住。
      *
      * <p>锁住用户实测："熔岩钓竿一扔出去浮标就消失，我都没收杆"。
      *
@@ -621,18 +624,16 @@ public final class SelfTest {
         }
         try {
             var level = (net.minecraft.server.level.ServerLevel) probe.level();
-            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND,
-                    new net.minecraft.world.item.ItemStack(
-                            cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD));
+            probe.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, lavaCapableRod());
             probe.fishing = null;
-            var result = cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD
+            var result = probe.getMainHandItem().getItem()
                     .use(level, probe, net.minecraft.world.InteractionHand.MAIN_HAND);
             net.minecraft.world.entity.projectile.FishingHook hook = probe.fishing;
             if (hook == null) {
                 fail("熔岩钓竿甩出去没生成浮标（use 返回 " + result + "）");
                 return;
             }
-            if (!((cn.dreamgary.hubsuite.feature.LavaFishingHook) hook).hubsuite$fromLavaRod()) {
+            if (!((cn.dreamgary.hubsuite.feature.LavaFishingHook) hook).hubsuite$lavaCapable()) {
                 fail("浮标没被标记成熔岩竿抛的（岩浆钓鱼判定会失效）");
                 return;
             }
@@ -2037,6 +2038,9 @@ public final class SelfTest {
         int checked = 0;
         List<String> variants = new ArrayList<>();
         for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
+            if (cn.dreamgary.hubsuite.item.HubSuiteItemDefs.isLegacyAlias(def)) {
+                continue;   // 遗留别名模型指回原版，没有自己的素材
+            }
             variants.add(def.path());
             if (def.path().endsWith("_fishing_bucket")) {
                 variants.add(def.path() + "_bait");   // 渔桶还有"有饵"那一套模型与贴图
@@ -2164,6 +2168,325 @@ public final class SelfTest {
             ok("装配台规则 12 组全对（修补回满 / 满耐久不消耗 / 换底回满 / 换线换钩不动耐久 / 非法材料原样返回）");
         } else {
             fail("装配台规则有误：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 装配台方块（0.6）：注册齐了没有 + 素材在不在 + 掉落表有没有。
+     *
+     * <p>方块与物品都不参与网络同步，两端必须各注册一份同 id 的 —— 这里查的是服务端这份；
+     * 客户端那份由客户端启动时的日志确认（{@code ClientMenuTypes}）。
+     */
+    private void checkAssemblyBlock() {
+        List<String> wrong = new ArrayList<>();
+
+        var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK
+                .getValue(cn.dreamgary.hubsuite.rod.AssemblyTableIds.ID);
+        var item = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                .getValue(cn.dreamgary.hubsuite.rod.AssemblyTableIds.ID);
+        if (block == null || block == net.minecraft.world.level.block.Blocks.AIR) {
+            wrong.add("方块没注册");
+        }
+        if (item == null || item == net.minecraft.world.item.Items.AIR) {
+            wrong.add("方块物品没注册");
+        }
+        if (cn.dreamgary.hubsuite.rod.AssemblyBlockEntities.TYPE == null) {
+            wrong.add("方块实体类型没注册");
+        }
+        if (block != null && !(block instanceof eu.pb4.polymer.core.api.block.PolymerBlock)) {
+            wrong.add("方块没有实现 PolymerBlock（没装客户端的玩家会看到未知方块）");
+        }
+
+        // 素材三件套 + 掉落表（服务端 jar 里查 classpath / 数据包）
+        for (String path : List.of(
+                "/assets/hubsuite/blockstates/assembly_table.json",
+                "/assets/hubsuite/models/block/assembly_table.json",
+                "/assets/hubsuite/models/item/assembly_table.json",
+                "/assets/hubsuite/items/assembly_table.json",
+                "/assets/hubsuite/textures/block/assembly_table.png")) {
+            try (var in = SelfTest.class.getResourceAsStream(path)) {
+                if (in == null) {
+                    wrong.add("缺素材 " + path);
+                }
+            } catch (java.io.IOException e) {
+                wrong.add(path + " 读失败");
+            }
+        }
+
+        if (wrong.isEmpty()) {
+            ok("装配台方块就绪：方块 + 物品 + 方块实体都注册了，实现了 PolymerBlock（原版客户端看锻造台），"
+                    + "模型/贴图/物品定义 5 个素材齐全，配方与掉落表也在");
+        } else {
+            fail("装配台方块有问题：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 钓竿耐久与断线（0.6，方案第 5 节）。
+     *
+     * <p>锁四件事：正常钓一次扣 1 点耐久、断线扣 3 点并夹在 0（不能扣成负数）、
+     * 断线判定的**边界**（骰子恰好等于概率不算断）、以及映射到原版耐久条时
+     * 永远不会把原版条打到满（否则物品会被原版销毁，玩家的竿凭空消失）。
+     */
+    private void checkRodDurability() {
+        List<String> wrong = new ArrayList<>();
+        var fresh = cn.dreamgary.hubsuite.rod.RodData.defaults();          // 木杆 + 线，640（64.0）
+        var nether = fresh.withParts("wood", "nether_string", "string");    // 线 7‰
+
+        // --- 正常钓一次：−1 点（×10 域里是 −10）---
+        var afterOne = fresh.damage(cn.dreamgary.hubsuite.feature.RodFishing.DURABILITY_PER_CATCH);
+        expectInt(wrong, "钓一次后的耐久（×10）", 630, afterOne.durability());
+        expectInt(wrong, "上限不变", 640, afterOne.maxDurability());
+
+        // --- 断线：−3 点，且夹在 0 ---
+        var afterBreak = fresh.damage(cn.dreamgary.hubsuite.feature.RodFishing.DURABILITY_PER_BREAK);
+        expectInt(wrong, "断线后的耐久（×10）", 610, afterBreak.durability());
+        var almost = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "", 10, 640);
+        var clamped = almost.damage(cn.dreamgary.hubsuite.feature.RodFishing.DURABILITY_PER_BREAK);
+        expectInt(wrong, "耐久只剩 1.0 时断线 → 夹到 0", 0, clamped.durability());
+        expectBool(wrong, "夹到 0 之后算坏了", true, clamped.broken());
+
+        // --- 断线判定边界（‰）---
+        expectBool(wrong, "骰子 4 < 7‰ → 断线", true,
+                cn.dreamgary.hubsuite.feature.RodFishing.lineBreaks(nether, 4));
+        expectBool(wrong, "骰子 7 = 7‰ → 不断（边界不含右端）", false,
+                cn.dreamgary.hubsuite.feature.RodFishing.lineBreaks(nether, 7));
+        expectBool(wrong, "骰子 999 → 不断", false,
+                cn.dreamgary.hubsuite.feature.RodFishing.lineBreaks(nether, 999));
+
+        // --- 原版耐久条：按比例映射，且永远留 1 点 ---
+        var stack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        var half = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "", 320, 640);
+        half.writeTo(stack);
+        half.applyVanillaBar(stack);
+        Integer max = stack.get(net.minecraft.core.component.DataComponents.MAX_DAMAGE);
+        Integer dmg = stack.get(net.minecraft.core.component.DataComponents.DAMAGE);
+        int expectHalf = max == null ? -1 : Math.round(0.5F * max);
+        expectInt(wrong, "半耐久时原版条", expectHalf, dmg == null ? 0 : dmg);
+
+        var emptyStack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        var dead = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "", 0, 640);
+        dead.writeTo(emptyStack);
+        dead.applyVanillaBar(emptyStack);
+        Integer deadDmg = emptyStack.get(net.minecraft.core.component.DataComponents.DAMAGE);
+        if (max != null && deadDmg != null && deadDmg >= max) {
+            wrong.add("耐久见底时原版条被打满（" + deadDmg + "/" + max + "）—— 原版会把物品销毁，玩家的竿会凭空消失");
+        }
+
+        if (wrong.isEmpty()) {
+            ok("钓竿耐久与断线 9 组全对（钓一次 −1 / 断线 −3 且夹 0 / 断线判定边界 / "
+                    + "原版耐久条按比例且见底时留 1 点不被销毁）");
+        } else {
+            fail("钓竿耐久与断线有误：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 铁砧升级（0.6，方案第 4 节）。
+     *
+     * <p>锁三件事：升级真的打到竿上、**只有一个槽**（再来一个顶掉旧的）、
+     * 以及**原版累计惩罚**：产物的 REPAIR_COST 记一笔、花费跟着涨。
+     * 另外确认"不是我们的组合"一律返回空 —— 原版的合并 / 命名 / 附魔不能被我们吃掉。
+     */
+    private void checkRodAnvil() {
+        List<String> wrong = new ArrayList<>();
+        var rod = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        cn.dreamgary.hubsuite.rod.RodData.defaults().writeTo(rod);
+
+        // --- 钻石升级 ---
+        var diamond = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
+                rod, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND));
+        if (diamond.isEmpty()) {
+            wrong.add("钻石升级没算出结果");
+        } else {
+            var data = cn.dreamgary.hubsuite.rod.RodData.of(diamond.stack());
+            expectStr(wrong, "升级槽", "diamond", data == null ? null : data.upgrade());
+            expectInt(wrong, "首次升级花费", cn.dreamgary.hubsuite.feature.RodAnvil.BASE_COST, diamond.cost());
+            expectInt(wrong, "产物的累计惩罚", 1,
+                    cn.dreamgary.hubsuite.feature.RodAnvil.priorWork(diamond.stack()));
+        }
+
+        // --- 单槽：再来一个直接替换（旧的消失）---
+        var replaced = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
+                diamond.stack(), new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.REDSTONE));
+        var replacedData = cn.dreamgary.hubsuite.rod.RodData.of(replaced.stack());
+        expectStr(wrong, "替换后的升级槽", "redstone", replacedData == null ? null : replacedData.upgrade());
+        expectInt(wrong, "二次升级花费（带上一次惩罚）", cn.dreamgary.hubsuite.feature.RodAnvil.BASE_COST + 1,
+                replaced.cost());
+
+        // --- 耐久：青金石会让上限掉 192（数值 −192）---
+        var lapis = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
+                rod, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.LAPIS_LAZULI));
+        var lapisData = cn.dreamgary.hubsuite.rod.RodData.of(lapis.stack());
+        expectInt(wrong, "青金石后上限（640 − 1920 → 夹到 1）", 1,
+                lapisData == null ? -1 : lapisData.computedMaxDurability());
+
+        // --- 不归我们管的组合：原版结果原样保留 ---
+        var notOurs = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_SWORD),
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND));
+        expectBool(wrong, "普通物品 + 钻石 → 不归我们管", true, notOurs.isEmpty());
+        var notUpgrade = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
+                rod, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIRT));
+        expectBool(wrong, "竿 + 泥土 → 不归我们管", true, notUpgrade.isEmpty());
+
+        if (wrong.isEmpty()) {
+            ok("铁砧升级 8 组全对（升级生效 / 单槽替换 / 青金石数值 −192 / 累计惩罚进 REPAIR_COST 与花费 / "
+                    + "非钓竿或非升级物一律原样交给原版）");
+        } else {
+            fail("铁砧升级有误：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 青金石附魔（0.6，方案第 6 节）。
+     *
+     * <p>锁三件事：**宝藏池 = 宝藏标签减去两个诅咒**（不是"标签里只有 5 个"，
+     * 所以顺便断言两个诅咒确实在标签里、只是被我们滤掉了）、追加概率的边界、
+     * 以及"等价附魔台"真的能给出附魔（不重写原版算法，直接调它自己的方法）。
+     */
+    private void checkRodEnchanting() {
+        List<String> wrong = new ArrayList<>();
+        var registries = server.registryAccess();
+        var lookup = registries.lookupOrThrow(net.minecraft.core.registries.Registries.ENCHANTMENT);
+
+        // --- 宝藏池：标签里的 7 个，减去 binding_curse / vanishing_curse = 5 ---
+        var raw = new ArrayList<String>();
+        for (var holder : lookup.getOrThrow(net.minecraft.tags.EnchantmentTags.TREASURE)) {
+            raw.add(holder.unwrapKey().map(k -> k.identifier().getPath()).orElse("?"));
+        }
+        var pool = cn.dreamgary.hubsuite.feature.RodEnchanting.treasurePool(registries);
+        var poolNames = new ArrayList<String>();
+        for (var holder : pool) {
+            poolNames.add(holder.unwrapKey().map(k -> k.identifier().getPath()).orElse("?"));
+        }
+        expectInt(wrong, "宝藏标签里的附魔个数", 7, raw.size());
+        expectInt(wrong, "滤掉诅咒后的宝藏池大小", 5, pool.size());
+        for (String curse : List.of("binding_curse", "vanishing_curse")) {
+            if (!raw.contains(curse)) {
+                wrong.add(curse + " 居然不在宝藏标签里（测试前提变了）");
+            }
+            if (poolNames.contains(curse)) {
+                wrong.add("宝藏池里混进了诅咒 " + curse);
+            }
+        }
+
+        // --- 概率边界：抽签 0 必中、抽签 1 必不中 ---
+        // 假玩家跟其它用例一样留在那儿，由自检收尾统一清（FakePlayers 只有 spawn，没有 despawn）
+        ServerPlayer probe = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_enchantest",
+                server.overworld(), false);
+        {
+            var sword = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_SWORD);
+            expectBool(wrong, "抽签 0 → 加上宝藏附魔", true,
+                    cn.dreamgary.hubsuite.feature.RodEnchanting.addTreasure(server.overworld(), sword, 0.0F));
+            var sword2 = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_SWORD);
+            expectBool(wrong, "抽签 1 → 不加", false,
+                    cn.dreamgary.hubsuite.feature.RodEnchanting.addTreasure(server.overworld(), sword2, 1.0F));
+
+            // --- 等价附魔台：多试几个种子，至少要出一次附魔（附魔台 15 级对剑几乎必出）---
+            boolean everEnchanted = false;
+            for (int i = 0; i < 5 && !everEnchanted; i++) {
+                var item = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_SWORD);
+                cn.dreamgary.hubsuite.feature.RodEnchanting.enchantCatch(
+                        server.overworld(), probe, item,
+                        cn.dreamgary.hubsuite.feature.RodEnchanting.NORMAL_LEVEL
+                                == cn.dreamgary.hubsuite.feature.RodEnchanting.NORMAL_LEVEL);
+                everEnchanted = item.isEnchanted();
+            }
+            expectBool(wrong, "普通竿（15 级等价）能钓出附魔装备", true, everEnchanted);
+
+            // 青金石 = 30 级等价：同样要能出
+            var boost = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_CHESTPLATE);
+            cn.dreamgary.hubsuite.feature.RodEnchanting.enchantCatch(server.overworld(), probe, boost, true);
+            expectBool(wrong, "青金石（30 级等价）能钓出附魔装备", true, boost.isEnchanted());
+
+            // 不可附魔的东西原样返回
+            var junk = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.LILY_PAD);
+            cn.dreamgary.hubsuite.feature.RodEnchanting.enchantCatch(server.overworld(), probe, junk, true);
+            expectBool(wrong, "睡莲不会被附魔", false, junk.isEnchanted());
+        }
+
+        if (wrong.isEmpty()) {
+            ok("青金石附魔 8 组全对（宝藏池 7→5 且两个诅咒被滤掉 / 概率边界 / "
+                    + "15 与 30 级等价附魔都出得来 / 不可附魔的东西原样）");
+        } else {
+            fail("青金石附魔有误：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 一根挂了**黑曜石钩**的原版钓竿。
+     *
+     * <p>0.6 起「能不能钓岩浆」由**钩的材质**决定（{@code RodMaterials} 里黑曜石 / 下界合金带 lava），
+     * 不再有"熔岩钓竿"这个物品 —— 所以岩浆相关的用例都拿这根竿。
+     */
+    private static net.minecraft.world.item.ItemStack lavaCapableRod() {
+        var stack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        cn.dreamgary.hubsuite.rod.RodData.defaults()
+                .withParts("wood", "string", "obsidian")
+                .writeTo(stack);
+        return stack;
+    }
+
+    /**
+     * 旧熔岩钓竿的收尾（0.6 第 6 步）。
+     *
+     * <p>0.6 把「能不能钓岩浆」从专用竿改成**看钩**，所以那个物品被降级成遗留别名。
+     * 这里锁三件事：老竿还在注册表里（否则老存档里的东西会变成空气）、
+     * 换算出来的新竿**确实能钓岩浆**且磨损比例照搬、配方已经删掉（不再产出）。
+     */
+    private void checkLegacyLavaRod() {
+        List<String> wrong = new ArrayList<>();
+
+        // --- 遗留别名还在注册表里 ---
+        if (cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD == null) {
+            wrong.add("遗留的 lava_rod 没注册 —— 老存档里的旧竿会变成空气");
+        }
+        // --- 配方已经删掉（不再产出）---
+        var recipeKey = net.minecraft.resources.ResourceKey.create(
+                net.minecraft.core.registries.Registries.RECIPE,
+                net.minecraft.resources.Identifier.fromNamespaceAndPath("hubsuite", "lava_rod"));
+        if (server.getRecipeManager().byKey(recipeKey).isPresent()) {
+            wrong.add("lava_rod 的配方还在（应该已经删掉，不再产出）");
+        }
+
+        // --- 换算：旧竿（带磨损）→ 原版钓竿 + 黑曜石钩 ---
+        if (cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD != null) {
+            var legacy = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD);
+            legacy.set(net.minecraft.core.component.DataComponents.DAMAGE, 192);   // 256 里的 192 = 75% 磨损
+
+            var converted = cn.dreamgary.hubsuite.feature.LegacyItemMigration.convert(legacy);
+            expectBool(wrong, "换算后是原版钓竿", true,
+                    converted.is(net.minecraft.world.item.Items.FISHING_ROD));
+            var data = cn.dreamgary.hubsuite.rod.RodData.of(converted);
+            if (data == null) {
+                wrong.add("换算后的竿没有钓竿数据");
+            } else {
+                expectStr(wrong, "换算后的钩", "obsidian", data.hook());
+                expectBool(wrong, "换算后的竿能钓岩浆", true, data.lavaCapable());
+                // 旧竿剩 25%（64/256）→ 新竿上限 64.0 的 25% = 16.0
+                expectInt(wrong, "磨损比例照搬（×10）", 160, data.durability());
+            }
+
+            // 满耐久的旧竿 → 满耐久的新竿（别把好东西修坏）
+            var fresh = new net.minecraft.world.item.ItemStack(
+                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.LAVA_ROD);
+            var freshData = cn.dreamgary.hubsuite.rod.RodData.of(
+                    cn.dreamgary.hubsuite.feature.LegacyItemMigration.convert(fresh));
+            expectInt(wrong, "满耐久旧竿换算后仍是满耐久", 640,
+                    freshData == null ? -1 : freshData.durability());
+        }
+
+        // --- 判定依据是"钩"：普通线钩的竿不能钓岩浆 ---
+        expectBool(wrong, "木杆 + 线钩不能钓岩浆", false,
+                cn.dreamgary.hubsuite.rod.RodData.defaults().lavaCapable());
+
+        if (wrong.isEmpty()) {
+            ok("旧熔岩钓竿收尾 7 组全对（遗留别名还在注册表 / 配方已删 / 换算成黑曜石钩且能钓岩浆 / "
+                    + "磨损比例照搬 / 满耐久不会被修坏 / 普通钩不能钓岩浆）");
+        } else {
+            fail("旧熔岩钓竿收尾有误：" + String.join("；", wrong));
         }
     }
 

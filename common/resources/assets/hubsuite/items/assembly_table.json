@@ -1,6 +1,6 @@
 {
   "model": {
     "type": "minecraft:model",
-    "model": "hubsuite:item/lava_rod_cast"
+    "model": "hubsuite:block/assembly_table"
   }
 }

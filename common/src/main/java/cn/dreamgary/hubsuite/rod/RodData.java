@@ -154,6 +154,35 @@ public record RodData(String rod, String line, String hook, String upgrade,
         return durability <= 0;
     }
 
+    /**
+     * 扣耐久。参数是**整数点**（×10 域里等价于 ×10），结果夹在 {@code [0, 上限]}。
+     *
+     * <p>扣到 0 就是「坏了」：不能钓，但物品不消失（方案第 5 节），模型会叠裂纹。
+     */
+    public RodData damage(int wholePoints) {
+        int next = Math.max(0, Math.min(maxDurability, durability - wholePoints * 10));
+        return new RodData(rod, line, hook, upgrade, next, maxDurability);
+    }
+
+    /**
+     * 把耐久比例映射到**原版耐久条**（方案第 2 节：原版条是整数，只影响观感）。
+     *
+     * <p>耐久归零时给原版条留 1 点：真正的「坏没坏」由我们的数据说了算，
+     * 不能让原版把物品直接销毁掉（那玩家的竿就凭空没了）。
+     */
+    public void applyVanillaBar(ItemStack stack) {
+        Integer vanillaMax = stack.get(DataComponents.MAX_DAMAGE);
+        if (vanillaMax == null || vanillaMax <= 0) {
+            return;
+        }
+        int damage = Math.round((1.0F - durabilityRatio()) * vanillaMax);
+        if (damage <= 0) {
+            stack.remove(DataComponents.DAMAGE);
+        } else {
+            stack.set(DataComponents.DAMAGE, Math.min(damage, vanillaMax - 1));
+        }
+    }
+
     /** 耐久比例 0..1（原版耐久条是整数，按比例映射过去，只影响观感）。 */
     public float durabilityRatio() {
         int max = Math.max(1, maxDurability);

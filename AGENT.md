@@ -29,7 +29,7 @@
 | 构建 | Gradle 9.7.1 + Loom 1.18-SNAPSHOT |
 | 映射 | **官方 Mojang 名，不 remap**（26.1 起官方不再混淆；build.gradle 无 mappings、无 remapJar） |
 | 产物 | `build/libs/hubsuite-<版本>.jar`（另有 `-sources.jar`） |
-| 规模 | 服务端 116 个 Java 文件 / 28 个 Mixin；共用契约 4 个（`common/`，双端各编译一份）；客户端 3 个；自检 263 项 |
+| 规模 | 服务端 116 个 Java 文件 / 28 个 Mixin；共用契约 4 个（`common/`，双端各编译一份）；客户端 3 个；自检 268 项 |
 
 ### 架构要点（改之前必须理解）
 
@@ -86,7 +86,7 @@ $env:JAVA_HOME = $j; $env:PATH = "$j\bin;$env:PATH"
 ```
 
 - 服务端是 `online-mode=false`，机器人可直连。
-- 自检结果看 `run/logs/latest.log` 里的 `通过 263 项，失败 0 项`。
+- 自检结果看 `run/logs/latest.log` 里的 `通过 268 项，失败 0 项`。
 - 控制台命令：`hub selftest`（也可在游戏内 `/hub selftest`）。
 - **无人值守发命令**：`pwsh -File scripts/rcon.ps1 -Command "give Player123 hubsuite:nether_string 3"`
   （RCON 25575，密码在 `run/server.properties`；26.1.2 的回包时序很挑，所以只保证命令发出去）。
@@ -118,6 +118,8 @@ $env:JAVA_HOME = $j; $env:PATH = "$j\bin;$env:PATH"
 - **开发模式下客户端会自动注册/登录**（`hubsuite-dev`），并关掉登录期间残留的对话框 ——
   不这样，屏幕上一直挂着注册表单，什么都看不到（顺带发现：走 `/register` **命令**登录时，
   服务端先前弹出的对话框不会自己关）。
+- **要看方块又不方便转身**：用 caret（朝向相对）坐标把方块摆到镜头正前方：
+  `execute at <玩家> run setblock ^ ^ ^3 hubsuite:assembly_table`；直接 `~ ~ ~` 常摆在身后，截图里什么都没有。
 - **无人值守看效果**：把游戏窗口切到前台再截图，然后裁切放大：
   `[W]::SetForegroundWindow((Get-Process | Where-Object { $_.MainWindowTitle -like 'Minecraft*' }).MainWindowHandle)`
   → `Graphics.CopyFromScreen` → 用 `System.Drawing` 裁 36×36 再放大 10 倍（NearestNeighbor）看图标。
@@ -167,6 +169,8 @@ rm -f run/*/session.lock run/usercache.json run/ops.json
   - 每次动作都触发的（建岛、补铺平台、切服）用 **debug**，不要 INFO
   - 调试用的临时日志和一次性排查方法，**调试完就删**
   - 启动时一次性、或异常路径的日志保留 INFO/WARN
+- **自检里有时序敏感的用例**（例如岩浆钓鱼要等浮标进入咬钩流程）：服务器卡一下就可能假失败，
+  重跑一次再判断；真失败会稳定复现
 - **加子服 / 岛型 / 任务不写代码** —— 那是配置驱动的，别硬编码
 - **指令必须在模组初始化阶段注册**（`CommandRegistrationCallback` 在服务端启动前就触发完；
   放 `SERVER_STARTED` 里注册的指令进不了 dispatcher —— 实测踩过）
@@ -185,6 +189,10 @@ rm -f run/*/session.lock run/usercache.json run/ops.json
 |---|---|
 | **`-Pport=` 无效** | 见「三」。端口改 `run/server.properties`；**绝不要占 25565** |
 | **`server.properties` 不能有非 ASCII** | Java Properties 按 ISO-8859-1 读，中文注释会 `MalformedInputException` |
+| **不能直接删掉已经发出去的物品** | 物品从注册表消失后，老存档里那些栈会被读成**空气**（玩家东西凭空蒸发）。做法：留成**遗留别名**（注册还在、不再产出、模型指回原版）+ 进服时换算成新物品（附魔与名字跟着走、**磨损比例照搬**）—— 见 `LegacyLavaRodItem` / `LegacyItemMigration` |
+| **访问加宽（AW）的三个坑** | ① 头部必须在**第一行**（注释写在前面会让 Loom 认不出）；② 本模组用官方名不 remap，命名空间写 **`official`** 而不是 `named`；③ 别自己重写原版私有算法 —— 用 AW 开放出来直接调（青金石附魔就是这么做的，`EnchantmentMenu.getEnchantmentList` 的参数顺序还是反直觉的：`(registries, stack, 种子偏移, 等级)`） |
+| **`@Shadow` 只能影子目标类自己声明的字段** | 影子父类字段会让 mixin **应用失败、服务端起不来**：`@Shadow field inputSlots was not located in the target class`（铁砧那次踩到，`inputSlots` 在 `ItemCombinerMenu` 上）。改用公开的 `getSlot(i)` / accessor mixin |
+| **自定义方块/方块实体必须在两端注册** | Fabric 的注册表同步（fabric-registry-sync-v0）会把服务端注册表里的自定义条目发给客户端，**客户端不认识就直接断开**：`Received a registry entry that is unknown to this client.` —— 方块、方块实体类型、物品、菜单类型这四样两端必须一一对应（客户端那份可以是普通方块，但必须存在） |
 | **26.1 没法定制容器界面（直接路径）** | `MenuScreens.register` 是 private、`MenuScreens$ScreenConstructor` 是**包私有**，Fabric 也没提供注册入口（fabric-menu-api-v1 / screen-handler-api-v1 都没有）。自定义菜单要开自己的界面，只能在 `MenuScreens.create` 头部 mixin 拦下来自己建（见 `client/.../mixin/MenuScreensMixin`） |
 | **`.ps1` 必须带 UTF-8 BOM** | 这台机器上 `pwsh` 其实是 Windows PowerShell **5.1**，无 BOM 的 UTF-8 脚本会被当 ANSI 读：中文注释变乱码、吞掉引号 → 解析中断（症状是"函数找不到"这种莫名其妙的报错）。写 `.ps1` 后补 BOM：`[System.IO.File]::WriteAllText($p, $t, (New-Object System.Text.UTF8Encoding($true)))` |
 | **强杀后要删 `session.lock`** | 否则下次启动报存档被锁 |
@@ -263,7 +271,7 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 | `world/PlayerDataRouter.java` + `world/PlayerStateStash.java` + `mixin/PlayerListStorageMixin.java` | 背包 / 经验按子服隔离（内存暂存 + 磁盘两份） |
 | `world/PlayerRouter.java` | 切服主流程（`sendTo`） |
 | `world/ServerInternals.java` / `ServerLevelsAccess.java` / `PlayerListAccess.java` | 访问原版内部字段的唯一出口（放业务包，见「十」） |
-| `world/SelfTest.java` | **全部自检**（263 项）。加检查看这里 |
+| `world/SelfTest.java` | **全部自检**（268 项）。加检查看这里 |
 | `island/IslandService.java` + `island/IslandManager.java` | 空岛：建岛、归属、出生点（**保护已删**） |
 | `world/IslandSideWorlds.java` + `world/LavaSeaGenerator.java` | 岛屿维度各自的下界/末地（空岛虚空式、海岛岩浆海） |
 | `world/NaturalIslandPlacer.java` | 自然岛：地形 + 宝箱 + 刷怪笼 + **结构模板与底座**（跨 tick 补铺、落盘去重） |
@@ -497,7 +505,7 @@ release 的**提交信息、tag message、release notes** 都是给**使用者�
 - 大厅 NPC 用真 `ServerPlayer` 假人；空岛只做 classic + ocean，不做单方块
 - 扩展性要求：新增子服尽量只改配置
 
-**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 0.4 收尾 235 → 客户端握手 **244** → 钓竿数据契约 **253** → 客户端真物品 **257** → 钓竿分层渲染 **259** → 物品全量迁移 **261** → 裂纹与抛竿层 **262** → 装配台界面与规则 **263**。
+**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 0.4 收尾 235 → 客户端握手 **244** → 钓竿数据契约 **253** → 客户端真物品 **257** → 钓竿分层渲染 **259** → 物品全量迁移 **261** → 裂纹与抛竿层 **262** → 装配台界面与规则 **263** → 装配台方块 **264** → 钓竿耐久与断线 **265** → 铁砧升级 **266** → 青金石附魔 **267** → 旧竿换算 **268**。
 
 **已修复且经作者实测的关键问题**：
 

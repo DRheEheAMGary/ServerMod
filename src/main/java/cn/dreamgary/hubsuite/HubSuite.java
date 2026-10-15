@@ -112,6 +112,9 @@ public final class HubSuite implements ModInitializer {
                         ? rulesEngine.memorySpawn(player, sub, level.dimension())
                         : null);
 
+        // 旧物品换算（0.5 的熔岩钓竿 → 0.6 的「原版钓竿 + 黑曜石钩」）
+        cn.dreamgary.hubsuite.feature.LegacyItemMigration.register();
+
         // 装配台（0.5.0 先做菜单与界面，0.6 方块化）
         cn.dreamgary.hubsuite.rod.AssemblyTable.register();
 

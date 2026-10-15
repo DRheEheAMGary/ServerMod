@@ -1,7 +1,7 @@
 {
   "item.hubsuite.nether_string": "地狱线",
-  "item.hubsuite.lava_rod": "熔岩钓竿",
   "item.hubsuite.wooden_fishing_bucket": "木渔桶",
   "item.hubsuite.iron_fishing_bucket": "铁渔桶",
-  "item.hubsuite.diamond_fishing_bucket": "钻石渔桶"
+  "item.hubsuite.diamond_fishing_bucket": "钻石渔桶",
+  "block.hubsuite.assembly_table": "钓竿装配台"
 }

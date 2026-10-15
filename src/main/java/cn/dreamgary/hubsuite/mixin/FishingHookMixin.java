@@ -27,16 +27,16 @@ import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 public abstract class FishingHookMixin implements LavaFishingHook {
 
     @Unique
-    private boolean hubsuite$lavaRod;
+    private boolean hubsuite$lavaCapable;
 
     @Override
-    public boolean hubsuite$fromLavaRod() {
-        return hubsuite$lavaRod;
+    public boolean hubsuite$lavaCapable() {
+        return hubsuite$lavaCapable;
     }
 
     @Override
-    public void hubsuite$setFromLavaRod(boolean value) {
-        hubsuite$lavaRod = value;
+    public void hubsuite$setLavaCapable(boolean value) {
+        hubsuite$lavaCapable = value;
     }
 
     /*
@@ -105,7 +105,7 @@ public abstract class FishingHookMixin implements LavaFishingHook {
         if (self.getRemainingFireTicks() == 0) {
             return;
         }
-        if (((LavaFishingHook) (Object) this).hubsuite$fromLavaRod()
+        if (((LavaFishingHook) (Object) this).hubsuite$lavaCapable()
                 && FishingGameplay.inFluid(self, net.minecraft.tags.FluidTags.LAVA)) {
             self.clearFire();
         }
@@ -121,18 +121,19 @@ public abstract class FishingHookMixin implements LavaFishingHook {
      * this.discard();   // ← 手里不是**原版**钓竿就立刻收掉
      * </pre>
      *
-     * <p>我们的熔岩钓竿是自有 id（{@code hubsuite:lava_rod}），这个检查必然为假 ——
-     * 症状就是实测的<b>"一甩竿浮标就消失，什么都没碰到"</b>（浮标下一 tick 就被
-     * {@code discard()}）。这里只在"手里确实拿着我们的竿"时接管：继续钓；
-     * 距离超 1024 / 玩家不能交互仍然按原版收掉。
+     * <p><b>历史</b>：0.5 的熔岩钓竿是自有 id（{@code hubsuite:lava_rod}），这个检查必然为假 ——
+     * 症状就是实测的<b>"一甩竿浮标就消失，什么都没碰到"</b>（浮标下一 tick 就被 {@code discard()}）。
+     * 0.6 取消了那个物品（岩浆改看钩），现在带数据的竿就是**原版钓竿**，原版检查本来就过 ——
+     * 但这段"带数据的竿也算竿"仍然留着：以后再加"自有 id 的竿"时不会再踩同一个坑。
+     * 只接管"手里确实拿着我们的竿"的情况：继续钓；距离超 1024 / 玩家不能交互仍按原版收掉。
      */
     @Inject(method = "shouldStopFishing", at = @At("HEAD"), cancellable = true)
     private void hubsuite$ourRodCountsAsRod(Player player, CallbackInfoReturnable<Boolean> cir) {
         if (!player.canInteractWithLevel()) {
             return;
         }
-        boolean ours = cn.dreamgary.hubsuite.feature.item.LavaRodItem.isLavaRod(player.getMainHandItem())
-                || cn.dreamgary.hubsuite.feature.item.LavaRodItem.isLavaRod(player.getOffhandItem());
+        boolean ours = cn.dreamgary.hubsuite.rod.RodData.of(player.getMainHandItem()) != null
+                || cn.dreamgary.hubsuite.rod.RodData.of(player.getOffhandItem()) != null;
         if (!ours) {
             return;
         }

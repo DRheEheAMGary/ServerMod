@@ -40,7 +40,10 @@ public final class HubSuiteItemDefs {
 
     /** 地狱线：熔岩钓竿的合成材料。 */
     public static final Def NETHER_STRING = new Def("nether_string", 64, Rarity.COMMON, 0);
-    /** 能在岩浆里钓的钓竿（0.6 会被"钩决定岩浆"取代）。 */
+    /**
+     * 遗留：0.5 的熔岩钓竿。**不再产出**，保留注册只为老存档里的旧竿不变成空气
+     * （进服时会被换成「原版钓竿 + 黑曜石钩」，见 {@code LegacyItemMigration}）。
+     */
     public static final Def LAVA_ROD = new Def("lava_rod", 1, Rarity.RARE, 256);
     /** 渔桶三个档次。 */
     public static final Def WOODEN_FISHING_BUCKET = new Def("wooden_fishing_bucket", 1, Rarity.COMMON, 0);
@@ -66,11 +69,22 @@ public final class HubSuiteItemDefs {
                 .stacksTo(def.maxStack())
                 .rarity(def.rarity())
                 .component(DataComponents.ITEM_NAME, def.name())
-                .component(DataComponents.ITEM_MODEL, def.id());
+                // 遗留别名没有自己的素材，模型直接指回原版钓竿（两端一致，素材检查会跳过它们）
+                .component(DataComponents.ITEM_MODEL,
+                        isLegacyAlias(def) ? Identifier.withDefaultNamespace("item/fishing_rod") : def.id());
         if (def.durability() > 0) {
             props = props.durability(def.durability());
         }
         return props;
+    }
+
+    /**
+     * 是不是**遗留别名**（老存档里还认得出、但已经不再产出、也没有自己素材的物品）。
+     *
+     * <p>素材齐全性检查要跳过它们：模型指回原版，本来就不需要 `items/` `models/` `textures/` 三件套。
+     */
+    public static boolean isLegacyAlias(Def def) {
+        return def == LAVA_ROD;
     }
 
     public static Identifier id(String path) {

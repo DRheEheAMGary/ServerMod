@@ -40,7 +40,7 @@ public final class HubSuiteItems {
      *   #hubsuite:fishing_bait_nether —— 是不是"岩浆那一族"
      * 档次 = 物品稀有度（COMMON 1 / UNCOMMON 2 / RARE 3 / EPIC 4）。
      */
-    /** 能在岩浆里钓的钓竿。 */
+    /** 遗留：0.5 的熔岩钓竿（不再产出，只为老存档里的旧竿还在）。 */
     public static Item LAVA_ROD;
     /** 渔桶：钓饵的收纳袋（容量 16 / 64 / 1024）。 */
     public static Item WOODEN_FISHING_BUCKET;
@@ -55,14 +55,15 @@ public final class HubSuiteItems {
         NETHER_STRING = register("nether_string", new HubSuiteSimpleItem(
                 HubSuiteItemDefs.properties(HubSuiteItemDefs.NETHER_STRING), Items.TRIAL_KEY));
 
-        LAVA_ROD = register("lava_rod", new LavaRodItem(props("lava_rod")));
+        // 遗留物品：注册着（老存档认得出），但样子退回原版钓竿、配方已删
+        LAVA_ROD = register("lava_rod", new LegacyLavaRodItem(props("lava_rod")));
 
         WOODEN_FISHING_BUCKET = bucket("wooden_fishing_bucket", 64);
         IRON_FISHING_BUCKET = bucket("iron_fishing_bucket", 256);
         DIAMOND_FISHING_BUCKET = bucket("diamond_fishing_bucket", 1024);
 
         cn.dreamgary.hubsuite.HubSuite.logger().info(
-                "已注册 5 个自定义物品（地狱线 / 熔岩钓竿 / 三种渔桶；钓饵改成 tag 驱动，见 #hubsuite:fishing_bait）");
+                "已注册 4 个自定义物品（地狱线 / 三种渔桶）+ 1 个遗留别名（熔岩钓竿，只能被换算掉）；钓饵改成 tag 驱动，见 #hubsuite:fishing_bait");
     }
 
     private static Item bucket(String path, int capacity) {

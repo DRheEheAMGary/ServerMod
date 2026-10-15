@@ -20,6 +20,8 @@ public final class AssemblyTable {
 
     public static void register() {
         AssemblyMenu.registerType();
+        // 方块 + 方块实体（两端都要注册；客户端那份在 ClientMenuTypes 里）
+        AssemblyTableBlock.register();
         CommandRegistrationCallback.EVENT.register((dispatcher, registry, environment) ->
                 dispatcher.register(Commands.literal("rod")
                         .requires(source -> {

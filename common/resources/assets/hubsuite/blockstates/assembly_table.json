@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "hubsuite:block/assembly_table"
+    }
+  }
+}
