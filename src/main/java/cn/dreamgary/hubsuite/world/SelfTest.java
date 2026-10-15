@@ -181,6 +181,7 @@ public final class SelfTest {
         step("客户端真物品（共用定义 / 原型一致 / 素材齐全 / 能力名）", this::checkClientItemDefs);
         step("装配台规则（修补 / 换底 / 换线 / 换钩 / 拒绝）", this::checkAssemblyRules);
         step("装配台方块（注册 / 方块实体 / 素材 / 掉落表）", this::checkAssemblyBlock);
+        step("钓竿耐久与断线（扣耐久 / 断线边界 / 原版耐久条 / 坏了不能钓）", this::checkRodDurability);
     }
 
 
@@ -2216,6 +2217,66 @@ public final class SelfTest {
                     + "模型/贴图/物品定义 5 个素材齐全，配方与掉落表也在");
         } else {
             fail("装配台方块有问题：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 钓竿耐久与断线（0.6，方案第 5 节）。
+     *
+     * <p>锁四件事：正常钓一次扣 1 点耐久、断线扣 3 点并夹在 0（不能扣成负数）、
+     * 断线判定的**边界**（骰子恰好等于概率不算断）、以及映射到原版耐久条时
+     * 永远不会把原版条打到满（否则物品会被原版销毁，玩家的竿凭空消失）。
+     */
+    private void checkRodDurability() {
+        List<String> wrong = new ArrayList<>();
+        var fresh = cn.dreamgary.hubsuite.rod.RodData.defaults();          // 木杆 + 线，640（64.0）
+        var nether = fresh.withParts("wood", "nether_string", "string");    // 线 7‰
+
+        // --- 正常钓一次：−1 点（×10 域里是 −10）---
+        var afterOne = fresh.damage(cn.dreamgary.hubsuite.feature.RodFishing.DURABILITY_PER_CATCH);
+        expectInt(wrong, "钓一次后的耐久（×10）", 630, afterOne.durability());
+        expectInt(wrong, "上限不变", 640, afterOne.maxDurability());
+
+        // --- 断线：−3 点，且夹在 0 ---
+        var afterBreak = fresh.damage(cn.dreamgary.hubsuite.feature.RodFishing.DURABILITY_PER_BREAK);
+        expectInt(wrong, "断线后的耐久（×10）", 610, afterBreak.durability());
+        var almost = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "", 10, 640);
+        var clamped = almost.damage(cn.dreamgary.hubsuite.feature.RodFishing.DURABILITY_PER_BREAK);
+        expectInt(wrong, "耐久只剩 1.0 时断线 → 夹到 0", 0, clamped.durability());
+        expectBool(wrong, "夹到 0 之后算坏了", true, clamped.broken());
+
+        // --- 断线判定边界（‰）---
+        expectBool(wrong, "骰子 4 < 7‰ → 断线", true,
+                cn.dreamgary.hubsuite.feature.RodFishing.lineBreaks(nether, 4));
+        expectBool(wrong, "骰子 7 = 7‰ → 不断（边界不含右端）", false,
+                cn.dreamgary.hubsuite.feature.RodFishing.lineBreaks(nether, 7));
+        expectBool(wrong, "骰子 999 → 不断", false,
+                cn.dreamgary.hubsuite.feature.RodFishing.lineBreaks(nether, 999));
+
+        // --- 原版耐久条：按比例映射，且永远留 1 点 ---
+        var stack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        var half = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "", 320, 640);
+        half.writeTo(stack);
+        half.applyVanillaBar(stack);
+        Integer max = stack.get(net.minecraft.core.component.DataComponents.MAX_DAMAGE);
+        Integer dmg = stack.get(net.minecraft.core.component.DataComponents.DAMAGE);
+        int expectHalf = max == null ? -1 : Math.round(0.5F * max);
+        expectInt(wrong, "半耐久时原版条", expectHalf, dmg == null ? 0 : dmg);
+
+        var emptyStack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        var dead = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "", 0, 640);
+        dead.writeTo(emptyStack);
+        dead.applyVanillaBar(emptyStack);
+        Integer deadDmg = emptyStack.get(net.minecraft.core.component.DataComponents.DAMAGE);
+        if (max != null && deadDmg != null && deadDmg >= max) {
+            wrong.add("耐久见底时原版条被打满（" + deadDmg + "/" + max + "）—— 原版会把物品销毁，玩家的竿会凭空消失");
+        }
+
+        if (wrong.isEmpty()) {
+            ok("钓竿耐久与断线 9 组全对（钓一次 −1 / 断线 −3 且夹 0 / 断线判定边界 / "
+                    + "原版耐久条按比例且见底时留 1 点不被销毁）");
+        } else {
+            fail("钓竿耐久与断线有误：" + String.join("；", wrong));
         }
     }
 

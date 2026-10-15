@@ -42,6 +42,15 @@ public abstract class FishingHookLootMixin {
             if (!(self.level() instanceof ServerLevel level)) {
                 return original;
             }
+            /*
+             * 第一件事：按竿的数据算"这一杆断不断线 / 扣多少耐久"。
+             * 放在渔获表之前 —— 它**所有维度都要生效**，不只是配了表的维度。
+             * 断线就直接返回空表 = 空手而归（饵已经在下面按"真出货"的路径扣过了）。
+             */
+            if (cn.dreamgary.hubsuite.feature.RodFishing.onCatch(self)) {
+                return new ObjectArrayList<>();
+            }
+
             var config = HubSuite.fishing();
             FishingPresets.Table table = FishingLoot.tableFor(config, level.dimension());
             if (table == null) {
