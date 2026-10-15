@@ -51,12 +51,46 @@ public class BaitBucketItem extends SimplePolymerItem {
     private static final String TAG_BAITS = "hubsuite_baits";
     /** 栈序：逗号分隔的物品 id，**旧 → 新**（末尾 = 栈顶，下一个被消耗的）。 */
     private static final String TAG_ORDER = "hubsuite_order";
+    /** 有饵时的模型后缀（渔桶只有空 / 有饵两种模型）。 */
+    private static final String SUFFIX_BAIT = "_bait";
 
     private final int capacity;
 
     public BaitBucketItem(Item.Properties properties, int capacity) {
         super(properties, Items.TRIAL_KEY, true);
         this.capacity = capacity;
+    }
+
+    @Override
+    public Item getPolymerItem(ItemStack stack, PacketContext context) {
+        // 同上：装了客户端模组的玩家拿到真物品（空桶 / 有饵由 item_model 组件区分）
+        return cn.dreamgary.hubsuite.net.ClientCompat.useRealItems(context)
+                ? this
+                : super.getPolymerItem(stack, context);
+    }
+
+    /**
+     * 把"空 / 有饵"反映到**物品栈自己的 {@code item_model} 组件**上。
+     *
+     * <p>为什么改组件而不是让 Polymer 发包时替换：装了客户端模组的玩家收到的是**真物品**，
+     * 客户端直接读组件；原生客户端那边 Polymer 转发的也是同一个组件 —— 两条路共用一份逻辑，
+     * 不会出现"模组客户端看到空桶、原版客户端看到有饵桶"这种不一致。
+     */
+    private static void refreshModel(ItemStack bucket) {
+        Identifier base = bucket.get(DataComponents.ITEM_MODEL);
+        if (base == null) {
+            return;
+        }
+        String path = base.getPath();
+        if (path.endsWith(SUFFIX_BAIT)) {
+            path = path.substring(0, path.length() - SUFFIX_BAIT.length());
+        }
+        boolean hasBait = !contents(bucket).isEmpty();
+        Identifier target = Identifier.fromNamespaceAndPath(base.getNamespace(),
+                hasBait ? path + SUFFIX_BAIT : path);
+        if (!target.equals(base)) {
+            bucket.set(DataComponents.ITEM_MODEL, target);
+        }
     }
 
     public int capacity() {
@@ -226,6 +260,7 @@ public class BaitBucketItem extends SimplePolymerItem {
             writeStackOrder(tag, order);
         });
         source.shrink(canTake);
+        refreshModel(bucket);
         return canTake;
     }
 
@@ -288,6 +323,7 @@ public class BaitBucketItem extends SimplePolymerItem {
                 writeStackOrder(tag, order);
             }
         });
+        refreshModel(bucket);
         return take;
     }
 
@@ -401,22 +437,13 @@ public class BaitBucketItem extends SimplePolymerItem {
                 0.8F + player.level().getRandom().nextFloat() * 0.4F);
     }
 
-    /**
-     * 客户端模型只看"空 / 有饵"两种：空桶用 {@code hubsuite:<桶>}，
-     * **只要装了饵**（不管哪种、装了几种）都用 {@code hubsuite:<桶>_bait}。
+    /*
+     * 客户端模型只看"空 / 有饵"两种（用户定的）：空桶 {@code hubsuite:<桶>}，
+     * 装了饵（不管哪种、装几种）就是 {@code hubsuite:<桶>_bait}，每只桶只要 2 个模型。
      *
-     * <p>用户定的：装了饵的桶就一张贴图，不按饵的种类分。资源包每只桶只要
-     * 2 个模型（空 + 有饵），见 {@code docs/自定义物品.md}。
+     * 以前是靠 Polymer 在发包时替换模型（只对原生客户端有效）；现在改成
+     * {@link #refreshModel} 直接维护物品栈的 {@code item_model} 组件 —— 两条路一份逻辑。
      */
-    @Override
-    public Identifier getPolymerItemModel(ItemStack stack, PacketContext context,
-                                          net.minecraft.core.HolderLookup.Provider registries) {
-        Identifier base = stack.get(DataComponents.ITEM_MODEL);
-        if (base == null || containedBait(stack) == null) {
-            return base;
-        }
-        return Identifier.fromNamespaceAndPath(base.getNamespace(), base.getPath() + "_bait");
-    }
 
     /** 客户端 tooltip：总量 + 内容物明细（最多列 3 种）。 */
     @Override

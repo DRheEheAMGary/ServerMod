@@ -2020,10 +2020,17 @@ public final class SelfTest {
         // --- 3) 素材三件套真的打进 jar 了 ---
         List<String> missing = new ArrayList<>();
         int checked = 0;
+        List<String> variants = new ArrayList<>();
         for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
-            for (String file : List.of("items/" + def.path() + ".json",
-                    "models/item/" + def.path() + ".json",
-                    "textures/item/" + def.path() + ".png")) {
+            variants.add(def.path());
+            if (def.path().endsWith("_fishing_bucket")) {
+                variants.add(def.path() + "_bait");   // 渔桶还有"有饵"那一套模型与贴图
+            }
+        }
+        for (String variant : variants) {
+            for (String file : List.of("items/" + variant + ".json",
+                    "models/item/" + variant + ".json",
+                    "textures/item/" + variant + ".png")) {
                 checked++;
                 String path = "/assets/" + cn.dreamgary.hubsuite.item.HubSuiteItemDefs.NAMESPACE + "/" + file;
                 try (var in = SelfTest.class.getResourceAsStream(path)) {
@@ -2041,7 +2048,42 @@ public final class SelfTest {
             fail("物品素材缺失：" + String.join("；", missing) + " —— 游戏里会显示成紫黑格");
         }
 
-        // --- 4) 能力名 ---
+        // --- 4) 每个物品都还实现了 PolymerItem（原版客户端那条路不能断）---
+        List<String> notPolymer = new ArrayList<>();
+        for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
+            var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(def.id());
+            if (!(item instanceof eu.pb4.polymer.core.api.item.PolymerItem)) {
+                notPolymer.add(def.path());
+            }
+        }
+        if (notPolymer.isEmpty()) {
+            ok("5 个物品都实现了 PolymerItem：没装客户端的玩家照旧看到原版映射，两条路并存");
+        } else {
+            fail("这些物品不再走 Polymer，原版客户端会看到未知物品：" + String.join("、", notPolymer));
+        }
+
+        // --- 5) 渔桶的模型提示：装了饵 → _bait，掏空 → 变回来 ---
+        var bucket = new net.minecraft.world.item.ItemStack(
+                cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
+        String plain = String.valueOf(bucket.get(net.minecraft.core.component.DataComponents.ITEM_MODEL));
+        int inserted = cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
+                bucket, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COD), 64);
+        String bait = String.valueOf(bucket.get(net.minecraft.core.component.DataComponents.ITEM_MODEL));
+        cn.dreamgary.hubsuite.feature.item.BaitBucketItem.remove(
+                bucket, net.minecraft.world.item.Items.COD, inserted);
+        String emptied = String.valueOf(bucket.get(net.minecraft.core.component.DataComponents.ITEM_MODEL));
+        List<String> bucketWrong = new ArrayList<>();
+        expectStr(bucketWrong, "空桶模型", "hubsuite:wooden_fishing_bucket", plain);
+        expectStr(bucketWrong, "装了饵的模型", "hubsuite:wooden_fishing_bucket_bait", bait);
+        expectStr(bucketWrong, "掏空后回到", "hubsuite:wooden_fishing_bucket", emptied);
+        if (bucketWrong.isEmpty()) {
+            ok("渔桶模型跟着内容物走（空 → " + plain + "，有饵 → " + bait + "，掏空 → " + emptied
+                    + "）：模组客户端读组件、原版客户端走 Polymer，同一份逻辑");
+        } else {
+            fail("渔桶模型提示不对：" + String.join("；", bucketWrong));
+        }
+
+        // --- 6) 能力名 ---
         List<String> badCaps = new ArrayList<>();
         for (String cap : List.of(cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_BASE,
                 cn.dreamgary.hubsuite.net.HandshakePayloads.CAP_REAL_ITEMS)) {
