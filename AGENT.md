@@ -29,7 +29,7 @@
 | 构建 | Gradle 9.7.1 + Loom 1.18-SNAPSHOT |
 | 映射 | **官方 Mojang 名，不 remap**（26.1 起官方不再混淆；build.gradle 无 mappings、无 remapJar） |
 | 产物 | `build/libs/hubsuite-<版本>.jar`（另有 `-sources.jar`） |
-| 规模 | 服务端 116 个 Java 文件 / 28 个 Mixin；共用契约 4 个（`common/`，双端各编译一份）；客户端 3 个；自检 261 项 |
+| 规模 | 服务端 116 个 Java 文件 / 28 个 Mixin；共用契约 4 个（`common/`，双端各编译一份）；客户端 3 个；自检 262 项 |
 
 ### 架构要点（改之前必须理解）
 
@@ -86,7 +86,7 @@ $env:JAVA_HOME = $j; $env:PATH = "$j\bin;$env:PATH"
 ```
 
 - 服务端是 `online-mode=false`，机器人可直连。
-- 自检结果看 `run/logs/latest.log` 里的 `通过 261 项，失败 0 项`。
+- 自检结果看 `run/logs/latest.log` 里的 `通过 262 项，失败 0 项`。
 - 控制台命令：`hub selftest`（也可在游戏内 `/hub selftest`）。
 - **无人值守发命令**：`pwsh -File scripts/rcon.ps1 -Command "give Player123 hubsuite:nether_string 3"`
   （RCON 25575，密码在 `run/server.properties`；26.1.2 的回包时序很挑，所以只保证命令发出去）。
@@ -262,7 +262,7 @@ if (level.getChunkSource().getChunkNow(cx, cz) == null) { /* 登记待办，下�
 | `world/PlayerDataRouter.java` + `world/PlayerStateStash.java` + `mixin/PlayerListStorageMixin.java` | 背包 / 经验按子服隔离（内存暂存 + 磁盘两份） |
 | `world/PlayerRouter.java` | 切服主流程（`sendTo`） |
 | `world/ServerInternals.java` / `ServerLevelsAccess.java` / `PlayerListAccess.java` | 访问原版内部字段的唯一出口（放业务包，见「十」） |
-| `world/SelfTest.java` | **全部自检**（261 项）。加检查看这里 |
+| `world/SelfTest.java` | **全部自检**（262 项）。加检查看这里 |
 | `island/IslandService.java` + `island/IslandManager.java` | 空岛：建岛、归属、出生点（**保护已删**） |
 | `world/IslandSideWorlds.java` + `world/LavaSeaGenerator.java` | 岛屿维度各自的下界/末地（空岛虚空式、海岛岩浆海） |
 | `world/NaturalIslandPlacer.java` | 自然岛：地形 + 宝箱 + 刷怪笼 + **结构模板与底座**（跨 tick 补铺、落盘去重） |
@@ -496,7 +496,7 @@ release 的**提交信息、tag message、release notes** 都是给**使用者�
 - 大厅 NPC 用真 `ServerPlayer` 假人；空岛只做 classic + ocean，不做单方块
 - 扩展性要求：新增子服尽量只改配置
 
-**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 0.4 收尾 235 → 客户端握手 **244** → 钓竿数据契约 **253** → 客户端真物品 **257** → 钓竿分层渲染 **259** → 物品全量迁移 **261**。
+**自检项数演进**：Phase 1 收尾 37 → 空岛三维度改造时 94 → 0.4 收尾 235 → 客户端握手 **244** → 钓竿数据契约 **253** → 客户端真物品 **257** → 钓竿分层渲染 **259** → 物品全量迁移 **261** → 裂纹与抛竿层 **262**。
 
 **已修复且经作者实测的关键问题**：
 

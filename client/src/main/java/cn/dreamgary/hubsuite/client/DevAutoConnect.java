@@ -53,11 +53,14 @@ public final class DevAutoConnect {
                     client.player.connection.sendCommand("register " + DEV_PASSWORD + " " + DEV_PASSWORD);
                 } else if (joinedTicks == 120) {
                     client.player.connection.sendCommand("login " + DEV_PASSWORD);
+                } else if (joinedTicks == 150) {
+                    // 登录成功后服务端应该已经把登录表单关掉了（AuthManager.authenticated 里关的）
+                    HubSuiteClient.LOGGER.info("开发模式：登录后的界面 = {}",
+                            client.screen == null ? "无（服务端已关掉表单）" : client.screen.getClass().getName());
                 } else if (joinedTicks == 200) {
                     /*
-                     * 用命令登录之后，服务器先前弹出的注册对话框**不会自己关掉**（它只认对话框那条路），
-                     * 于是屏幕上一直挂着一张表单，什么都看不见。开发模式里直接把它关掉 ——
-                     * 这也是实测发现的一个小毛病：走 /register 命令登录的玩家会看到一张过期的对话框。
+                     * 兜底：万一还有残留界面（比如服务端没关成功），开发模式里自己关掉。
+                     * 服务端侧的正经修复在 AuthManager.authenticated()。
                      */
                     if (client.screen != null) {
                         HubSuiteClient.LOGGER.info("开发模式：关掉登录期间残留的界面 {}", client.screen.getClass().getName());

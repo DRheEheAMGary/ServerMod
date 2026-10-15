@@ -335,6 +335,15 @@ public final class AuthManager {
             state.authenticated = true;
         }
 
+        /*
+         * 认证成功就把登录/注册对话框关掉。
+         *
+         * 放在这里而不是对话框的回调里：走**命令**（/register、/login）登录时，
+         * 先前由进服流程弹出的那张表单没人关，会一直盖在屏幕上（实测踩到，
+         * 玩家只能自己点“退出”才能看见世界）。这里是所有认证路径的必经之处。
+         */
+        cn.dreamgary.hubsuite.ui.DialogKit.close(player);
+
         var lobby = worlds.lobby().orElse(null);
         if (lobby != null) {
             PlayerRouter.sendTo(player, lobby);

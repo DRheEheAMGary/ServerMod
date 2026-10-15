@@ -1911,12 +1911,26 @@ public final class SelfTest {
             expectStr(hintWrong, "第 1 槽（线）", "nether_string", hint.getString(1));
             expectStr(hintWrong, "第 2 槽（钩）", "obsidian", hint.getString(2));
             expectStr(hintWrong, "第 3 槽（升级）", "lapis", hint.getString(3));
+            expectStr(hintWrong, "第 4 槽（裂了标志，满耐久时为空）", "", hint.getString(4));
         }
         if (hintWrong.isEmpty()) {
             ok("渲染提示正确：custom_model_data 字符串槽 = 杆/线/钩/升级 的材质 id（客户端按 index 选层）");
         } else {
             fail("渲染提示不对：" + String.join("；", hintWrong) + " —— 客户端会选错层");
         }
+        var brokenStack = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        var brokenRod = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "", 0, 640);
+        brokenRod.writeTo(brokenStack);
+        var brokenHint = brokenStack.get(net.minecraft.core.component.DataComponents.CUSTOM_MODEL_DATA);
+        String brokenSlot = brokenHint == null ? null : brokenHint.getString(4);
+        if (cn.dreamgary.hubsuite.rod.RodData.BROKEN_FLAG.equals(brokenSlot)) {
+            ok("耐久见底时渲染提示第 5 槽 = \"" + cn.dreamgary.hubsuite.rod.RodData.BROKEN_FLAG
+                    + "\"（客户端会多叠一层裂纹），且 broken() = " + brokenRod.broken());
+        } else {
+            fail("耐久见底（0/640）时第 5 槽应该是 " + cn.dreamgary.hubsuite.rod.RodData.BROKEN_FLAG
+                    + "，实测 " + brokenSlot);
+        }
+
         cn.dreamgary.hubsuite.rod.RodData.clear(hintStack);
         if (hintStack.get(net.minecraft.core.component.DataComponents.CUSTOM_MODEL_DATA) == null) {
             ok("清掉钓竿数据后渲染提示一起没了（还原成普通原版钓竿，客户端走 vanilla 模型）");
