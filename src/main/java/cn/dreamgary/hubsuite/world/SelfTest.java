@@ -182,6 +182,7 @@ public final class SelfTest {
         step("装配台规则（修补 / 换底 / 换线 / 换钩 / 拒绝）", this::checkAssemblyRules);
         step("装配台方块（注册 / 方块实体 / 素材 / 掉落表）", this::checkAssemblyBlock);
         step("钓竿耐久与断线（扣耐久 / 断线边界 / 原版耐久条 / 坏了不能钓）", this::checkRodDurability);
+        step("铁砧升级（单槽替换 / 累计惩罚 / 不归我们管的一律原样）", this::checkRodAnvil);
     }
 
 
@@ -2277,6 +2278,63 @@ public final class SelfTest {
                     + "原版耐久条按比例且见底时留 1 点不被销毁）");
         } else {
             fail("钓竿耐久与断线有误：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 铁砧升级（0.6，方案第 4 节）。
+     *
+     * <p>锁三件事：升级真的打到竿上、**只有一个槽**（再来一个顶掉旧的）、
+     * 以及**原版累计惩罚**：产物的 REPAIR_COST 记一笔、花费跟着涨。
+     * 另外确认"不是我们的组合"一律返回空 —— 原版的合并 / 命名 / 附魔不能被我们吃掉。
+     */
+    private void checkRodAnvil() {
+        List<String> wrong = new ArrayList<>();
+        var rod = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        cn.dreamgary.hubsuite.rod.RodData.defaults().writeTo(rod);
+
+        // --- 钻石升级 ---
+        var diamond = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
+                rod, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND));
+        if (diamond.isEmpty()) {
+            wrong.add("钻石升级没算出结果");
+        } else {
+            var data = cn.dreamgary.hubsuite.rod.RodData.of(diamond.stack());
+            expectStr(wrong, "升级槽", "diamond", data == null ? null : data.upgrade());
+            expectInt(wrong, "首次升级花费", cn.dreamgary.hubsuite.feature.RodAnvil.BASE_COST, diamond.cost());
+            expectInt(wrong, "产物的累计惩罚", 1,
+                    cn.dreamgary.hubsuite.feature.RodAnvil.priorWork(diamond.stack()));
+        }
+
+        // --- 单槽：再来一个直接替换（旧的消失）---
+        var replaced = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
+                diamond.stack(), new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.REDSTONE));
+        var replacedData = cn.dreamgary.hubsuite.rod.RodData.of(replaced.stack());
+        expectStr(wrong, "替换后的升级槽", "redstone", replacedData == null ? null : replacedData.upgrade());
+        expectInt(wrong, "二次升级花费（带上一次惩罚）", cn.dreamgary.hubsuite.feature.RodAnvil.BASE_COST + 1,
+                replaced.cost());
+
+        // --- 耐久：青金石会让上限掉 192（数值 −192）---
+        var lapis = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
+                rod, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.LAPIS_LAZULI));
+        var lapisData = cn.dreamgary.hubsuite.rod.RodData.of(lapis.stack());
+        expectInt(wrong, "青金石后上限（640 − 1920 → 夹到 1）", 1,
+                lapisData == null ? -1 : lapisData.computedMaxDurability());
+
+        // --- 不归我们管的组合：原版结果原样保留 ---
+        var notOurs = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_SWORD),
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND));
+        expectBool(wrong, "普通物品 + 钻石 → 不归我们管", true, notOurs.isEmpty());
+        var notUpgrade = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
+                rod, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIRT));
+        expectBool(wrong, "竿 + 泥土 → 不归我们管", true, notUpgrade.isEmpty());
+
+        if (wrong.isEmpty()) {
+            ok("铁砧升级 8 组全对（升级生效 / 单槽替换 / 青金石数值 −192 / 累计惩罚进 REPAIR_COST 与花费 / "
+                    + "非钓竿或非升级物一律原样交给原版）");
+        } else {
+            fail("铁砧升级有误：" + String.join("；", wrong));
         }
     }
 
