@@ -1,0 +1,12 @@
+{
+	"required": true,
+	"minVersion": "0.8",
+	"package": "cn.dreamgary.hubsuite.client.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"MenuScreensMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

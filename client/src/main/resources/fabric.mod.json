@@ -14,6 +14,9 @@
 	"license": "MIT",
 	"icon": "assets/hubsuite-client/icon.png",
 	"environment": "client",
+	"mixins": [
+		"hubsuite-client.mixins.json"
+	],
 	"entrypoints": {
 		"client": [
 			"cn.dreamgary.hubsuite.client.HubSuiteClient"

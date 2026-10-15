@@ -24,6 +24,7 @@ public final class HubSuiteClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        ClientMenuTypes.register();
         ClientItems.register();
         ClientItems.registerAssetCheck();
         ClientHandshake.register();
@@ -35,7 +36,7 @@ public final class HubSuiteClient implements ClientModInitializer {
             DevItemWatch.register();
         }
 
-        LOGGER.info("HubSuite 客户端 {} 已加载（握手已就绪；渲染与界面尚未实现）", version());
+        LOGGER.info("HubSuite 客户端 {} 已加载（握手 + 真物品 + 分层钓竿 + 装配台界面）", version());
     }
 
     /** 从模组元数据里读自己的版本号（构建时写入）。 */
