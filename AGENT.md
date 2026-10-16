@@ -451,6 +451,8 @@ tag 带 `v`；服务端产物 `build/libs/hubsuite-<server_version>.jar`，客�
 4. 从 GitHub 真实下载校验：zip 有效、fabric.mod.json 的 version 对、类数对
 5. Release 挂**两份产物**（服务端 jar + 客户端 jar；客户端没变就挂同一份），
    说明按 docs/分发与更新.md 的三档模板写（无需 / 建议 / 必须更新）
+6. **Release 标题一律带 `v`**：`HubSuite v<版本>（一句话）` —— tag 是 `v<版本>`，标题也必须是
+   （踩过：0.5 的三个 Release 标题漏了 v，跟 0.4 那条线不一致）
 ```
 **发布说明必须如实写**：哪些已验证、哪些没有、升级要不要删存档。不要为了让 release 好看而省略「未验证」。
 
