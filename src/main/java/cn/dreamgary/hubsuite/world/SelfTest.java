@@ -180,6 +180,8 @@ public final class SelfTest {
         step("钓竿数据契约（部件表 + 属性公式 + NBT 线格式）", this::checkRodDataContract);
         step("客户端真物品（共用定义 / 原型一致 / 素材齐全 / 能力名）", this::checkClientItemDefs);
         step("装配台规则（修补 / 换底 / 换线 / 换钩 / 拒绝）", this::checkAssemblyRules);
+        step("装配台交互（点击放料即消耗 / 放错部位被拒 —— 复现用户实测）", this::checkAssemblyInteraction);
+        step("通用容器界面（布局 ↔ 真实槽位一致 / 菜单能查到布局）", this::checkUiLayout);
         step("装配台方块（注册 / 方块实体 / 素材 / 掉落表）", this::checkAssemblyBlock);
         step("钓竿耐久与断线（扣耐久 / 断线边界 / 原版耐久条 / 坏了不能钓）", this::checkRodDurability);
         step("铁砧升级（单槽替换 / 累计惩罚 / 不归我们管的一律原样）", this::checkRodAnvil);
@@ -2518,6 +2520,101 @@ public final class SelfTest {
             ok("耐久护盾 3 组全对（带数据的竿不被原版扣耐久 / 不会被原版销毁 / 普通原版钓竿照旧）");
         } else {
             fail("耐久护盾有误：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 装配台的**真实交互链路**（用户实测"换不了配件"抓出来的 bug 的回归测试）。
+     *
+     * <p>不复用纯函数（{@link #checkAssemblyRules} 已覆盖规则），这里模拟客户端点击：
+     * {@code menu.clicked(...)} 就是玩家点击走的服务端路径 —— 26.1 修复靠它触发
+     * "放上去就消耗"，所以必须用同一条路测。
+     */
+    private void checkAssemblyInteraction() {
+        List<String> wrong = new ArrayList<>();
+        var probe = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_asmclick",
+                server.overworld(), false);
+        var menu = new cn.dreamgary.hubsuite.rod.AssemblyMenu(1, probe.getInventory(),
+                new net.minecraft.world.SimpleContainer(4));
+        int rodSlot = cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_ROD;
+        int lineSlot = cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_LINE;
+        int hookSlot = cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_HOOK;
+        var PICKUP = net.minecraft.world.inventory.ContainerInput.PICKUP;
+
+        // 1) 空手点竿位 → 上竿
+        menu.setCarried(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD));
+        menu.clicked(rodSlot, 0, PICKUP, probe);
+        expectBool(wrong, "竿已放进竿位", true, !menu.getSlot(rodSlot).getItem().isEmpty());
+
+        // 2) **右键**点钩位（原版右键 = 放一个）：2 个里放 1 个进格、被消耗、另一颗留在光标
+        menu.setCarried(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OBSIDIAN, 2));
+        menu.clicked(hookSlot, 1, PICKUP, probe);
+        var data = cn.dreamgary.hubsuite.rod.RodData.of(menu.getSlot(rodSlot).getItem());
+        expectStr(wrong, "钩换为黑曜石", "obsidian", data == null ? null : data.hook());
+        expectInt(wrong, "只消耗 1 个（光标剩 1）", 1, menu.getCarried().getCount());
+        expectBool(wrong, "钩位已腾空", true, menu.getSlot(hookSlot).getItem().isEmpty());
+
+        // 2b) **左键**点钩位（原版左键 = 整叠放进去）：整叠进格、只消耗 1 个、其余留在格里
+        menu.setCarried(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND, 3));
+        menu.clicked(hookSlot, 0, PICKUP, probe);
+        var dataB = cn.dreamgary.hubsuite.rod.RodData.of(menu.getSlot(rodSlot).getItem());
+        expectStr(wrong, "左键整叠放入：钩换为钻石", "diamond", dataB == null ? null : dataB.hook());
+        expectInt(wrong, "整叠放入只消耗 1 个（格里剩 2）", 2, menu.getSlot(hookSlot).getItem().getCount());
+
+        // 3) 黑曜石点线位 → 放错部位，整颗留在光标上
+        menu.setCarried(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OBSIDIAN));
+        menu.clicked(lineSlot, 0, PICKUP, probe);
+        expectBool(wrong, "放错部位 → 留在光标上", true,
+                menu.getCarried().is(net.minecraft.world.item.Items.OBSIDIAN));
+        expectBool(wrong, "放错部位 → 线位仍空", true, menu.getSlot(lineSlot).getItem().isEmpty());
+
+        // 4) 藤蔓点线位 → 换线生效
+        menu.setCarried(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.VINE));
+        menu.clicked(lineSlot, 0, PICKUP, probe);
+        var data2 = cn.dreamgary.hubsuite.rod.RodData.of(menu.getSlot(rodSlot).getItem());
+        expectStr(wrong, "线换为藤蔓", "vine", data2 == null ? null : data2.line());
+
+        if (wrong.isEmpty()) {
+            ok("装配台交互 8 组全对（上竿 / 放料即消耗 1 个 / 放错部位被拒 / 换线生效）");
+        } else {
+            fail("装配台交互有误：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 通用容器界面（客户端契约第 8 节）。
+     *
+     * <p>锁住那条"想错位都难"的不变量：**画框的坐标与菜单真实槽位来自同一份布局**。
+     * 再确认菜单类型 id 能查到布局 —— 那是客户端通用渲染的前提。
+     */
+    private void checkUiLayout() {
+        List<String> wrong = new ArrayList<>();
+        var layout = cn.dreamgary.hubsuite.ui.UiLayouts.ASSEMBLY;
+        var probe = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_uilayout",
+                server.overworld(), false);
+        var menu = new cn.dreamgary.hubsuite.rod.AssemblyMenu(1, probe.getInventory(),
+                new net.minecraft.world.SimpleContainer(4));
+
+        for (int i = 0; i < layout.frames().size(); i++) {
+            expectInt(wrong, "布局第 " + i + " 格的槽位序号", i, layout.frame(i).slotIndex());
+            expectInt(wrong, "布局第 " + i + " 格 x 与真实槽位一致", layout.frame(i).x(), menu.getSlot(i).x);
+            expectInt(wrong, "布局第 " + i + " 格 y 与真实槽位一致", layout.frame(i).y(), menu.getSlot(i).y);
+        }
+        expectBool(wrong, "装配台菜单能查到布局（客户端通用渲染的前提）", true,
+                cn.dreamgary.hubsuite.ui.UiLayouts.forMenu(cn.dreamgary.hubsuite.rod.AssemblyMenu.ID) == layout);
+        expectBool(wrong, "没登记的菜单查不到布局（交回原版）", false,
+                cn.dreamgary.hubsuite.ui.UiLayouts.forMenu(
+                        net.minecraft.resources.Identifier.fromNamespaceAndPath("minecraft", "crafting")) != null);
+        for (var one : cn.dreamgary.hubsuite.ui.UiLayouts.all()) {
+            if (one.frames().isEmpty() || one.width() <= 0 || one.height() <= 0) {
+                wrong.add("布局 " + one.id() + " 不完整");
+            }
+        }
+
+        if (wrong.isEmpty()) {
+            ok("通用界面 15 组全对（布局与真实槽位逐格一致 / 菜单可查布局 / 未登记的菜单交回原版）");
+        } else {
+            fail("通用界面有误：" + String.join("；", wrong));
         }
     }
 
