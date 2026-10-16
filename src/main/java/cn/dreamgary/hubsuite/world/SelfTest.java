@@ -185,6 +185,7 @@ public final class SelfTest {
         step("铁砧升级（单槽替换 / 累计惩罚 / 不归我们管的一律原样）", this::checkRodAnvil);
         step("青金石附魔（附魔台等价 / 宝藏池排除诅咒 / 概率边界）", this::checkRodEnchanting);
         step("旧熔岩钓竿换算（钩决定岩浆 / 磨损比例照搬 / 配方已删）", this::checkLegacyLavaRod);
+        step("原版耐久扣减不碰我们的竿（否则会在坏掉那一刻被销毁）", this::checkRodDurabilityShield);
     }
 
 
@@ -2487,6 +2488,52 @@ public final class SelfTest {
                     + "磨损比例照搬 / 满耐久不会被修坏 / 普通钩不能钓岩浆）");
         } else {
             fail("旧熔岩钓竿收尾有误：" + String.join("；", wrong));
+        }
+    }
+
+    /**
+     * 原版耐久扣减**不能**作用在带我们数据的竿上。
+     *
+     * <p>这是复查时抓出来的真 bug：{@code FishingRodItem.use} 收竿的顺序是
+     * {@code retrieve(...)}（我们在里面扣耐久、把耐久条按比例映射到原版条）
+     * → 紧接着 {@code stack.hurtAndBreak(1, ...)}。映射会把「已坏」的竿放在
+     * {@code MAX_DAMAGE - 1}，原版这最后一下 +1 正好打满 → **物品被销毁**，
+     * 跟方案「耐久归零只是不能钓、物品不消失」矛盾。
+     *
+     * <p>这里同时锁「我们的竿不受原版扣耐久」和「普通原版钓竿照旧扣」（后者是
+     * AGENT.md 的硬规矩：原版行为不能改坏）。
+     */
+    private void checkRodDurabilityShield() {
+        List<String> wrong = new ArrayList<>();
+        var probe = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_durshield",
+                server.overworld(), false);
+
+        // 我们的竿：原版这一下必须无效
+        var ours = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        var data = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "", 0, 640);
+        data.writeTo(ours);
+        data.applyVanillaBar(ours);
+        Integer before = ours.get(net.minecraft.core.component.DataComponents.DAMAGE);
+        ours.hurtAndBreak(1, probe, net.minecraft.world.entity.EquipmentSlot.MAINHAND);
+        Integer after = ours.get(net.minecraft.core.component.DataComponents.DAMAGE);
+        expectInt(wrong, "带数据的竿被原版扣耐久后，耐久条不动",
+                before == null ? 0 : before, after == null ? 0 : after);
+        expectBool(wrong, "带数据的竿不会消失（数量还是 1）", true, ours.getCount() == 1);
+        if (cn.dreamgary.hubsuite.rod.RodData.of(ours) == null) {
+            wrong.add("耐久被扣之后数据没了");
+        }
+
+        // 普通原版钓竿：原版扣耐久照旧（不能把原版行为改坏）
+        var vanilla = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        vanilla.hurtAndBreak(1, probe, net.minecraft.world.entity.EquipmentSlot.MAINHAND);
+        Integer vanillaDamage = vanilla.get(net.minecraft.core.component.DataComponents.DAMAGE);
+        expectInt(wrong, "普通原版钓竿照旧扣 1 点原版耐久", 1,
+                vanillaDamage == null ? 0 : vanillaDamage);
+
+        if (wrong.isEmpty()) {
+            ok("耐久护盾 3 组全对（带数据的竿不被原版扣耐久 / 不会被原版销毁 / 普通原版钓竿照旧）");
+        } else {
+            fail("耐久护盾有误：" + String.join("；", wrong));
         }
     }
 

@@ -44,17 +44,16 @@ public abstract class FishingHookLootMixin {
             }
             /*
              * 第一件事：按竿的数据算"这一杆断不断线 / 扣多少耐久"。
-             * 放在渔获表之前 —— 它**所有维度都要生效**，不只是配了表的维度。
-             * 断线就直接返回空表 = 空手而归（饵已经在下面按"真出货"的路径扣过了）。
+             * **先算、后定渔获** —— 它所有维度都要生效，不只是配了表的维度；
+             * 但"断线"的后果（空手而归）要等扣完饵再兑现，见下面。
              */
-            if (cn.dreamgary.hubsuite.feature.RodFishing.onCatch(self)) {
-                return new ObjectArrayList<>();
-            }
+            boolean lineBroke = cn.dreamgary.hubsuite.feature.RodFishing.onCatch(self);
 
             var config = HubSuite.fishing();
             FishingPresets.Table table = FishingLoot.tableFor(config, level.dimension());
             if (table == null) {
-                return original;   // 没配置 → 原版行为，一个字都不改
+                // 没配置的维度：原版行为一个字都不改（这里的钓饵本来也不生效），断线则空手而归
+                return lineBroke ? new ObjectArrayList<>() : original;
             }
             Player owner = self.getPlayerOwner();
             String biome = level.getBiome(self.blockPosition()).unwrapKey()
@@ -72,6 +71,13 @@ public abstract class FishingHookLootMixin {
              * 这一杆会回落到原版，但玩家的饵已经没了。扣费必须跟在"真的按我们的表出货"后面。
              */
             cn.dreamgary.hubsuite.feature.FishingGameplay.consumeBaitOnCatch(self);
+            if (lineBroke) {
+                /*
+                 * 断线：空手而归，但**饵照扣**（方案第 5 节「空手而归 + 扣饵 + 耐久 −3」）。
+                 * 以前这里写在扣饵之前 —— 断线那一杆的饵白嫖了（复查时抓出来的）。
+                 */
+                return new ObjectArrayList<>();
+            }
             ObjectArrayList<ItemStack> result = new ObjectArrayList<>();
             if (!table.replaceVanilla) {
                 result.addAll(original);
