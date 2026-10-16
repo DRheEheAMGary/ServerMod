@@ -28,6 +28,7 @@ public final class HubSuiteClient implements ClientModInitializer {
         ClientItems.register();
         ClientItems.registerAssetCheck();
         ClientHandshake.register();
+        ClientRodTooltip.register();   // 钓竿 tooltip：平时看总数，Shift 看部件明细
 
         // 开发用自动连服（不传 -Dhubsuite.autoconnect 就什么都不做）
         String autoConnect = System.getProperty(DevAutoConnect.PROPERTY, "");

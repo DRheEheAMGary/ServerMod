@@ -13,16 +13,22 @@ import net.minecraft.resources.Identifier;
  */
 public final class UiLayouts {
 
-    /** 装配台：钓竿位（左中）+ 杆/线/钩三个部位格（右列）。 */
+    /**
+     * 装配台：**以钓竿实物为中心**（用户定的稿子）。
+     *
+     * <p>面板尺寸沿用原版箱子（176×166）；面板里渲染**当前的竿**（活预览，槽位 0），
+     * 四个语义格钉在竿的各个部件位置上：左上=钓竿位、竿身=杆位、竿梢=线位、钩该在的地方=钩位。
+     */
     public static final UiLayout ASSEMBLY = new UiLayout(
             Identifier.fromNamespaceAndPath("hubsuite", "assembly"),
             176, 166, "钓竿装配台",
             List.of(
-                    new UiLayout.SlotFrame(0, 26, 20, "钓竿"),
-                    new UiLayout.SlotFrame(1, 98, 20, "杆"),
-                    new UiLayout.SlotFrame(2, 98, 40, "线"),
-                    new UiLayout.SlotFrame(3, 98, 60, "钩")),
-            "背包");
+                    new UiLayout.SlotFrame(0, 22, 20, "钓竿"),
+                    new UiLayout.SlotFrame(1, 74, 44, "杆"),
+                    new UiLayout.SlotFrame(2, 132, 24, "线"),
+                    new UiLayout.SlotFrame(3, 120, 62, "钩")),
+            "背包",
+            new UiLayout.Preview(0, 62, 18, 3.0F));
 
     /** 菜单类型 id → 布局。 */
     private static final Map<Identifier, UiLayout> BY_MENU = new LinkedHashMap<>();

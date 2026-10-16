@@ -182,6 +182,7 @@ public final class SelfTest {
         step("装配台规则（修补 / 换底 / 换线 / 换钩 / 拒绝）", this::checkAssemblyRules);
         step("装配台交互（点击放料即消耗 / 放错部位被拒 —— 复现用户实测）", this::checkAssemblyInteraction);
         step("通用容器界面（布局 ↔ 真实槽位一致 / 菜单能查到布局）", this::checkUiLayout);
+        step("钓竿物品提示（总体数值 / Shift 部件明细 / 坏竿提示）", this::checkRodTooltip);
         step("装配台方块（注册 / 方块实体 / 素材 / 掉落表）", this::checkAssemblyBlock);
         step("钓竿耐久与断线（扣耐久 / 断线边界 / 原版耐久条 / 坏了不能钓）", this::checkRodDurability);
         step("铁砧升级（单槽替换 / 累计惩罚 / 不归我们管的一律原样）", this::checkRodAnvil);
@@ -2616,6 +2617,83 @@ public final class SelfTest {
         } else {
             fail("通用界面有误：" + String.join("；", wrong));
         }
+    }
+
+    /**
+     * 钓竿物品提示（用户要的"平时看总体、Shift 看部件"）。
+     *
+     * <p>文本在共用层（{@link cn.dreamgary.hubsuite.rod.RodTooltip}），所以能直接断言，
+     * 不用去截图看 tooltip。
+     */
+    private void checkRodTooltip() {
+        List<String> wrong = new ArrayList<>();
+        var plain = cn.dreamgary.hubsuite.rod.RodData.defaults();   // 木杆 + 线 + 线钩
+        var full = new cn.dreamgary.hubsuite.rod.RodData("iron", "nether_string", "obsidian", "diamond", 320, 3840);
+
+        // --- 总体：耐久 / 速度 / 幸运 / 断线 ---
+        String sum = join(cn.dreamgary.hubsuite.rod.RodTooltip.summary(full));
+        expectBool(wrong, "总体里有耐久", true, sum.contains("耐久"));
+        expectBool(wrong, "总体里有速度", true, sum.contains("速度"));
+        expectBool(wrong, "总体里有幸运", true, sum.contains("幸运"));
+        expectBool(wrong, "总体里有断线（地狱线 0.7%）", true, sum.contains("0.7%"));
+        expectBool(wrong, "黑曜石钩 → 收起也标明耐高温", true, sum.contains("耐高温"));
+
+        String plainSum = join(cn.dreamgary.hubsuite.rod.RodTooltip.summary(plain));
+        expectBool(wrong, "线钩 → 收起不写耐高温", false, plainSum.contains("耐高温"));
+
+        // --- 坏竿：总体要提示回装配台修 ---
+        var broken = new cn.dreamgary.hubsuite.rod.RodData("iron", "string", "string", "diamond", 0, 3840);
+        expectBool(wrong, "坏竿总体提示已损坏", true,
+                join(cn.dreamgary.hubsuite.rod.RodTooltip.summary(broken)).contains("已损坏"));
+
+        // --- 明细：四条（杆 / 线 / 钩 / 升级），带各自的数值与中文名 ---
+        String det = join(cn.dreamgary.hubsuite.rod.RodTooltip.details(full));
+        String detAll = join(cn.dreamgary.hubsuite.rod.RodTooltip.details(full));
+        for (String part : List.of("杆", "线", "钩", "升级")) {
+            expectBool(wrong, "明细里有「" + part + "」这一段", true, detAll.contains(part));
+        }
+        expectBool(wrong, "明细里属性是「属性: 值」格式", true,
+                detAll.contains("基础耐久:") && detAll.contains("断线:") && detAll.contains("速度:"));
+        expectBool(wrong, "明细含铁杆", true, det.contains("铁杆"));
+        expectBool(wrong, "明细含地狱线", true, det.contains("地狱线"));
+        expectBool(wrong, "明细含黑曜石钩", true, det.contains("黑曜石钩"));
+        expectBool(wrong, "明细含钻石升级", true, det.contains("钻石"));
+        expectBool(wrong, "明细里钩那段标耐高温", true, det.contains("耐高温"));
+
+        // --- 青金石升级要标出"附魔档 15→30" ---
+        var lapis = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "lapis", 640, 640);
+        expectBool(wrong, "青金石明细只标「附魔++」", true,
+                join(cn.dreamgary.hubsuite.rod.RodTooltip.details(lapis)).contains("附魔++"));
+        expectBool(wrong, "青金石明细不暴露附魔细节", false,
+                join(cn.dreamgary.hubsuite.rod.RodTooltip.details(lapis)).contains("15"));
+        // 没有升级时也要有一行（告诉玩家去哪打升级）
+        expectBool(wrong, "无升级时明细里也有升级段", true,
+                join(cn.dreamgary.hubsuite.rod.RodTooltip.details(plain)).contains("升级"));
+        expectBool(wrong, "总体里没升级时标明是「无」", true,
+                join(cn.dreamgary.hubsuite.rod.RodTooltip.summary(plain)).contains("无"));
+
+        // --- 不是我们的竿 → 什么都不加 ---
+        expectInt(wrong, "空数据 → 总体为空", 0, cn.dreamgary.hubsuite.rod.RodTooltip.summary(null).size());
+        expectInt(wrong, "空数据 → 明细为空", 0, cn.dreamgary.hubsuite.rod.RodTooltip.details(null).size());
+        if (cn.dreamgary.hubsuite.rod.RodTooltip.HINT.isBlank()) {
+            wrong.add("Shift 提示文字是空的");
+        }
+
+        if (wrong.isEmpty()) {
+            ok("钓竿提示全对（收起=耐久+材料一览+耐高温+速度/幸运/断线；Shift=一段一个部件、"
+                    + "「属性: 值」、材料按自己的颜色、青金石只标「附魔++」；坏竿有提示、非本模组的竿不加料）");
+        } else {
+            fail("钓竿提示有误：" + String.join("；", wrong));
+        }
+    }
+
+    /** 把若干 Component 拼成一段纯文本，方便断言。 */
+    private static String join(List<net.minecraft.network.chat.Component> lines) {
+        StringBuilder sb = new StringBuilder();
+        for (var line : lines) {
+            sb.append(line.getString()).append('\n');
+        }
+        return sb.toString();
     }
 
     private void step(String name, ThrowingRunnable body) {

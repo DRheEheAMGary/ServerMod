@@ -53,6 +53,20 @@ public class HubSuiteContainerScreen<T extends AbstractContainerMenu> extends Ab
         g.fill(x, y, x + imageWidth, y + imageHeight, PANEL);
         g.outline(x, y, imageWidth, imageHeight, PANEL_EDGE);
 
+        // 活预览：把面板里的"当前的竿"画出来（原版物品渲染，自动叠分层模型）
+        UiLayout.Preview preview = layout.preview();
+        if (preview != null && preview.slotIndex() < menu.slots.size()) {
+            var stack = menu.getSlot(preview.slotIndex()).getItem();
+            if (!stack.isEmpty()) {
+                var pose = g.pose();
+                pose.pushMatrix();
+                pose.translate(x + preview.x(), y + preview.y());
+                pose.scale(preview.scale(), preview.scale());
+                g.fakeItem(stack, 0, 0);
+                pose.popMatrix();
+            }
+        }
+
         for (UiLayout.SlotFrame frame : layout.frames()) {
             int sx = x + frame.x() - 1;
             int sy = y + frame.y() - 1;

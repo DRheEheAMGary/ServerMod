@@ -20,10 +20,20 @@ public record UiLayout(
         int height,
         String title,
         List<SlotFrame> frames,
-        String playerInventoryHint) {
+        String playerInventoryHint,
+        Preview preview) {
 
     /** 一个语义格：菜单里的槽位序号 + 面板内坐标 + 格子旁边的提示文字。 */
     public record SlotFrame(int slotIndex, int x, int y, String hint) {
+    }
+
+    /**
+     * **活预览**：把某个槽位里的真实物品渲染在面板里（可缩放）。
+     *
+     * <p>装配台用它渲染"当前的竿"—— 原版物品渲染会自动叠我们的分层模型，
+     * 所以换杆/线/钩/升级的瞬间，面板里的竿**跟着变**，不用预画组合图。
+     */
+    public record Preview(int slotIndex, int x, int y, float scale) {
     }
 
     /** 第 {@code index} 个语义格（越界就退回 0 号，别让界面崩）。 */
