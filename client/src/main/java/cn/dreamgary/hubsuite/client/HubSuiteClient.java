@@ -35,6 +35,13 @@ public final class HubSuiteClient implements ClientModInitializer {
         if (!autoConnect.isBlank()) {
             DevAutoConnect.register(autoConnect);
             DevItemWatch.register();
+            if (System.getProperty(DevSmoke.PROPERTY) != null) {
+                DevSmoke.register();
+            }
+            String shotDir = System.getProperty(DevShot.PROPERTY);
+            if (shotDir != null) {
+                DevShot.register(shotDir);
+            }
         }
 
         LOGGER.info("HubSuite 客户端 {} 已加载（握手 + 真物品 + 分层钓竿 + 装配台界面）", version());

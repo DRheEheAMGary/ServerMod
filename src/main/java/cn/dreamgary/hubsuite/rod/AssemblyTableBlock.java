@@ -79,7 +79,7 @@ public class AssemblyTableBlock extends BaseEntityBlock {
     @Override
     public BlockState playerWillDestroy(Level level, BlockPos pos, BlockState state, Player player) {
         if (!level.isClientSide() && level.getBlockEntity(pos) instanceof AssemblyBlockEntity table) {
-            for (int i = 0; i < table.getContainerSize(); i++) {
+            for (int i = 0; i < cn.dreamgary.hubsuite.rod.AssemblyBlockEntity.INPUT_SIZE; i++) {
                 ItemStack stack = table.getItem(i);
                 if (!stack.isEmpty()) {
                     Containers.dropItemStack(level, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5, stack);

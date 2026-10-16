@@ -1,4 +1,4 @@
 {
-  "parent": "minecraft:item/generated",
+  "parent": "minecraft:item/handheld_rod",
   "textures": { "layer0": "hubsuite:item/rod/rod_wood" }
 }

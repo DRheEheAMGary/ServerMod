@@ -180,7 +180,7 @@ public final class SelfTest {
         step("钓竿数据契约（部件表 + 属性公式 + NBT 线格式）", this::checkRodDataContract);
         step("客户端真物品（共用定义 / 原型一致 / 素材齐全 / 能力名）", this::checkClientItemDefs);
         step("装配台规则（修补 / 换底 / 换线 / 换钩 / 拒绝）", this::checkAssemblyRules);
-        step("装配台交互（点击放料即消耗 / 放错部位被拒 —— 复现用户实测）", this::checkAssemblyInteraction);
+        step("装配台交互（放料进格不消耗 / 点装配按钮才生效 / 放错部位被拒 —— 用户实测两回）", this::checkAssemblyInteraction);
         step("通用容器界面（布局 ↔ 真实槽位一致 / 菜单能查到布局）", this::checkUiLayout);
         step("钓竿物品提示（总体数值 / Shift 部件明细 / 坏竿提示）", this::checkRodTooltip);
         step("装配台方块（注册 / 方块实体 / 素材 / 掉落表）", this::checkAssemblyBlock);
@@ -2347,6 +2347,45 @@ public final class SelfTest {
         expectInt(wrong, "青金石后上限（640 − 1920 → 夹到 1）", 1,
                 lapisData == null ? -1 : lapisData.computedMaxDurability());
 
+        /*
+         * --- 真实铁砧菜单路径 ---
+         *
+         * 用户实测"铁砧升级无效"的根因：AnvilMenu.createResult 里有 **5 个 RETURN**，
+         * 竿 + 钻石这种"原版没有的组合"走**早期返回**；注入点若用 TAIL（只挂最后一个 return）
+         * 就永远执行不到。这里直接建一个真菜单、走原版回调，把这条路径钉住。
+         */
+        var anvilProbe = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_anvil",
+                server.overworld(), false);
+        if (anvilProbe != null) {
+            try {
+                var anvil = new net.minecraft.world.inventory.AnvilMenu(2, anvilProbe.getInventory(),
+                        net.minecraft.world.inventory.ContainerLevelAccess.NULL);
+                anvil.getSlot(net.minecraft.world.inventory.AnvilMenu.INPUT_SLOT).set(rod.copy());
+                anvil.getSlot(net.minecraft.world.inventory.AnvilMenu.ADDITIONAL_SLOT)
+                        .set(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND));
+                anvil.slotsChanged(anvil.getSlot(0).container);   // 原版铁砧就是靠包装容器回调它
+                var anvilResult = anvil.getSlot(net.minecraft.world.inventory.AnvilMenu.RESULT_SLOT).getItem();
+                expectBool(wrong, "真实铁砧菜单：竿 + 钻石 出结果", true, !anvilResult.isEmpty());
+                if (!anvilResult.isEmpty()) {
+                    var rd = cn.dreamgary.hubsuite.rod.RodData.of(anvilResult);
+                    expectStr(wrong, "真实铁砧菜单：结果带钻石升级", "diamond",
+                            rd == null ? null : rd.upgrade());
+                }
+            } finally {
+                server.getPlayerList().remove(anvilProbe);
+            }
+        }
+
+        // --- 新竿（还没写过数据）也能升级：用户实测"铁砧升级无效"的根因 ---
+        var fresh = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD),
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.EMERALD));
+        expectBool(wrong, "新竿（无数据）+ 绿宝石 → 算出结果", true, !fresh.isEmpty());
+        if (!fresh.isEmpty()) {
+            var freshData = cn.dreamgary.hubsuite.rod.RodData.of(fresh.stack());
+            expectStr(wrong, "新竿升级槽", "emerald", freshData == null ? null : freshData.upgrade());
+        }
+
         // --- 不归我们管的组合：原版结果原样保留 ---
         var notOurs = cn.dreamgary.hubsuite.feature.RodAnvil.combine(
                 new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_SWORD),
@@ -2563,18 +2602,19 @@ public final class SelfTest {
     }
 
     /**
-     * 装配台的**真实交互链路**（用户实测"换不了配件"抓出来的 bug 的回归测试）。
+     * 装配台的**真实交互链路**（两次用户实测的回归：26.1"换不了配件" + "放料就该立刻打上去"改按钮流）。
      *
      * <p>不复用纯函数（{@link #checkAssemblyRules} 已覆盖规则），这里模拟客户端点击：
-     * {@code menu.clicked(...)} 就是玩家点击走的服务端路径 —— 26.1 修复靠它触发
-     * "放上去就消耗"，所以必须用同一条路测。
+     * {@code menu.clicked(...)} 就是玩家点击走的服务端路径。
+     * <b>现行规则（用户定的）</b>：材料进格只是暂存（不消耗），面板出活预览，
+     * 点「装配」按钮（{@code applyFromButton}）才消耗生效。
      */
     private void checkAssemblyInteraction() {
         List<String> wrong = new ArrayList<>();
         var probe = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_asmclick",
                 server.overworld(), false);
         var menu = new cn.dreamgary.hubsuite.rod.AssemblyMenu(1, probe.getInventory(),
-                new net.minecraft.world.SimpleContainer(4));
+                new net.minecraft.world.SimpleContainer(cn.dreamgary.hubsuite.rod.AssemblyBlockEntity.SIZE));
         int rodSlot = cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_ROD;
         int lineSlot = cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_LINE;
         int hookSlot = cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_HOOK;
@@ -2585,36 +2625,59 @@ public final class SelfTest {
         menu.clicked(rodSlot, 0, PICKUP, probe);
         expectBool(wrong, "竿已放进竿位", true, !menu.getSlot(rodSlot).getItem().isEmpty());
 
-        // 2) **右键**点钩位（原版右键 = 放一个）：2 个里放 1 个进格、被消耗、另一颗留在光标
+        // 2) **右键**点钩位（原版右键 = 放一个）：材料只在格里**暂存**，成品格出现结果
         menu.setCarried(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OBSIDIAN, 2));
         menu.clicked(hookSlot, 1, PICKUP, probe);
-        var data = cn.dreamgary.hubsuite.rod.RodData.of(menu.getSlot(rodSlot).getItem());
-        expectStr(wrong, "钩换为黑曜石", "obsidian", data == null ? null : data.hook());
-        expectInt(wrong, "只消耗 1 个（光标剩 1）", 1, menu.getCarried().getCount());
-        expectBool(wrong, "钩位已腾空", true, menu.getSlot(hookSlot).getItem().isEmpty());
+        expectInt(wrong, "光标剩 1", 1, menu.getCarried().getCount());
+        expectInt(wrong, "材料暂存在钩位（未消耗）", 1, menu.getSlot(hookSlot).getItem().getCount());
+        var pending = menu.getSlot(cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_RESULT).getItem();
+        expectBool(wrong, "成品格出现结果", true, !pending.isEmpty());
+        expectStr(wrong, "成品 = 钩换黑曜石", "obsidian",
+                pending.isEmpty() ? null : cn.dreamgary.hubsuite.rod.RodData.of(pending).hook());
 
-        // 2b) **左键**点钩位（原版左键 = 整叠放进去）：整叠进格、只消耗 1 个、其余留在格里
-        menu.setCarried(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND, 3));
-        menu.clicked(hookSlot, 0, PICKUP, probe);
-        var dataB = cn.dreamgary.hubsuite.rod.RodData.of(menu.getSlot(rodSlot).getItem());
-        expectStr(wrong, "左键整叠放入：钩换为钻石", "diamond", dataB == null ? null : dataB.hook());
-        expectInt(wrong, "整叠放入只消耗 1 个（格里剩 2）", 2, menu.getSlot(hookSlot).getItem().getCount());
+        // 3) 从成品格取走 → 竿 + 真正起作用的材料各扣 1 个
+        menu.setCarried(net.minecraft.world.item.ItemStack.EMPTY);
+        menu.clicked(cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_RESULT, 0, PICKUP, probe);
+        var taken = menu.getCarried();
+        expectStr(wrong, "取到的成品带黑曜石钩", "obsidian",
+                taken.isEmpty() ? null : cn.dreamgary.hubsuite.rod.RodData.of(taken).hook());
+        expectBool(wrong, "竿位已空（竿变成成品被取走）", true, menu.getSlot(rodSlot).getItem().isEmpty());
+        expectBool(wrong, "钩位已空（消耗 1 个）", true, menu.getSlot(hookSlot).getItem().isEmpty());
+        expectBool(wrong, "成品格已清空", true,
+                menu.getSlot(cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_RESULT).getItem().isEmpty());
 
-        // 3) 黑曜石点线位 → 放错部位，整颗留在光标上
+        // 4) 材料**取回**就不该消耗：放回竿 → 藤蔓进线位 → 再取回藤蔓
+        menu.clicked(rodSlot, 0, PICKUP, probe);      // 把成品竿放回竿位
+        expectBool(wrong, "成品竿已放回竿位", true, !menu.getSlot(rodSlot).getItem().isEmpty());
+        menu.setCarried(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.VINE));
+        menu.clicked(lineSlot, 1, PICKUP, probe);
+        expectBool(wrong, "换线成品已出现", true,
+                !menu.getSlot(cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_RESULT).getItem().isEmpty());
+        menu.setCarried(net.minecraft.world.item.ItemStack.EMPTY);
+        menu.clicked(lineSlot, 0, PICKUP, probe);
+        expectInt(wrong, "藤蔓取回到光标", 1, menu.getCarried().getCount());
+        expectBool(wrong, "取回后成品格清空", true,
+                menu.getSlot(cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_RESULT).getItem().isEmpty());
+
+        // 5) 黑曜石点线位 → 放错部位，整颗留在光标上
         menu.setCarried(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OBSIDIAN));
         menu.clicked(lineSlot, 0, PICKUP, probe);
         expectBool(wrong, "放错部位 → 留在光标上", true,
                 menu.getCarried().is(net.minecraft.world.item.Items.OBSIDIAN));
         expectBool(wrong, "放错部位 → 线位仍空", true, menu.getSlot(lineSlot).getItem().isEmpty());
 
-        // 4) 藤蔓点线位 → 换线生效
+        // 6) 藤蔓进线位 → 成品格出"藤蔓线"，取走后线真的换了
         menu.setCarried(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.VINE));
-        menu.clicked(lineSlot, 0, PICKUP, probe);
-        var data2 = cn.dreamgary.hubsuite.rod.RodData.of(menu.getSlot(rodSlot).getItem());
-        expectStr(wrong, "线换为藤蔓", "vine", data2 == null ? null : data2.line());
+        menu.clicked(lineSlot, 1, PICKUP, probe);
+        menu.setCarried(net.minecraft.world.item.ItemStack.EMPTY);
+        menu.clicked(cn.dreamgary.hubsuite.rod.AssemblyMenu.SLOT_RESULT, 0, PICKUP, probe);
+        var finalRod = menu.getCarried();
+        expectStr(wrong, "取走的成品线 = 藤蔓", "vine",
+                finalRod.isEmpty() ? null : cn.dreamgary.hubsuite.rod.RodData.of(finalRod).line());
 
         if (wrong.isEmpty()) {
-            ok("装配台交互 8 组全对（上竿 / 放料即消耗 1 个 / 放错部位被拒 / 换线生效）");
+            ok("装配台交互全对（上竿 / 材料暂存不消耗 / 成品格出结果 / 取走消耗 1 个 / "
+                    + "材料可取回 / 放错部位被拒 / 换线生效）");
         } else {
             fail("装配台交互有误：" + String.join("；", wrong));
         }
@@ -2632,7 +2695,7 @@ public final class SelfTest {
         var probe = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_uilayout",
                 server.overworld(), false);
         var menu = new cn.dreamgary.hubsuite.rod.AssemblyMenu(1, probe.getInventory(),
-                new net.minecraft.world.SimpleContainer(4));
+                new net.minecraft.world.SimpleContainer(cn.dreamgary.hubsuite.rod.AssemblyBlockEntity.SIZE));
 
         for (int i = 0; i < layout.frames().size(); i++) {
             expectInt(wrong, "布局第 " + i + " 格的槽位序号", i, layout.frame(i).slotIndex());
@@ -3744,7 +3807,7 @@ public final class SelfTest {
             "hubsuite_selftest", "hubsuite_islandtest", "hubsuite_spawntest",
             "hubsuite_statetest", "hubsuite_spawnprobe", "hubsuite_menutest",
             "hubsuite_persist", "hubsuite_memtest", "hubsuite_mount", "hubsuite_switch",
-            "hubsuite_buckettest");
+            "hubsuite_buckettest", "hubsuite_anvil");
 
     /**
      * 清掉假玩家的**位置记忆**。

@@ -95,6 +95,11 @@ public final class ClientCompat {
         PayloadTypeRegistry.serverboundPlay().register(HandshakePayloads.HelloAck.TYPE, HandshakePayloads.HelloAck.CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(HandshakePayloads.HelloAck.TYPE, this::onAck);
+        PayloadTypeRegistry.serverboundPlay().register(
+                cn.dreamgary.hubsuite.net.UiActionPayload.UiAction.TYPE,
+                cn.dreamgary.hubsuite.net.UiActionPayload.UiAction.CODEC);
+        ServerPlayNetworking.registerGlobalReceiver(
+                cn.dreamgary.hubsuite.net.UiActionPayload.UiAction.TYPE, this::onUiAction);
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> onJoin(handler.getPlayer()));
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> onQuit(handler.getPlayer()));
         ServerTickEvents.END_SERVER_TICK.register(this::tick);
@@ -122,6 +127,19 @@ public final class ClientCompat {
         waiting.put(player.getUUID(), Math.max(1, config.timeoutSeconds) * 20);
         ServerPlayNetworking.send(player, new HandshakePayloads.Hello(
                 HandshakePayloads.PROTOCOL, serverVersion(), safeMin(), config.timeoutSeconds));
+    }
+
+    /** 通用界面按钮：装配台的「装配」= 吃材料、生效。 */
+    private void onUiAction(cn.dreamgary.hubsuite.net.UiActionPayload.UiAction payload,
+                            ServerPlayNetworking.Context context) {
+        ServerPlayer player = context.player();
+        if (player == null || player.containerMenu == null) {
+            return;
+        }
+        if (player.containerMenu instanceof cn.dreamgary.hubsuite.rod.AssemblyMenu menu
+                && cn.dreamgary.hubsuite.rod.AssemblyMenu.ID.toString().equals(payload.menu())) {
+            menu.applyFromButton();
+        }
     }
 
     private void onAck(HandshakePayloads.HelloAck payload, ServerPlayNetworking.Context context) {

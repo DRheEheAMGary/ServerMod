@@ -45,7 +45,13 @@ public abstract class AnvilRodUpgradeMixin {
     @Shadow
     private int repairItemCountCost;
 
-    @Inject(method = "createResult", at = @At("TAIL"))
+    /*
+     * **必须是 RETURN，不能是 TAIL**（用户实测"铁砧升级无效"的根因）：
+     * AnvilMenu.createResult 里有 **5 个 RETURN**（竿+钻石这种"原版没有的组合"走的是
+     * **早期返回**），TAIL 只挂在最后一个 return 上 —— 那条路径根本执行不到我们的注入。
+     * RETURN 会在每个 return 前都跑一遍，反正我们只在"算得出结果"时才覆盖。
+     */
+    @Inject(method = "createResult", at = @At("RETURN"))
     private void hubsuite$rodUpgrade(CallbackInfo ci) {
         try {
             AnvilMenu self = (AnvilMenu) (Object) this;

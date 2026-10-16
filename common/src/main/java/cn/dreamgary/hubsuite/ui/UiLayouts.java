@@ -21,14 +21,25 @@ public final class UiLayouts {
      */
     public static final UiLayout ASSEMBLY = new UiLayout(
             Identifier.fromNamespaceAndPath("hubsuite", "assembly"),
-            176, 166, "钓竿装配台",
+            176, 186, "钓竿装配台",
             List.of(
                     new UiLayout.SlotFrame(0, 22, 20, "钓竿"),
-                    new UiLayout.SlotFrame(1, 74, 44, "杆"),
-                    new UiLayout.SlotFrame(2, 132, 24, "线"),
-                    new UiLayout.SlotFrame(3, 120, 62, "钩")),
+                    // 1/2/3 是**钉在竿的部件上**的（坐标按预览竿的斜线算出来的，见 Preview 注释）
+                    new UiLayout.SlotFrame(1, 84, 30, "杆"),
+                    new UiLayout.SlotFrame(2, 98, 16, "线"),
+                    new UiLayout.SlotFrame(3, 67, 47, "钩"),
+                    // 成品格：钩（最后一个输入）正下方
+                    new UiLayout.SlotFrame(4, 67, 68, "成品")),
             "背包",
-            new UiLayout.Preview(0, 62, 18, 3.0F));
+            /*
+             * 活预览（用户定的稿）：
+             * - 竿画大（5 倍）且**顶端超出面板**，但由界面按面板边框**裁剪**（不糊到外面去）；
+             * - 1/2/3 号槽的坐标就是照这条 80x80 的斜线钉的：
+             *   斜线从 (px+0.15W, py+0.85H) 到 (px+0.85W, py+0.15H)，
+             *   t=0.70 -> 线、(0.45) -> 杆、t=0.15 -> 钩（中心减 9 得槽左上角）。
+             */
+            new UiLayout.Preview(0, 56, -4, 5.0F),
+            List.of());
 
     /** 菜单类型 id → 布局。 */
     private static final Map<Identifier, UiLayout> BY_MENU = new LinkedHashMap<>();

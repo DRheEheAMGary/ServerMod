@@ -21,10 +21,21 @@ public record UiLayout(
         String title,
         List<SlotFrame> frames,
         String playerInventoryHint,
-        Preview preview) {
+        Preview preview,
+        List<Button> buttons) {
+
+    /** 兼容旧构造（没有按钮的台子）。 */
+    public UiLayout(Identifier id, int width, int height, String title,
+                    List<SlotFrame> frames, String playerInventoryHint, Preview preview) {
+        this(id, width, height, title, frames, playerInventoryHint, preview, List.of());
+    }
 
     /** 一个语义格：菜单里的槽位序号 + 面板内坐标 + 格子旁边的提示文字。 */
     public record SlotFrame(int slotIndex, int x, int y, String hint) {
+    }
+
+    /** 面板里的一个按钮：点了客户端会给服务端发 {@code UiActionPayload}（action = {@link #action()}）。 */
+    public record Button(String action, int x, int y, int width, int height, String label) {
     }
 
     /**

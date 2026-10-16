@@ -20,7 +20,11 @@ public final class ClientRodTooltip {
         ItemTooltipCallback.EVENT.register((stack, context, flag, lines) -> {
             RodData data = RodData.of(stack);
             if (data == null) {
-                return;   // 不是我们的竿 → 原版 tooltip 一个字都不动
+                // 新竿还没写过数据：只要是钓竿就按默认木竿显示（用户实测：拿到手不显示信息）
+                if (!stack.is(net.minecraft.world.item.Items.FISHING_ROD)) {
+                    return;   // 真不是我们的竿 → 原版 tooltip 一个字都不动
+                }
+                data = cn.dreamgary.hubsuite.rod.RodData.defaults();
             }
             lines.addAll(RodTooltip.summary(data));
             if (net.minecraft.client.Minecraft.getInstance().options.keyShift.isDown()) {

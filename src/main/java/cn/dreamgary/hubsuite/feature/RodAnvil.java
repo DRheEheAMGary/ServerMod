@@ -42,9 +42,12 @@ public final class RodAnvil {
         if (left == null || right == null || left.isEmpty() || right.isEmpty()) {
             return Outcome.EMPTY;
         }
+        if (!left.is(net.minecraft.world.item.Items.FISHING_ROD)) {
+            return Outcome.EMPTY;   // 不是钓竿 → 原版铁砧逻辑照旧
+        }
         RodData data = RodData.of(left);
         if (data == null) {
-            return Outcome.EMPTY;   // 不是我们的竿 → 原版铁砧逻辑照旧
+            data = RodData.defaults();   // 新竿还没数据 → 按默认木竿对待（用户实测：无数据时升级无效）
         }
         String upgrade = RodMaterials.matchUpgrade(right);
         if (upgrade == null) {

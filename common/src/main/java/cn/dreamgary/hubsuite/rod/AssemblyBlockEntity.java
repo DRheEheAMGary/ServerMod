@@ -18,7 +18,11 @@ import net.minecraft.world.level.block.state.BlockState;
  */
 public class AssemblyBlockEntity extends BlockEntity implements Container {
 
-    public static final int SIZE = 4;
+    /** 0-3 = 输入（竿 / 杆 / 线 / 钩），4 = 成品格（**派生**，不落盘也不掉落）。 */
+    public static final int SIZE = 5;
+
+    /** 输入格数量（成品格之前）。 */
+    public static final int INPUT_SIZE = 4;
 
     private final NonNullList<ItemStack> items = NonNullList.withSize(SIZE, ItemStack.EMPTY);
 

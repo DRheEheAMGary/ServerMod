@@ -38,7 +38,15 @@ public final class AssemblyTable {
                             }
                             context.getSource().sendFailure(Component.literal("该命令只能由玩家执行。"));
                             return 0;
-                        })));
+                        })
+                        .then(Commands.literal("demo").executes(context -> {
+                            if (context.getSource().getPlayer() instanceof ServerPlayer player) {
+                                open(player, demoParts());
+                                return 1;
+                            }
+                            context.getSource().sendFailure(Component.literal("该命令只能由玩家执行。"));
+                            return 0;
+                        }))));
         HubSuite.logger().info("装配台菜单已注册（暂时用 /rod 打开，0.6 换成方块）");
     }
 
@@ -46,5 +54,24 @@ public final class AssemblyTable {
         player.openMenu(new SimpleMenuProvider(
                 (containerId, inventory, p) -> new AssemblyMenu(containerId, inventory),
                 Component.literal("钓竿装配台")));
+    }
+
+    /** 开发用（{@code /rod demo}）：预填一根竿 + 线 + 钩，方便肉眼核对槽位有没有钉在竿上。 */
+    public static void open(ServerPlayer player, net.minecraft.world.Container parts) {
+        player.openMenu(new SimpleMenuProvider(
+                (containerId, inventory, p) -> new AssemblyMenu(containerId, inventory, parts),
+                Component.literal("钓竿装配台（演示）")));
+    }
+
+    private static net.minecraft.world.Container demoParts() {
+        var parts = new net.minecraft.world.SimpleContainer(AssemblyBlockEntity.SIZE);
+        var rod = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);
+        cn.dreamgary.hubsuite.rod.RodData.defaults().writeTo(rod);
+        parts.setItem(AssemblyMenu.SLOT_ROD, rod);
+        parts.setItem(AssemblyMenu.SLOT_LINE,
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.STRING));
+        parts.setItem(AssemblyMenu.SLOT_HOOK,
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OBSIDIAN));
+        return parts;
     }
 }
