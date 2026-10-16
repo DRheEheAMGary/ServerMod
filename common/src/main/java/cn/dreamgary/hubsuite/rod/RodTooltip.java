@@ -81,14 +81,24 @@ public final class RodTooltip {
         lines.add(Component.literal(C_LINE + "▍线 " + cLine + lineLabel(line.id())
                 + " " + DARK + "(" + line.item() + ")"));
         lines.add(stat(cLine, "断线", permille(line.breakPermille())));
-        lines.add(stat(cLine, "速度", "×" + tenths(line.speedMul())));
+        if (!neutral(line.speedMul())) {
+            lines.add(stat(cLine, "速度", "×" + tenths(line.speedMul())));
+        }
 
         String cHook = color(hook.id());
         lines.add(Component.literal(C_HOOK + "▍钩 " + cHook + hookLabel(hook.id())
                 + " " + DARK + "(" + hook.item() + ")"));
-        lines.add(stat(cHook, "速度", "×" + tenths(hook.speedMul())));
+        boolean hookAny = false;
+        if (!neutral(hook.speedMul())) {
+            lines.add(stat(cHook, "速度", "×" + tenths(hook.speedMul())));
+            hookAny = true;
+        }
         if (hook.lava()) {
             lines.add(Component.literal("   \u00A76耐高温"));
+            hookAny = true;
+        }
+        if (!hookAny) {
+            lines.add(noStats());
         }
 
         if (!hasUpgrade(upgrade)) {
@@ -98,12 +108,27 @@ public final class RodTooltip {
             String cUp = color(upgrade.id());
             lines.add(Component.literal(C_UPGRADE + "▍升级 " + cUp + upgradeLabel(upgrade.id())
                     + " " + DARK + "(" + upgrade.item() + ")"));
-            lines.add(stat(cUp, "耐久", "×" + tenths(upgrade.durabilityMul()) + add(upgrade.durabilityAdd())));
-            lines.add(stat(cUp, "速度", "×" + tenths(upgrade.speedMul())));
-            lines.add(stat(cUp, "幸运", "×" + tenths(upgrade.luckMul()) + add(upgrade.luckAdd())));
+            boolean upgradeAny = false;
+            if (!neutral(upgrade.durabilityMul()) || upgrade.durabilityAdd() != 0) {
+                lines.add(stat(cUp, "耐久", "×" + tenths(upgrade.durabilityMul())
+                        + add(upgrade.durabilityAdd())));
+                upgradeAny = true;
+            }
+            if (!neutral(upgrade.speedMul())) {
+                lines.add(stat(cUp, "速度", "×" + tenths(upgrade.speedMul())));
+                upgradeAny = true;
+            }
+            if (!neutral(upgrade.luckMul()) || upgrade.luckAdd() != 0) {
+                lines.add(stat(cUp, "幸运", "×" + tenths(upgrade.luckMul()) + add(upgrade.luckAdd())));
+                upgradeAny = true;
+            }
             if (upgrade.boostsEnchant()) {
                 // 用户定的：青金石只提示"附魔++"，不展开细节
                 lines.add(Component.literal("   \u00A7b附魔++"));
+                upgradeAny = true;
+            }
+            if (!upgradeAny) {
+                lines.add(noStats());
             }
         }
         return lines;
@@ -138,6 +163,16 @@ public final class RodTooltip {
             case "redstone" -> "\u00A7c";
             default -> "\u00A7f";
         };
+    }
+
+    /** 乘数是不是中性（×1.0）—— 中性项按用户要求**不显示**。 */
+    private static boolean neutral(int mul) {
+        return mul == 10;
+    }
+
+    /** 这一段真的一点效果都没有（匠魂那种 "No stats"）。 */
+    private static Component noStats() {
+        return Component.literal("   " + DARK + "无属性");
     }
 
     private static boolean hasUpgrade(RodMaterials.Upgrade upgrade) {

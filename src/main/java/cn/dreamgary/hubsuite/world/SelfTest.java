@@ -2669,6 +2669,12 @@ public final class SelfTest {
         // 没有升级时也要有一行（告诉玩家去哪打升级）
         expectBool(wrong, "无升级时明细里也有升级段", true,
                 join(cn.dreamgary.hubsuite.rod.RodTooltip.details(plain)).contains("升级"));
+        expectBool(wrong, "中性项隐藏：普通线钩不显示速度行", false,
+                join(cn.dreamgary.hubsuite.rod.RodTooltip.details(plain)).contains("速度: ×1.0"));
+        expectBool(wrong, "整段没效果时写「无属性」（普通线钩）", true,
+                join(cn.dreamgary.hubsuite.rod.RodTooltip.details(plain)).contains("无属性"));
+        expectBool(wrong, "有变化的项照样显示（钻石升级速度 ×1.5）", true,
+                join(cn.dreamgary.hubsuite.rod.RodTooltip.details(full)).contains("×1.5"));
         expectBool(wrong, "总体里没升级时标明是「无」", true,
                 join(cn.dreamgary.hubsuite.rod.RodTooltip.summary(plain)).contains("无"));
 
