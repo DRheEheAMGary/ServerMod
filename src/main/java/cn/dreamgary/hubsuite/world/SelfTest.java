@@ -1725,8 +1725,9 @@ public final class SelfTest {
         var clients = HubSuite.clients();
         if (clients == null) {
             fail("客户端校验没有初始化（HubSuite.clients() 为 null）");
-        } else if (clients.knownCount() != 0 || clients.waitingCount() != 0) {
-            fail("有假人被卷进了客户端校验（已通过 " + clients.knownCount() + " / 等待中 " + clients.waitingCount()
+        } else if (hasFakeInClientCheck(clients)) {
+            fail("有假人被卷进了客户端校验（假人 " + countFakeInClientCheck(clients) + " 个；已通过 "
+                    + clients.knownCount() + " / 等待中 " + clients.waitingCount()
                     + "）—— 假人没有网络连接，必须豁免（否则会被反复发消息甚至断开）");
         } else {
             ok("假人已豁免：自检跑了 20+ 个假人，客户端校验里一个都没进（模式 " + clients.mode() + "）");
@@ -2314,6 +2315,34 @@ public final class SelfTest {
      * 以及**原版累计惩罚**：产物的 REPAIR_COST 记一笔、花费跟着涨。
      * 另外确认"不是我们的组合"一律返回空 —— 原版的合并 / 命名 / 附魔不能被我们吃掉。
      */
+    /*
+     * 客户端校验表里**有几个假人**。
+     *
+     * 注意：不能要求"表里一个人都没有" —— 自检常常在真客户端连着（开发联调）时跑，
+     * 那时 known 里有一个真客户端是完全正常的。这个假设是连了客户端才暴露出来的
+     * （之前一直没人连，所以一直是绿的）。
+     */
+    private int countFakeInClientCheck(cn.dreamgary.hubsuite.net.ClientCompat clients) {
+        int n = 0;
+        for (java.util.UUID id : clients.knownIds()) {
+            if (server.getPlayerList().getPlayer(id)
+                    instanceof cn.dreamgary.hubsuite.fake.MarkedFakePlayer) {
+                n++;
+            }
+        }
+        for (java.util.UUID id : clients.waitingIds()) {
+            if (server.getPlayerList().getPlayer(id)
+                    instanceof cn.dreamgary.hubsuite.fake.MarkedFakePlayer) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    private boolean hasFakeInClientCheck(cn.dreamgary.hubsuite.net.ClientCompat clients) {
+        return countFakeInClientCheck(clients) > 0;
+    }
+
     private void checkRodAnvil() {
         List<String> wrong = new ArrayList<>();
         var rod = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FISHING_ROD);

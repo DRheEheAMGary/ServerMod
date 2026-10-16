@@ -223,6 +223,16 @@ public final class ClientCompat {
         return known.size();
     }
 
+    /** 自检用：已通过校验的玩家 UUID（真客户端正常；假人不该出现在里面）。 */
+    public java.util.Set<UUID> knownIds() {
+        return java.util.Set.copyOf(known.keySet());
+    }
+
+    /** 自检用：还在等应答的玩家 UUID。 */
+    public java.util.Set<UUID> waitingIds() {
+        return java.util.Set.copyOf(waiting.keySet());
+    }
+
     public int waitingCount() {
         return waiting.size();
     }
