@@ -1,6 +1,5 @@
 package cn.dreamgary.hubsuite.integration;
 
-import eu.pb4.polymer.core.api.item.PolymerItem;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
@@ -77,12 +76,10 @@ public final class JeiIntegration {
     }
 
     /**
-     * 我们的配方里有没有引用<b>没实现 {@link PolymerItem}</b> 的自定义物品。
-     *
-     * <p>那种物品在发包时不会被换成原版物品，原版客户端的配方管理器会
-     * 把整条配方静默丢掉（JEI 里也就看不到）。返回违规描述，空表 = 全部可见。
+     * 我们的配方里引用的 hubsuite 物品，在客户端都注册了吗（配方同步的前提）。
+     * 0.6 收尾起客户端强制安装，两端注册表一致，这里只查"引用了不存在的物品"这种配置错误。
      */
-    public static List<String> recipesWithInvisibleItems(MinecraftServer server) {
+    public static List<String> recipesWithUnknownItems(MinecraftServer server) {
         List<String> bad = new ArrayList<>();
         for (var holder : server.getRecipeManager().getRecipes()) {
             var id = holder.id().identifier();
@@ -93,9 +90,8 @@ public final class JeiIntegration {
                 ingredient.items().forEach(h -> {
                     Item item = h.value();
                     if ("hubsuite".equals(BuiltInRegistries.ITEM.getKey(item).getNamespace())
-                            && !(item instanceof PolymerItem)) {
-                        bad.add(id + " 的原料 " + BuiltInRegistries.ITEM.getKey(item)
-                                + " 不是 PolymerItem，原版客户端/JEI 看不到这条配方");
+                            && BuiltInRegistries.ITEM.getKey(item) == null) {
+                        bad.add(id + " 引用了未注册的物品 " + BuiltInRegistries.ITEM.getKey(item));
                     }
                 });
             }

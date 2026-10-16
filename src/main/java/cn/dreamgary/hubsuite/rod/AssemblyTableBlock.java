@@ -15,23 +15,20 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 
 /**
- * 装配台方块（服务端；0.5.0 时只有菜单与界面，用 {@code /rod} 打开）。
+ * 装配台方块（服务端）。
  *
- * <p><b>按玩家映射</b>：装了客户端模组的玩家看到真方块；其余客户端看到原版**锻造台**
- * （挑它是因为没有方块实体、没有红石行为）。和自定义物品映射成 {@code trial_key} 同一个思路 ——
- * 没装客户端的玩家不会看到"未知方块"。
+ * <p>0.6 收尾起 <b>Polymer 已下线、客户端强制安装</b>：所有玩家都看到真方块，
+ * 注册表同步会把两端 id 对齐；没装客户端的玩家会在注册表同步阶段被 Fabric 直接断开。
  *
- * <p>客户端侧只注册同 id、同属性的**普通方块**与物品（见 {@code ClientMenuTypes}）。
+ * <p>客户端侧注册同 id、同属性的**普通方块**与物品（见 {@code ClientMenuTypes}）。
  */
-public class AssemblyTableBlock extends BaseEntityBlock
-        implements eu.pb4.polymer.core.api.block.PolymerBlock {
+public class AssemblyTableBlock extends BaseEntityBlock {
 
     public static AssemblyTableBlock BLOCK;
     public static Item ITEM;
@@ -51,14 +48,6 @@ public class AssemblyTableBlock extends BaseEntityBlock
                 new BlockItem(BLOCK, AssemblyTableIds.itemProperties()));
         // 方块实体类型两端都要注册（Fabric 的注册表同步会因为客户端缺条目直接断开）
         AssemblyBlockEntities.register(BLOCK);
-    }
-
-    @Override
-    public BlockState getPolymerBlockState(BlockState state,
-                                           net.fabricmc.fabric.api.networking.v1.context.PacketContext context) {
-        return cn.dreamgary.hubsuite.net.ClientCompat.useRealItems(context)
-                ? state
-                : Blocks.SMITHING_TABLE.defaultBlockState();
     }
 
     @Override

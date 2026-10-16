@@ -39,16 +39,10 @@ dependencies {
 	// ------------------------------------------------------------------
 	compileOnly "net.william278.huskhomes:huskhomes-fabric:${project.huskhomes_version}"
 	compileOnly "eu.pb4:placeholder-api:${project.placeholder_api_version}"
-	// 硬依赖（不是软依赖）：自定义物品必须走 Polymer 才能让原版客户端看到
-	compileOnly "eu.pb4:polymer-core:${project.polymer_version}"
-	// 资源包下发（Polymer 的 resource-pack 模块；运行期由 polymer-bundled 提供）
-	compileOnly "eu.pb4:polymer-resource-pack:${project.polymer_version}"
+	// 0.6 收尾：Polymer 已下线（客户端强制安装，注册表同步直接对齐两端 id）
 	compileOnly "net.luckperms:api:${project.luckperms_api_version}"
 
-	// 开发运行期把 Polymer 放进 dev 运行时 —— 正式服由使用者自己把
-	// polymer-bundled-<版本>.jar 放进 mods/（fabric.mod.json 里是硬依赖）。
-	// 不加这一行，runServer 会因为缺依赖直接不加载本模组。
-	runtimeOnly "eu.pb4:polymer-bundled:${project.polymer_version}"
+	// Polymer 已下线：客户端强制安装，不再需要任何 Polymer 依赖
 }
 
 processResources {

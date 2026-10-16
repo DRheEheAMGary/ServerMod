@@ -192,7 +192,7 @@ public final class SelfTest {
     /**
      * 自定义物品 + 岩浆渔获 + 配方。
      *
-     * <p>锁三件事：Polymer 物品注册上了、岩浆表按群系分化了、配方真的加载了
+     * <p>锁三件事：自定义物品注册上了、岩浆表按群系分化了、配方真的加载了
      * （JSON 写错不会崩，只会静默没有这条配方 —— 必须主动查）。
      */
     private void checkCustomItemsAndFishing() {
@@ -216,7 +216,7 @@ public final class SelfTest {
                 fail("这些自定义物品没注册上：" + missing.toString().trim());
                 return;
             }
-            ok(items.size() + " 个自定义物品都注册上了（客户端显示由 Polymer 负责）");
+            ok(items.size() + " 个自定义物品都注册上了（0.6 收尾起 Polymer 已下线，客户端强制安装直接发真物品）");
 
             /*
              * 钓饵判定现在是**数据驱动**的（v0.4.0-alpha.7 起自带的钓饵全部移除）：
@@ -317,14 +317,6 @@ public final class SelfTest {
                     "配方解锁 advancement 齐全（" + recipes.length + " 条，配方书里能看到）",
                     "这些配方没有 advancement，玩家在配方书里看不到：" + missingAdv.toString().trim());
 
-            // Polymer 硬依赖：自定义物品必须实现 PolymerItem，原版客户端才认这个 id
-            boolean polymerOk = true;
-            for (var item : items.values()) {
-                polymerOk &= item instanceof eu.pb4.polymer.core.api.item.PolymerItem;
-            }
-            okOrFail(polymerOk,
-                    "自定义物品全部实现了 PolymerItem（原版客户端可识别）",
-                    "有自定义物品没实现 PolymerItem —— 客户端不会认这个物品 id");
 
             // 客户端资源包格式号（服主做自定义外观的资源包时要用）
             try {
@@ -897,9 +889,7 @@ public final class SelfTest {
             // 4) 模型只看"空 / 有饵"：装了**任何**饵（含混装）都是 ..._bait
             var emptyBucket = new net.minecraft.world.item.ItemStack(
                     cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET);
-            var bucketItem = (cn.dreamgary.hubsuite.feature.item.BaitBucketItem)
-                    cn.dreamgary.hubsuite.feature.item.HubSuiteItems.WOODEN_FISHING_BUCKET;
-            String mEmpty = String.valueOf(bucketItem.getPolymerItemModel(emptyBucket, null, null));
+            String mEmpty = String.valueOf(emptyBucket.get(net.minecraft.core.component.DataComponents.ITEM_MODEL));
             if (!"hubsuite:wooden_fishing_bucket".equals(mEmpty)) {
                 fail("空桶模型应为 hubsuite:wooden_fishing_bucket，实际 " + mEmpty);
                 return;
@@ -907,7 +897,7 @@ public final class SelfTest {
             cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                     emptyBucket, new net.minecraft.world.item.ItemStack(
                             net.minecraft.world.item.Items.COD, 1), 1);
-            String mBait = String.valueOf(bucketItem.getPolymerItemModel(emptyBucket, null, null));
+            String mBait = String.valueOf(emptyBucket.get(net.minecraft.core.component.DataComponents.ITEM_MODEL));
             if (!"hubsuite:wooden_fishing_bucket_bait".equals(mBait)) {
                 fail("装了普通钓饵的木桶模型应为 ..._bait，实际 " + mBait);
                 return;
@@ -917,7 +907,7 @@ public final class SelfTest {
             cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                     netherBucket, new net.minecraft.world.item.ItemStack(
                             net.minecraft.world.item.Items.MAGMA_CREAM, 1), 1);
-            String mNether = String.valueOf(bucketItem.getPolymerItemModel(netherBucket, null, null));
+            String mNether = String.valueOf(netherBucket.get(net.minecraft.core.component.DataComponents.ITEM_MODEL));
             if (!"hubsuite:wooden_fishing_bucket_bait".equals(mNether)) {
                 fail("装了岩浆族饵的木桶模型也应为 ..._bait（不按饵种类分），实际 " + mNether);
                 return;
@@ -930,7 +920,7 @@ public final class SelfTest {
             cn.dreamgary.hubsuite.feature.item.BaitBucketItem.insert(
                     mixedBucket, new net.minecraft.world.item.ItemStack(
                             net.minecraft.world.item.Items.MAGMA_CREAM, 1), 1);
-            String mMixed = String.valueOf(bucketItem.getPolymerItemModel(mixedBucket, null, null));
+            String mMixed = String.valueOf(mixedBucket.get(net.minecraft.core.component.DataComponents.ITEM_MODEL));
             if (!"hubsuite:wooden_fishing_bucket_bait".equals(mMixed)) {
                 fail("混装的木桶模型也应为 ..._bait，实际 " + mMixed);
                 return;
@@ -2068,19 +2058,16 @@ public final class SelfTest {
             fail("物品素材缺失：" + String.join("；", missing) + " —— 游戏里会显示成紫黑格");
         }
 
-        // --- 4) 每个物品都还实现了 PolymerItem（原版客户端那条路不能断）---
-        List<String> notPolymer = new ArrayList<>();
+        // --- 4) 客户端 / 服务端注册表一致性（Polymer 下线后靠 Fabric 同步对齐，前提就是两端都注册）---
+        int both = 0;
         for (var def : cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL) {
-            var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(def.id());
-            if (!(item instanceof eu.pb4.polymer.core.api.item.PolymerItem)) {
-                notPolymer.add(def.path());
+            if (net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(def.id()) != null) {
+                both++;
             }
         }
-        if (notPolymer.isEmpty()) {
-            ok("5 个物品都实现了 PolymerItem：没装客户端的玩家照旧看到原版映射，两条路并存");
-        } else {
-            fail("这些物品不再走 Polymer，原版客户端会看到未知物品：" + String.join("、", notPolymer));
-        }
+        okOrFail(both == cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL.size(),
+                "全部 " + both + " 个物品已按共用定义注册（Polymer 已下线，客户端强制安装，注册表同步负责对齐 id）",
+                "有物品没按共用定义注册：" + both + "/" + cn.dreamgary.hubsuite.item.HubSuiteItemDefs.ALL.size());
 
         // --- 5) 渔桶的模型提示：装了饵 → _bait，掏空 → 变回来 ---
         var bucket = new net.minecraft.world.item.ItemStack(
@@ -2194,9 +2181,6 @@ public final class SelfTest {
         if (cn.dreamgary.hubsuite.rod.AssemblyBlockEntities.TYPE == null) {
             wrong.add("方块实体类型没注册");
         }
-        if (block != null && !(block instanceof eu.pb4.polymer.core.api.block.PolymerBlock)) {
-            wrong.add("方块没有实现 PolymerBlock（没装客户端的玩家会看到未知方块）");
-        }
 
         // 素材三件套 + 掉落表（服务端 jar 里查 classpath / 数据包）
         for (String path : List.of(
@@ -2215,7 +2199,7 @@ public final class SelfTest {
         }
 
         if (wrong.isEmpty()) {
-            ok("装配台方块就绪：方块 + 物品 + 方块实体都注册了，实现了 PolymerBlock（原版客户端看锻造台），"
+            ok("装配台方块就绪：方块 + 物品 + 方块实体都注册了（Polymer 已下线，客户端强制安装），"
                     + "模型/贴图/物品定义 5 个素材齐全，配方与掉落表也在");
         } else {
             fail("装配台方块有问题：" + String.join("；", wrong));
@@ -2953,11 +2937,11 @@ public final class SelfTest {
             } else {
                 ok("自定义配方全是原版类型，客户端 JEI 的配方转移可直接处理");
             }
-            var invisible = cn.dreamgary.hubsuite.integration.JeiIntegration.recipesWithInvisibleItems(server);
-            if (!invisible.isEmpty()) {
-                fail("配方里引用了原版客户端看不到的物品：" + invisible);
+            var unknown = cn.dreamgary.hubsuite.integration.JeiIntegration.recipesWithUnknownItems(server);
+            if (!unknown.isEmpty()) {
+                fail("配方引用了未注册的物品：" + unknown);
             } else {
-                ok("配方里的自定义物品全是 PolymerItem，原版客户端 / JEI 都能看到配方");
+                ok("配方引用的自定义物品全部已注册（客户端强制安装，JEI 里都能看到）");
             }
         }
     }

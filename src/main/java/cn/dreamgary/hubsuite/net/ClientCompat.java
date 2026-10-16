@@ -226,34 +226,6 @@ public final class ClientCompat {
         return sb.toString();
     }
 
-    /**
-     * 这一份数据是发给"装了客户端模组且支持真物品"的玩家吗？
-     *
-     * <p>给 Polymer 的 per-player 分支用（见 {@code HubSuiteSimpleItem}）：
-     * 支持 → 发真物品；否则 → 保持原版映射。判定不了（拿不到玩家）时一律返回 false，
-     * 也就是**保守地退回原版映射** —— 宁可少显示，不能发一个客户端不认识的 id。
-     */
-    public static boolean useRealItems(net.fabricmc.fabric.api.networking.v1.context.PacketContext context) {
-        ServerPlayer player = playerOf(context);
-        if (player == null) {
-            return false;
-        }
-        ClientCompat compat = HubSuite.clients();
-        return compat != null && compat.supports(player, HandshakePayloads.CAP_REAL_ITEMS);
-    }
-
-    private static ServerPlayer playerOf(net.fabricmc.fabric.api.networking.v1.context.PacketContext context) {
-        if (context == null) {
-            return null;
-        }
-        MinecraftServer server = context.orElse(net.fabricmc.fabric.api.networking.v1.context.PacketContext.SERVER_INSTANCE, null);
-        com.mojang.authlib.GameProfile profile =
-                context.orElse(net.fabricmc.fabric.api.networking.v1.context.PacketContext.GAME_PROFILE, null);
-        if (server == null || profile == null) {
-            return null;
-        }
-        return server.getPlayerList().getPlayer(profile.id());
-    }
 
     private static boolean isFake(ServerPlayer player) {
         return player instanceof cn.dreamgary.hubsuite.fake.MarkedFakePlayer;

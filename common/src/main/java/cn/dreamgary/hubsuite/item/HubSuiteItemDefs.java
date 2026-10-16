@@ -18,8 +18,8 @@ import net.minecraft.world.item.Rarity;
  * 显示的就会跟服务端不是同一个东西。所以两端的 {@code Item.Properties}
  * 必须来自同一份定义 —— 这份定义就放在 {@code common/}，两个 jar 各编译一份。
  *
- * <p>服务端在此之上用 Polymer 的子类（原版客户端映射成 {@code minecraft:trial_key}）；
- * 客户端注册成普通 {@code Item}（自己渲染真物品）。
+ * <p>0.6 收尾起 Polymer 已下线：两端都注册成普通 {@code Item}，客户端用自己的素材渲染真物品。
+ * （历史：0.4~0.5 服务端曾用 Polymer 子类映射给原版客户端。）
  */
 public final class HubSuiteItemDefs {
 

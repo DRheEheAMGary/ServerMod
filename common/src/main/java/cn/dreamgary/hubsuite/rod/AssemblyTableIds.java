@@ -11,11 +11,9 @@ import net.minecraft.world.level.block.Block;
 /**
  * 装配台的 id 与属性（两端**必须一致**）。
  *
- * <p>为什么只放 id 和属性、不放方块类：方块类要用 Polymer（服务端专属依赖），
- * 而 {@code common/} 的代码会被编进客户端 jar —— 客户端拿不到 Polymer。
- * 所以服务端的方块是 {@code BaseEntityBlock + PolymerBlock}，客户端注册一个
- * **同 id、同属性的普通方块**（客户端只需要能渲染它）。方块与物品一样不参与网络同步，
- * 两端各注册一份；方块状态的 id 由 Fabric 的注册表同步对齐。
+ * <p>为什么只放 id 和属性、不放方块类：客户端那份是**普通方块**（只需要能渲染），
+ * 服务端那份是 {@code BaseEntityBlock}（带方块实体行为），两个类不能共用一份源码 ——
+ * 但 id 与属性必须一致。两端各注册一份；注册表条目的对齐交给 Fabric 的注册表同步。
  */
 public final class AssemblyTableIds {
 

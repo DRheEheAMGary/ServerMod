@@ -1,8 +1,6 @@
 package cn.dreamgary.hubsuite.feature.item;
 
 import cn.dreamgary.hubsuite.feature.FishingBait;
-import eu.pb4.polymer.core.api.item.SimplePolymerItem;
-import net.fabricmc.fabric.api.networking.v1.context.PacketContext;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -42,10 +40,10 @@ import java.util.Map;
  * <p>内容物存在原版的 {@code CUSTOM_DATA} 组件里（存档 / 背包同步都安全）：
  * {@code hubsuite_baits} = { 物品id: 个数 }，{@code hubsuite_order} = 逗号分隔的
  * 物品 id（**旧 → 新**，末尾 = 栈顶）。**0.x 阶段不做旧数据兼容**（改格式就是改格式）。
- * 客户端看到的仍是 Polymer 换出来的"试炼钥匙 + 模型"，
+ * 空 / 有饵由 {@code item_model} 组件区分（{@link #refreshModel}），
  * 内容物通过 {@link #modifyClientTooltip} 展示。
  */
-public class BaitBucketItem extends SimplePolymerItem {
+public class BaitBucketItem extends net.minecraft.world.item.Item {
 
     /** 新格式：{@code hubsuite_baits} = { 物品id: 个数 }（可以混装）。 */
     private static final String TAG_BAITS = "hubsuite_baits";
@@ -57,16 +55,8 @@ public class BaitBucketItem extends SimplePolymerItem {
     private final int capacity;
 
     public BaitBucketItem(Item.Properties properties, int capacity) {
-        super(properties, Items.TRIAL_KEY, true);
+        super(properties);
         this.capacity = capacity;
-    }
-
-    @Override
-    public Item getPolymerItem(ItemStack stack, PacketContext context) {
-        // 同上：装了客户端模组的玩家拿到真物品（空桶 / 有饵由 item_model 组件区分）
-        return cn.dreamgary.hubsuite.net.ClientCompat.useRealItems(context)
-                ? this
-                : super.getPolymerItem(stack, context);
     }
 
     /**
@@ -447,32 +437,35 @@ public class BaitBucketItem extends SimplePolymerItem {
 
     /** 客户端 tooltip：总量 + 内容物明细（最多列 3 种）。 */
     @Override
-    public void modifyClientTooltip(List<Component> tooltip, ItemStack stack, PacketContext context) {
+    public void appendHoverText(ItemStack stack, net.minecraft.world.item.Item.TooltipContext context,
+                                net.minecraft.world.item.component.TooltipDisplay display,
+                                java.util.function.Consumer<Component> tooltip,
+                                net.minecraft.world.item.TooltipFlag flag) {
         Map<Item, Integer> contents = contents(stack);
         if (contents.isEmpty()) {
-            tooltip.add(Component.literal("空的 —— 把钓饵点到桶上装入，右键空格子取出")
+            tooltip.accept(Component.literal("空的 —— 把钓饵点到桶上装入，右键空格子取出")
                     .withStyle(ChatFormatting.DARK_GRAY));
             return;
         }
-        tooltip.add(Component.literal("内容物 " + containedCount(stack) + " / " + capacity)
+        tooltip.accept(Component.literal("内容物 " + containedCount(stack) + " / " + capacity)
                 .withStyle(ChatFormatting.GRAY));
         Item top = containedBait(stack);
         if (top != null) {
-            tooltip.add(Component.literal("栈顶（下一个消耗）：")
+            tooltip.accept(Component.literal("栈顶（下一个消耗）：")
                     .append(Component.translatable(top.getDescriptionId()))
                     .append(Component.literal(" × " + countOf(stack, top)))
                     .withStyle(ChatFormatting.GRAY));
         }
-        tooltip.add(Component.literal("左键点=全装 · 右键点=装一个 · 右键空格子=取一组")
+        tooltip.accept(Component.literal("左键点=全装 · 右键点=装一个 · 右键空格子=取一组")
                 .withStyle(ChatFormatting.DARK_GRAY));
         int lines = 0;
         for (Map.Entry<Item, Integer> e : contents.entrySet()) {
             if (lines++ >= 3) {
-                tooltip.add(Component.literal("  …还有 " + (contents.size() - 3) + " 种")
+                tooltip.accept(Component.literal("  …还有 " + (contents.size() - 3) + " 种")
                         .withStyle(ChatFormatting.DARK_GRAY));
                 break;
             }
-            tooltip.add(Component.literal(" · ").append(Component.translatable(e.getKey().getDescriptionId()))
+            tooltip.accept(Component.literal(" · ").append(Component.translatable(e.getKey().getDescriptionId()))
                     .append(Component.literal(" × " + e.getValue()))
                     .withStyle(ChatFormatting.GRAY));
         }

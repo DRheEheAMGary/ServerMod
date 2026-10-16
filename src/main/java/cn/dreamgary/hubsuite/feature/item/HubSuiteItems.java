@@ -15,16 +15,9 @@ import net.minecraft.world.item.Rarity;
 /**
  * 本模组的自定义物品（v0.4.0 起）。
  *
- * <p><b>为什么必须依赖 Polymer：</b>{@code item} 注册表**不在** Minecraft
- * 的网络同步清单里（{@code RegistryDataLoader.SYNCHRONIZED_REGISTRIES}），
- * 原版客户端不认识我们自己注册的物品 id。Polymer 负责在发往客户端的包里
- * 把我们的物品换成**原版物品**（{@code getPolymerItem} → {@code trial_key}），
- * 再用 {@code item_model} 组件指到我们资源包里的模型 —— 于是客户端看到的是
- * "一个长得像地狱线的试炼钥匙"，而服务端持有的是**真正独立 id 的物品**，
- * 配方、统计、NBT 全都正常。
- *
- * <p>显示物品一律用 {@code minecraft:trial_key}：它在生存里少见，不会和
- * 正常玩法里的物品混淆；具体外观由资源包的 {@code hubsuite:item/<id>} 决定。
+ * <p>0.6 收尾起 <b>Polymer 已下线、客户端强制安装</b>：所有玩家都拿到真物品，
+ * 客户端用自己的模型渲染；没装客户端的玩家在注册表同步阶段就会被 Fabric 断开。
+ * （历史：0.4~0.5 曾用 Polymer 把物品映射成 {@code trial_key} 给原版客户端看。）
  */
 public final class HubSuiteItems {
 
@@ -52,8 +45,8 @@ public final class HubSuiteItems {
 
     /** 在 {@code onInitialize} 里调一次。 */
     public static void register() {
-        NETHER_STRING = register("nether_string", new HubSuiteSimpleItem(
-                HubSuiteItemDefs.properties(HubSuiteItemDefs.NETHER_STRING), Items.TRIAL_KEY));
+        NETHER_STRING = register("nether_string",
+                new HubSuiteSimpleItem(HubSuiteItemDefs.properties(HubSuiteItemDefs.NETHER_STRING)));
 
         // 遗留物品：注册着（老存档认得出），但样子退回原版钓竿、配方已删
         LAVA_ROD = register("lava_rod", new LegacyLavaRodItem(props("lava_rod")));
