@@ -26,7 +26,9 @@
           "cases": [
             { "when": "string", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_string" } },
             { "when": "nether_string", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_nether_string" } },
-            { "when": "vine", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_vine" } }
+            { "when": "vine", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_vine" } },
+            { "when": "weeping_vines", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_weeping_vines" } },
+            { "when": "twisting_vines", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_twisting_vines" } }
           ]
         },
         {

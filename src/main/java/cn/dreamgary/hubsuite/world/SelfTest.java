@@ -1687,6 +1687,40 @@ public final class SelfTest {
             fail("客户端校验判定表有误：" + String.join("；", wrongDecisions));
         }
 
+        /*
+         * 回归（外部审计抓到的漏洞）：合格判定必须看**协议 + 版本**，
+         * 不能只看"有没有收到应答" —— 否则协议/版本不对时 enforce 也不踢人。
+         */
+        var goodInfo = new cn.dreamgary.hubsuite.net.ClientCompat.ClientInfo(
+                "0.5.0-beta.1", cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "fp", java.util.List.of());
+        var badProtocol = new cn.dreamgary.hubsuite.net.ClientCompat.ClientInfo(
+                "0.5.0-beta.1", cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL + 1, "fp", java.util.List.of());
+        var oldVersion = new cn.dreamgary.hubsuite.net.ClientCompat.ClientInfo(
+                "0.0.1", cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "fp", java.util.List.of());
+        List<String> wrongAccept = new ArrayList<>();
+        expectBool(wrongAccept, "合格：协议一致 + 版本够", true,
+                cn.dreamgary.hubsuite.net.ClientCompat.acceptable(goodInfo,
+                        cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "0.5.0-alpha"));
+        expectBool(wrongAccept, "不合格：协议号不一致", false,
+                cn.dreamgary.hubsuite.net.ClientCompat.acceptable(badProtocol,
+                        cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "0.5.0-alpha"));
+        expectBool(wrongAccept, "不合格：版本低于要求", false,
+                cn.dreamgary.hubsuite.net.ClientCompat.acceptable(oldVersion,
+                        cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "0.5.0-alpha"));
+        expectBool(wrongAccept, "不合格：压根没应答", false,
+                cn.dreamgary.hubsuite.net.ClientCompat.acceptable(null,
+                        cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "0.5.0-alpha"));
+        expectBool(wrongAccept, "enforce 下协议不符必须踢", true,
+                cn.dreamgary.hubsuite.net.ClientCompat.decide(cn.dreamgary.hubsuite.net.ClientCompat.Mode.ENFORCE,
+                        cn.dreamgary.hubsuite.net.ClientCompat.acceptable(badProtocol,
+                                cn.dreamgary.hubsuite.net.HandshakePayloads.PROTOCOL, "0.5.0-alpha"))
+                        == cn.dreamgary.hubsuite.net.ClientCompat.Action.KICK);
+        if (wrongAccept.isEmpty()) {
+            ok("客户端合格判定 5 组全对（协议 / 版本 / 无应答都算不合格；enforce 下协议不符会踢）");
+        } else {
+            fail("客户端合格判定有误：" + String.join("；", wrongAccept));
+        }
+
         // --- 6) 假人豁免 + 配置默认值 + 能力名 ---
         var clients = HubSuite.clients();
         if (clients == null) {

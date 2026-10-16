@@ -60,6 +60,18 @@ public final class ClientCompat {
      *
      * <p>{@code ok=false} 覆盖两种情形：没应答（没装 / 太老 / 超时）与应答了但版本不达标。
      */
+    /**
+     * 客户端**合格吗**：协议号一致 + 版本不低于要求。
+     *
+     * <p>审计抓到的漏洞就是这里被写成了"只要收到应答就算合格"，
+     * 于是协议 / 版本不对时 enforce 也不踢人。判定必须走这个函数。
+     */
+    public static boolean acceptable(ClientInfo info, int protocol, String minClientVersion) {
+        return info != null
+                && info.protocol() == protocol
+                && ClientVersions.atLeast(info.version(), minClientVersion);
+    }
+
     public static Action decide(Mode mode, boolean ok) {
         if (mode == null || mode == Mode.OFF || ok) {
             return Action.ALLOW;
@@ -104,7 +116,7 @@ public final class ClientCompat {
         }
         if (!ServerPlayNetworking.canSend(player, HandshakePayloads.Hello.TYPE)) {
             // 客户端没有声明这个频道 = 没装客户端模组（旧版客户端也一样）。
-            apply(player, null, "客户端没有声明握手频道（没装客户端模组？）");
+            apply(player, null, false, "客户端没有声明握手频道（没装客户端模组？）");
             return;
         }
         waiting.put(player.getUUID(), Math.max(1, config.timeoutSeconds) * 20);
@@ -123,11 +135,16 @@ public final class ClientCompat {
         boolean protocolOk = info.protocol() == HandshakePayloads.PROTOCOL;
         boolean versionOk = ClientVersions.atLeast(info.version(), safeMin());
         if (!protocolOk) {
-            apply(player, info, "协议号不一致（服务端 " + HandshakePayloads.PROTOCOL + "，客户端 " + info.protocol() + "）");
+            apply(player, info, false,
+                    "协议号不一致（服务端 " + HandshakePayloads.PROTOCOL + "，客户端 " + info.protocol() + "）");
             return;
         }
         if (!versionOk) {
-            apply(player, info, "客户端版本低于服务端要求");
+            apply(player, info, false, "客户端版本低于服务端要求（要求 ≥ " + safeMin() + "，实际 " + info.version() + "）");
+            return;
+        }
+        if (!acceptable(info, HandshakePayloads.PROTOCOL, safeMin())) {
+            apply(player, info, false, "客户端未达到握手要求");
             return;
         }
         known.put(player.getUUID(), info);
@@ -166,7 +183,7 @@ public final class ClientCompat {
             it.remove();
             ServerPlayer player = server.getPlayerList().getPlayer(entry.getKey());
             if (player != null) {
-                apply(player, null, "等了 " + Math.max(1, config.timeoutSeconds) + " 秒没有收到客户端应答");
+                apply(player, null, false, "等了 " + Math.max(1, config.timeoutSeconds) + " 秒没有收到客户端应答");
             }
         }
     }
@@ -198,8 +215,15 @@ public final class ClientCompat {
 
     // ------------------------------------------------------------------
 
-    private void apply(ServerPlayer player, ClientInfo info, String why) {
-        Action action = decide(config.modeOf(), info != null);
+    /**
+     * 按"这个客户端**合格吗**"决定提示 / 踢出。
+     *
+     * <p><b>审计抓到的漏洞</b>：以前这里传的是 {@code info != null}（"有没有收到应答"），
+     * 于是协议号 / 版本不对时也会被当成合格 → enforce 模式**根本不踢人**。
+     * 现在由调用方明确传 {@code acceptable}（协议对 + 版本够 + 频道声明过）。
+     */
+    private void apply(ServerPlayer player, ClientInfo info, boolean acceptable, String why) {
+        Action action = decide(config.modeOf(), acceptable);
         if (action == Action.ALLOW) {
             return;
         }

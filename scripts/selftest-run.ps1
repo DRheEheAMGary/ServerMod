@@ -30,11 +30,15 @@ if ($Wipe) {
         if (Test-Path $t) { Remove-Item $t -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
-Get-ChildItem run -Recurse -Filter "session.lock" -ErrorAction SilentlyContinue | Remove-Item -Force
+if (Test-Path run) { Get-ChildItem run -Recurse -Filter "session.lock" -ErrorAction SilentlyContinue | Remove-Item -Force }
 if (Test-Path $LogFile) { Remove-Item $LogFile -Force -ErrorAction SilentlyContinue }
 
 # 命令文件：先 sleep 占位（cmd 没有 sleep），再发自检，最后停服。
 # 服务端控制台按平台默认字符集读 stdin（简中 Windows = GBK）。
+// 新 checkout 上 run\ 可能还不存在，先建出来（审计：以前直接往 run\ 写文件会失败）
+$runDir = Join-Path $root "run"
+if (-not (Test-Path $runDir)) { New-Item -ItemType Directory -Force -Path $runDir | Out-Null }
+
 $cmdFile = Join-Path $root "run\selftest-commands.txt"
 $lines = @(
     "ping -n $($WaitSec + 1) 127.0.0.1 > nul",

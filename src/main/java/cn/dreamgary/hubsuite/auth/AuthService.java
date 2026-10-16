@@ -43,7 +43,9 @@ public final class AuthService {
         WEAK_PASSWORD,
         MISMATCH,
         STORAGE_ERROR,
-        DISABLED
+        DISABLED,
+        /** 排队的人太多，稍后再试（审计：无界队列会被刷爆）。 */
+        BUSY
     }
 
     /** 结果 + 给玩家看的原因。 */
@@ -73,13 +75,21 @@ public final class AuthService {
         this.scheduler = scheduler == null ? Runnable::run : scheduler;
         this.store = new AuthStore(dataDir);
         this.store.open();
-        this.worker = Executors.newFixedThreadPool(
-                Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+        /*
+         * 有界队列 + 直接拒绝（审计：以前用 newFixedThreadPool，队列无界 ——
+         * 恶意刷登录/注册会把 PBKDF2 任务无限堆进来，内存和 CPU 都被吃满）。
+         * 线程数按核数，队列给 8 倍余量，超出就立刻回 BUSY，不排队。
+         */
+        int threads = Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
+        this.worker = new java.util.concurrent.ThreadPoolExecutor(
+                threads, threads, 30L, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<>(threads * 8),
                 r -> {
                     Thread t = new Thread(r, "HubSuite-Auth");
                     t.setDaemon(true);
                     return t;
-                });
+                },
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     }
 
     public void shutdown() {
@@ -97,6 +107,16 @@ public final class AuthService {
 
     /** 后台执行，回调切回服务端线程。 */
     public CompletableFuture<Result> supplyAsync(Supplier<Result> task) {
+        try {
+            return supplyAsync0(task);
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
+            // 队列满了：立刻回绝，别把请求堆在内存里（审计项）
+            return CompletableFuture.completedFuture(
+                    Result.of(Status.BUSY, "认证服务繁忙，请稍后再试。"));
+        }
+    }
+
+    private CompletableFuture<Result> supplyAsync0(Supplier<Result> task) {
         return CompletableFuture.supplyAsync(task, worker)
                 .whenComplete((result, error) -> {
                     if (error != null) {
@@ -212,6 +232,10 @@ public final class AuthService {
     public Result login(String username, UUID uuid, String password, String ip) {
         if (!config.enabled) {
             return Result.of(Status.DISABLED, "登录系统已关闭。");
+        }
+        // 审计项：注册侧一直有长度上限，登录侧没有 —— 超长密码会被喂进 PBKDF2（CPU DoS）
+        if (password == null || password.length() > config.maxPasswordLength) {
+            return Result.of(Status.BAD_PASSWORD, "密码不正确。");
         }
         Optional<AuthStore.Account> maybe = store.find(username);
         if (maybe.isEmpty()) {

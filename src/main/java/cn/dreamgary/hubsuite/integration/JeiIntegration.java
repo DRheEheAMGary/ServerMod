@@ -89,9 +89,10 @@ public final class JeiIntegration {
             for (var ingredient : holder.value().placementInfo().ingredients()) {
                 ingredient.items().forEach(h -> {
                     Item item = h.value();
-                    if ("hubsuite".equals(BuiltInRegistries.ITEM.getKey(item).getNamespace())
-                            && BuiltInRegistries.ITEM.getKey(item) == null) {
-                        bad.add(id + " 引用了未注册的物品 " + BuiltInRegistries.ITEM.getKey(item));
+                    // 审计项：先取 key 再判空（原来先调 getKey(item).getNamespace()，可能 NPE）
+                    var key = BuiltInRegistries.ITEM.getKey(item);
+                    if (key == null) {
+                        bad.add(id + " 的原料不在物品注册表里");
                     }
                 });
             }

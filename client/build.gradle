@@ -26,10 +26,13 @@ sourceSets {
 def clientFingerprint = providers.provider {
 	def digest = java.security.MessageDigest.getInstance('SHA-256')
 	def files = (fileTree('src/main/java') + fileTree('src/main/resources')
-			+ fileTree('../common/src/main/java')).files.sort { it.path }
-	files.each { f ->
-		digest.update(f.path.replace(File.separator, '/').getBytes('UTF-8'))
-		digest.update(f.bytes)
+			+ fileTree('../common/src/main/java') + fileTree('../common/resources')).files
+	// 用**相对路径**参与哈希：绝对路径会让指纹随 checkout 位置变化（审计指出的问题）
+	def entries = files.collect { [project.relativePath(it).replace(File.separator, '/'), it] }
+			.sort { it[0] }
+	entries.each { entry ->
+		digest.update(entry[0].getBytes('UTF-8'))
+		digest.update(entry[1].bytes)
 	}
 	digest.digest().encodeHex().toString().substring(0, 16)
 }
