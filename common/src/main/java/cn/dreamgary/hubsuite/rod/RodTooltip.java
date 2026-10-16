@@ -54,6 +54,11 @@ public final class RodTooltip {
         if (data.lavaCapable()) {
             lines.add(Component.literal("\u00A76耐高温"));
         }
+        if (data.lineHeatProof()) {
+            lines.add(Component.literal("\u00A7e耐烧灼"));
+        } else if (data.lavaCapable()) {
+            lines.add(Component.literal("\u00A7c线不耐烧灼 —— 岩浆里断线 ×10"));
+        }
         lines.add(Component.literal(DARK + HINT));
         lines.add(Component.literal(GRAY + "速度: " + "\u00A7f×" + tenths(data.speedTenths())));
         lines.add(Component.literal(GRAY + "幸运: " + "\u00A7f×" + thousandths(data.luckMilli())));
@@ -83,6 +88,11 @@ public final class RodTooltip {
         lines.add(stat(cLine, "断线", permille(line.breakPermille())));
         if (!neutral(line.speedMul())) {
             lines.add(stat(cLine, "速度", "×" + tenths(line.speedMul())));
+        }
+        if (line.heatProof()) {
+            lines.add(Component.literal("   \u00A7e耐烧灼"));
+        } else if (data.lavaCapable()) {
+            lines.add(Component.literal("   \u00A7c不耐烧灼 —— 岩浆里断线 ×10"));
         }
 
         String cHook = color(hook.id());
@@ -157,6 +167,8 @@ public final class RodTooltip {
             case "string" -> "\u00A7f";        // 线：白
             case "nether_string" -> "\u00A7c"; // 地狱线：红
             case "vine" -> "\u00A7a";          // 藤：绿
+            case "weeping_vines" -> "\u00A73";  // 垂泪藤：深青
+            case "twisting_vines" -> "\u00A74"; // 缠怨藤：深红
             case "obsidian" -> "\u00A75";      // 黑曜石：深紫
             case "emerald" -> "\u00A7a";
             case "lapis" -> "\u00A79";
@@ -212,6 +224,8 @@ public final class RodTooltip {
             case "string" -> "线";
             case "nether_string" -> "地狱线";
             case "vine" -> "藤蔓";
+            case "weeping_vines" -> "垂泪藤";
+            case "twisting_vines" -> "缠怨藤";
             default -> id == null ? "?" : id;
         };
     }

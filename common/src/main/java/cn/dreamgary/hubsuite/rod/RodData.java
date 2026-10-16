@@ -139,9 +139,20 @@ public record RodData(String rod, String line, String hook, String upgrade,
         return luckMilli(0);
     }
 
-    /** 断线概率（千分比）—— 只看线，与升级 / 耐久无关。 */
+    /**
+     * 断线概率（千分比）—— 只看线，与升级 / 耐久无关。
+     *
+     * <p><b>耐烧灼规则（用户定的）</b>：能钓岩浆的竿（钩耐高温）如果挂着**不耐烧灼**的线，
+     * 断线概率**变成 10 倍**；线耐烧灼就照常。所以普通线也能进岩浆，只是几乎必断。
+     */
     public int breakPermille() {
-        return lineMaterial().breakPermille();
+        int base = lineMaterial().breakPermille();
+        return lavaCapable() && !lineMaterial().heatProof() ? base * 10 : base;
+    }
+
+    /** 线耐不耐烧灼（只有能钓岩浆的竿才用得上）。 */
+    public boolean lineHeatProof() {
+        return lineMaterial().heatProof();
     }
 
     /** 能不能在岩浆里钓 —— 只看钩。 */

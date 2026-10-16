@@ -185,6 +185,7 @@ public final class SelfTest {
         step("钓竿物品提示（总体数值 / Shift 部件明细 / 坏竿提示）", this::checkRodTooltip);
         step("装配台方块（注册 / 方块实体 / 素材 / 掉落表）", this::checkAssemblyBlock);
         step("钓竿耐久与断线（扣耐久 / 断线边界 / 原版耐久条 / 坏了不能钓）", this::checkRodDurability);
+        step("耐烧灼规则（岩浆里不耐烧灼 → 断线 ×10）", this::checkHeatProof);
         step("铁砧升级（单槽替换 / 累计惩罚 / 不归我们管的一律原样）", this::checkRodAnvil);
         step("青金石附魔（附魔台等价 / 宝藏池排除诅咒 / 概率边界）", this::checkRodEnchanting);
         step("旧熔岩钓竿换算（钩决定岩浆 / 磨损比例照搬 / 配方已删）", this::checkLegacyLavaRod);
@@ -1770,11 +1771,12 @@ public final class SelfTest {
         int lineCount = cn.dreamgary.hubsuite.rod.RodMaterials.lines().size();
         int hookCount = cn.dreamgary.hubsuite.rod.RodMaterials.hooks().size();
         int upgradeCount = cn.dreamgary.hubsuite.rod.RodMaterials.upgrades().size();
-        if (rodCount != 4 || lineCount != 3 || hookCount != 5 || upgradeCount != 4) {
+        // 线 5 档：线 / 地狱线 / 藤蔓 / 垂泪藤 / 缠怨藤（后两种各成一档，数值照抄藤蔓）
+        if (rodCount != 4 || lineCount != 5 || hookCount != 5 || upgradeCount != 4) {
             fail("部件表条目数不对：杆 " + rodCount + " / 线 " + lineCount + " / 钩 " + hookCount
-                    + " / 升级 " + upgradeCount + "（方案里是 4 / 3 / 5 / 4）");
+                    + " / 升级 " + upgradeCount + "（约定是 4 / 5 / 5 / 4）");
         } else {
-            ok("部件表就绪：杆 4 / 线 3 / 钩 5 / 升级 4（默认 "
+            ok("部件表就绪：杆 4 / 线 5（含两种地狱藤蔓）/ 钩 5 / 升级 4（默认 "
                     + cn.dreamgary.hubsuite.rod.RodMaterials.DEFAULT_ROD + " + "
                     + cn.dreamgary.hubsuite.rod.RodMaterials.DEFAULT_LINE + " + "
                     + cn.dreamgary.hubsuite.rod.RodMaterials.DEFAULT_HOOK + "）");
@@ -1821,7 +1823,9 @@ public final class SelfTest {
         expectInt(wrongMath, "幸运（钻石升级，基础 0）", 2000, defaults.withUpgrade("diamond").luckMilli());
         expectInt(wrongMath, "幸运（钻石升级，基础 1000 → (1000+2000)×1.0）", 3000,
                 defaults.withUpgrade("diamond").luckMilli(1000));
-        expectInt(wrongMath, "断线‰（只看线）", 2, defaults.withParts("wood", "vine", "netherite").breakPermille());
+        // 断线的"只看线"要用**不能钓岩浆**的钩来测：能钓岩浆时会叠"耐烧灼"规则（不耐烧灼 ×10）
+        expectInt(wrongMath, "断线‰（只看线；钻石钩不能钓岩浆）", 2,
+                defaults.withParts("wood", "vine", "diamond").breakPermille());
         expectBool(wrongMath, "岩浆可钓（只看钩）", true, defaults.withParts("wood", "vine", "netherite").lavaCapable());
         if (wrongMath.isEmpty()) {
             ok("属性公式 12 组全对（耐久 ×10 / 速度 ×1000 / 幸运 / 断线‰ / 岩浆；青金石负值夹到 1）");
@@ -1837,9 +1841,9 @@ public final class SelfTest {
                 cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.ROD, "minecraft:netherite_ingot"));
         expectStr(wrongMatch, "地狱丝线 → 线", "nether_string",
                 cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.LINE, "hubsuite:nether_string"));
-        expectStr(wrongMatch, "垂泪藤 → 线（藤蔓材质）", "vine",
+        expectStr(wrongMatch, "垂泪藤 → 线（自己一档）", "weeping_vines",
                 cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.LINE, "minecraft:weeping_vines"));
-        expectStr(wrongMatch, "缠怨藤 → 线（藤蔓材质）", "vine",
+        expectStr(wrongMatch, "缠怨藤 → 线（自己一档）", "twisting_vines",
                 cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.LINE, "minecraft:twisting_vines"));
         expectStr(wrongMatch, "黑曜石 → 钩", "obsidian",
                 cn.dreamgary.hubsuite.rod.RodMaterials.matchItem(cn.dreamgary.hubsuite.rod.RodMaterials.Part.HOOK, "minecraft:obsidian"));
@@ -1851,7 +1855,7 @@ public final class SelfTest {
         expectStr(wrongMatch, "钻石 → 升级物", "diamond",
                 cn.dreamgary.hubsuite.rod.RodMaterials.matchUpgrade(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND)));
         if (wrongMatch.isEmpty()) {
-            ok("物品 → 材质匹配 9 组全对（含藤蔓三别名、同材料按部位区分、非部件返回 null）");
+            ok("物品 → 材质匹配 9 组全对（两种地狱藤蔓各成一档、同材料按部位区分、非部件返回 null）");
         } else {
             fail("物品 → 材质匹配有误：" + String.join("；", wrongMatch));
         }
@@ -2675,6 +2679,14 @@ public final class SelfTest {
                 join(cn.dreamgary.hubsuite.rod.RodTooltip.details(plain)).contains("无属性"));
         expectBool(wrong, "有变化的项照样显示（钻石升级速度 ×1.5）", true,
                 join(cn.dreamgary.hubsuite.rod.RodTooltip.details(full)).contains("×1.5"));
+        expectBool(wrong, "tooltip 标出耐烧灼（地狱线）", true,
+                join(cn.dreamgary.hubsuite.rod.RodTooltip.details(
+                        new cn.dreamgary.hubsuite.rod.RodData("wood", "nether_string", "obsidian", "", 640, 640)))
+                        .contains("耐烧灼"));
+        expectBool(wrong, "岩浆竿 + 不耐烧灼的线 → tooltip 提示 ×10", true,
+                join(cn.dreamgary.hubsuite.rod.RodTooltip.details(
+                        new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "obsidian", "", 640, 640)))
+                        .contains("×10"));
         expectBool(wrong, "总体里没升级时标明是「无」", true,
                 join(cn.dreamgary.hubsuite.rod.RodTooltip.summary(plain)).contains("无"));
 
@@ -2700,6 +2712,54 @@ public final class SelfTest {
             sb.append(line.getString()).append('\n');
         }
         return sb.toString();
+    }
+
+    /**
+     * 耐烧灼规则（用户定的）：能钓岩浆的竿 + **不耐烧灼**的线 → 断线概率 ×10；耐烧灼就照常。
+     *
+     * <p>两种地狱藤蔓是"照抄藤蔓数值、但耐烧灼"的一档，所以这里也一并钉住。
+     */
+    private void checkHeatProof() {
+        List<String> wrong = new ArrayList<>();
+        var materials = cn.dreamgary.hubsuite.rod.RodMaterials.line("vine");
+
+        // --- 材质表：两种地狱藤蔓数值照抄藤蔓、且耐烧灼 ---
+        for (String id : List.of("weeping_vines", "twisting_vines")) {
+            var m = cn.dreamgary.hubsuite.rod.RodMaterials.line(id);
+            expectInt(wrong, id + " 耐久乘数（同藤蔓）", materials.durabilityMul(), m.durabilityMul());
+            expectInt(wrong, id + " 断线‰（同藤蔓）", materials.breakPermille(), m.breakPermille());
+            expectInt(wrong, id + " 速度乘数（同藤蔓）", materials.speedMul(), m.speedMul());
+            expectBool(wrong, id + " 耐烧灼", true, m.heatProof());
+        }
+        expectBool(wrong, "藤蔓不耐烧灼", false, cn.dreamgary.hubsuite.rod.RodMaterials.line("vine").heatProof());
+        expectBool(wrong, "地狱线耐烧灼", true,
+                cn.dreamgary.hubsuite.rod.RodMaterials.line("nether_string").heatProof());
+        expectBool(wrong, "普通线不耐烧灼", false,
+                cn.dreamgary.hubsuite.rod.RodMaterials.line("string").heatProof());
+
+        // --- 规则：只能钓岩浆的竿上才 ×10 ---
+        var lavaString = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "obsidian", "", 640, 640);
+        expectBool(wrong, "黑曜石钩 → 这根竿能钓岩浆", true, lavaString.lavaCapable());
+        expectInt(wrong, "岩浆竿 + 普通线（5‰）→ ×10 = 50‰", 50, lavaString.breakPermille());
+
+        var normalString = new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "string", "", 640, 640);
+        expectInt(wrong, "不能钓岩浆 + 普通线 → 照常 5‰", 5, normalString.breakPermille());
+
+        var lavaNether = new cn.dreamgary.hubsuite.rod.RodData("wood", "nether_string", "obsidian", "", 640, 640);
+        expectInt(wrong, "岩浆竿 + 地狱线（耐烧灼）→ 照常 7‰", 7, lavaNether.breakPermille());
+
+        var lavaWeeping = new cn.dreamgary.hubsuite.rod.RodData("wood", "weeping_vines", "obsidian", "", 640, 640);
+        expectInt(wrong, "岩浆竿 + 垂泪藤（耐烧灼）→ 照常 2‰", 2, lavaWeeping.breakPermille());
+
+        var lavaVine = new cn.dreamgary.hubsuite.rod.RodData("wood", "vine", "obsidian", "", 640, 640);
+        expectInt(wrong, "岩浆竿 + 藤蔓（不耐烧灼）→ ×10 = 20‰", 20, lavaVine.breakPermille());
+
+        if (wrong.isEmpty()) {
+            ok("耐烧灼规则 11 组全对（地狱藤蔓照抄藤蔓数值且耐烧灼；岩浆竿 + 不耐烧灼的线断线 ×10，"
+                    + "耐烧灼照常；不能钓岩浆的竿不受影响）");
+        } else {
+            fail("耐烧灼规则有误：" + String.join("；", wrong));
+        }
     }
 
     private void step(String name, ThrowingRunnable body) {

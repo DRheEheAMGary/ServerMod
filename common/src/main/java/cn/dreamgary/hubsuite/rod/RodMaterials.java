@@ -29,8 +29,14 @@ public final class RodMaterials {
     public record RodMaterial(String id, String item, int baseDurability) {
     }
 
-    /** 线：耐久乘数（×10）、断线概率（‰）、速度乘数（×10）。 */
-    public record LineMaterial(String id, String item, int durabilityMul, int breakPermille, int speedMul) {
+    /**
+     * 线：耐久乘数（×10）、断线概率（‰）、速度乘数（×10）、是否**耐烧灼**。
+     *
+     * <p>耐烧灼只在"能钓岩浆的竿"上有意义：线不耐烧灼还进岩浆 → 断线概率 ×10
+     * （见 {@code RodData#breakPermille()}）。
+     */
+    public record LineMaterial(String id, String item, int durabilityMul, int breakPermille, int speedMul,
+                               boolean heatProof) {
     }
 
     /** 钩：速度乘数（×10）、能不能在岩浆里钓。 */
@@ -67,12 +73,12 @@ public final class RodMaterials {
         rod("netherite", "minecraft:netherite_ingot", 2048);
 
         // ── 线 ──
-        line("string", "minecraft:string", 10, 5, 10);
-        line("nether_string", "hubsuite:nether_string", 20, 7, 12);
-        line("vine", "minecraft:vine", 15, 2, 8);
-        // 藤蔓三种都算同一种材质（方案第 1 节）
-        alias(LINE_ITEMS, "minecraft:twisting_vines", "vine");
-        alias(LINE_ITEMS, "minecraft:weeping_vines", "vine");
+        line("string", "minecraft:string", 10, 5, 10, false);
+        line("nether_string", "hubsuite:nether_string", 20, 7, 12, true);
+        line("vine", "minecraft:vine", 15, 2, 8, false);
+        // 两种地狱藤蔓**各成一档**（数值照抄藤蔓），区别在于**耐烧灼**（用户定的）
+        line("weeping_vines", "minecraft:weeping_vines", 15, 2, 8, true);
+        line("twisting_vines", "minecraft:twisting_vines", 15, 2, 8, true);
 
         // ── 钩 ──
         hook("string", "minecraft:string", 10, false);
@@ -96,8 +102,9 @@ public final class RodMaterials {
         ROD_ITEMS.put(item, id);
     }
 
-    private static void line(String id, String item, int durMul, int breakPermille, int speedMul) {
-        LINES.put(id, new LineMaterial(id, item, durMul, breakPermille, speedMul));
+    private static void line(String id, String item, int durMul, int breakPermille, int speedMul,
+                             boolean heatProof) {
+        LINES.put(id, new LineMaterial(id, item, durMul, breakPermille, speedMul, heatProof));
         LINE_ITEMS.put(item, id);
     }
 
@@ -110,10 +117,6 @@ public final class RodMaterials {
                                 int luckMul, int luckAdd, boolean boostsEnchant) {
         UPGRADES.put(id, new Upgrade(id, item, durMul, durAdd, speedMul, luckMul, luckAdd, boostsEnchant));
         UPGRADE_ITEMS.put(item, id);
-    }
-
-    private static void alias(Map<String, String> table, String item, String id) {
-        table.put(item, id);
     }
 
     // ------------------------------------------------------------------
