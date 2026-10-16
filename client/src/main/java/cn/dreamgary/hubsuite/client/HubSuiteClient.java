@@ -42,6 +42,10 @@ public final class HubSuiteClient implements ClientModInitializer {
             if (shotDir != null) {
                 DevShot.register(shotDir);
             }
+            String drive = System.getProperty(DevDrive.PROPERTY);
+            if (drive != null) {
+                DevDrive.register(System.getProperty(DevShot.PROPERTY, "/tmp/hubsuite-drive"));
+            }
         }
 
         LOGGER.info("HubSuite 客户端 {} 已加载（握手 + 真物品 + 分层钓竿 + 装配台界面）", version());

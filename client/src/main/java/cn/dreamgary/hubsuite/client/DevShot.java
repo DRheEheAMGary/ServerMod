@@ -42,25 +42,30 @@ public final class DevShot {
             }
             ticks = 0;
             lastScreen = screen;   // 一张界面只截一次（置 null 会每 21 tick 又截一张）
-            try {
-                Screenshot.takeScreenshot(client.getMainRenderTarget(), image -> {
-                    try {
-                        File file = new File(dir, "gui-" + System.currentTimeMillis() + ".png");
-                        File parent = file.getParentFile();
-                        if (parent != null) {
-                            parent.mkdirs();
-                        }
-                        image.writeToFile(file);
-                        HubSuiteClient.LOGGER.info("[SHOT] 界面截图已保存 {}", file.getAbsolutePath());
-                    } catch (Throwable t) {
-                        HubSuiteClient.LOGGER.warn("[SHOT] 写截图失败: {}", t.toString());
-                    } finally {
-                        image.close();
-                    }
-                });
-            } catch (Throwable t) {
-                HubSuiteClient.LOGGER.warn("[SHOT] 截图失败: {}", t.toString());
-            }
+            capture(client, dir, "gui");
         });
+    }
+
+    /** 截一张（异步写文件），DevDrive 也用这个。 */
+    public static void capture(net.minecraft.client.Minecraft client, String dir, String name) {
+        try {
+            Screenshot.takeScreenshot(client.getMainRenderTarget(), image -> {
+                try {
+                    File file = new File(dir, name + "-" + System.currentTimeMillis() + ".png");
+                    File parent = file.getParentFile();
+                    if (parent != null) {
+                        parent.mkdirs();
+                    }
+                    image.writeToFile(file);
+                    HubSuiteClient.LOGGER.info("[SHOT] 已保存 {}", file.getAbsolutePath());
+                } catch (Throwable t) {
+                    HubSuiteClient.LOGGER.warn("[SHOT] 写截图失败: {}", t.toString());
+                } finally {
+                    image.close();
+                }
+            });
+        } catch (Throwable t) {
+            HubSuiteClient.LOGGER.warn("[SHOT] 截图失败: {}", t.toString());
+        }
     }
 }
