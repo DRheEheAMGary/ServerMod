@@ -2383,8 +2383,11 @@ public final class SelfTest {
          * 竿 + 钻石这种"原版没有的组合"走**早期返回**；注入点若用 TAIL（只挂最后一个 return）
          * 就永远执行不到。这里直接建一个真菜单、走原版回调，把这条路径钉住。
          */
+        // 钓竿系统只限空岛服（用户定的）：用例必须跑在空岛维度，否则按新规则不出结果
+        var skyblockLevel = cn.dreamgary.hubsuite.HubSuite.worlds().subServer("skyblock")
+                .map(sub -> sub.level()).orElse(server.overworld());
         var anvilProbe = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_anvil",
-                server.overworld(), false);
+                skyblockLevel, false);
         if (anvilProbe != null) {
             try {
                 var anvil = new net.minecraft.world.inventory.AnvilMenu(2, anvilProbe.getInventory(),
@@ -2394,7 +2397,21 @@ public final class SelfTest {
                         .set(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND));
                 anvil.slotsChanged(anvil.getSlot(0).container);   // 原版铁砧就是靠包装容器回调它
                 var anvilResult = anvil.getSlot(net.minecraft.world.inventory.AnvilMenu.RESULT_SLOT).getItem();
-                expectBool(wrong, "真实铁砧菜单：竿 + 钻石 出结果", true, !anvilResult.isEmpty());
+                expectBool(wrong, "真实铁砧菜单（空岛服）：竿 + 钻石 出结果", true, !anvilResult.isEmpty());
+
+                // 回归：非空岛服里同一组合**不该**出结果（作用域限制）
+                var outside = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_anvil_out",
+                        server.overworld(), false);
+                if (outside != null) {
+                    var anvilOut = new net.minecraft.world.inventory.AnvilMenu(3, outside.getInventory(),
+                            net.minecraft.world.inventory.ContainerLevelAccess.NULL);
+                    anvilOut.getSlot(net.minecraft.world.inventory.AnvilMenu.INPUT_SLOT).set(rod.copy());
+                    anvilOut.getSlot(net.minecraft.world.inventory.AnvilMenu.ADDITIONAL_SLOT)
+                            .set(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND));
+                    anvilOut.slotsChanged(anvilOut.getSlot(0).container);
+                    expectBool(wrong, "非空岛服：铁砧不出升级结果", false,
+                            !anvilOut.getSlot(net.minecraft.world.inventory.AnvilMenu.RESULT_SLOT).getItem().isEmpty());
+                }
                 if (!anvilResult.isEmpty()) {
                     var rd = cn.dreamgary.hubsuite.rod.RodData.of(anvilResult);
                     expectStr(wrong, "真实铁砧菜单：结果带钻石升级", "diamond",
@@ -2809,7 +2826,8 @@ public final class SelfTest {
                 join(cn.dreamgary.hubsuite.rod.RodTooltip.details(
                         new cn.dreamgary.hubsuite.rod.RodData("wood", "nether_string", "obsidian", "", 640, 640)))
                         .contains("耐烧灼"));
-        expectBool(wrong, "岩浆竿 + 不耐烧灼的线 → tooltip 提示 ×10", true,
+        // 用户要求：不再在 tooltip 里提示"不耐烧灼 ×10"（规则仍在玩法里生效）
+        expectBool(wrong, "岩浆竿 + 普通线 不再提示 ×10", false,
                 join(cn.dreamgary.hubsuite.rod.RodTooltip.details(
                         new cn.dreamgary.hubsuite.rod.RodData("wood", "string", "obsidian", "", 640, 640)))
                         .contains("×10"));
