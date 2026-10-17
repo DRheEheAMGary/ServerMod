@@ -1,4 +1,0 @@
-{
-  "parent": "minecraft:item/handheld_rod",
-  "textures": { "layer0": "hubsuite:item/rod/up_diamond_fit" }
-}

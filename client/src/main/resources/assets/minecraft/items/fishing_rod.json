@@ -87,10 +87,10 @@
             "index": 3,
             "fallback": { "type": "minecraft:empty" },
             "cases": [
-              { "when": "diamond", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_diamond_fit" } },
-              { "when": "emerald", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_emerald_fit" } },
-              { "when": "lapis", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_lapis_fit" } },
-              { "when": "redstone", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_redstone_fit" } }
+              { "when": "diamond", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_diamond" } },
+              { "when": "emerald", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_emerald" } },
+              { "when": "lapis", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_lapis" } },
+              { "when": "redstone", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_redstone" } }
             ]
           }
         },
