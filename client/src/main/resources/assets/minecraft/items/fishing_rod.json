@@ -49,6 +49,10 @@
           }
         },
         {
+          "type": "minecraft:condition",
+          "property": "minecraft:fishing_rod/cast",
+          "on_true": { "type": "minecraft:empty" },
+          "on_false": {
           "type": "minecraft:select",
           "property": "minecraft:custom_model_data",
           "index": 2,
@@ -60,6 +64,7 @@
             { "when": "obsidian", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/hook_obsidian" } },
             { "when": "netherite", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/hook_netherite" } }
           ]
+          }
         },
         {
           "type": "minecraft:select",
