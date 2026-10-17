@@ -1,4 +1,4 @@
-{
+﻿{
   "model": {
     "type": "minecraft:condition",
     "property": "minecraft:has_component",
@@ -10,7 +10,7 @@
           "type": "minecraft:select",
           "property": "minecraft:custom_model_data",
           "index": 0,
-          "fallback": { "type": "minecraft:model", "model": "hubsuite:item/rod/unknown" },
+          "fallback": { "type": "minecraft:model", "model": "hubsuite:item/rod/unknown_rod" },
           "cases": [
             { "when": "wood", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/rod_wood" } },
             { "when": "iron", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/rod_iron" } },
@@ -38,7 +38,7 @@
           "type": "minecraft:select",
           "property": "minecraft:custom_model_data",
           "index": 1,
-          "fallback": { "type": "minecraft:model", "model": "hubsuite:item/rod/unknown" },
+          "fallback": { "type": "minecraft:model", "model": "hubsuite:item/rod/unknown_line" },
           "cases": [
             { "when": "string", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_string" } },
             { "when": "nether_string", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_nether_string" } },
@@ -56,7 +56,7 @@
           "type": "minecraft:select",
           "property": "minecraft:custom_model_data",
           "index": 2,
-          "fallback": { "type": "minecraft:model", "model": "hubsuite:item/rod/unknown" },
+          "fallback": { "type": "minecraft:model", "model": "hubsuite:item/rod/unknown_hook" },
           "cases": [
             { "when": "string", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/hook_string" } },
             { "when": "iron", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/hook_iron" } },
