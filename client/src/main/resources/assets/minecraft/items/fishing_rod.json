@@ -1,4 +1,4 @@
-﻿{
+{
   "model": {
     "type": "minecraft:condition",
     "property": "minecraft:has_component",
@@ -67,16 +67,32 @@
           }
         },
         {
-          "type": "minecraft:select",
-          "property": "minecraft:custom_model_data",
-          "index": 3,
-          "fallback": { "type": "minecraft:empty" },
-          "cases": [
-            { "when": "diamond", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_diamond" } },
-            { "when": "emerald", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_emerald" } },
-            { "when": "lapis", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_lapis" } },
-            { "when": "redstone", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_redstone" } }
-          ]
+          "type": "minecraft:condition",
+          "property": "minecraft:fishing_rod/cast",
+          "on_true": {
+            "type": "minecraft:select",
+            "property": "minecraft:custom_model_data",
+            "index": 3,
+            "fallback": { "type": "minecraft:empty" },
+            "cases": [
+              { "when": "diamond", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_diamond_cast" } },
+              { "when": "emerald", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_emerald_cast" } },
+              { "when": "lapis", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_lapis_cast" } },
+              { "when": "redstone", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_redstone_cast" } }
+            ]
+          },
+          "on_false": {
+            "type": "minecraft:select",
+            "property": "minecraft:custom_model_data",
+            "index": 3,
+            "fallback": { "type": "minecraft:empty" },
+            "cases": [
+              { "when": "diamond", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_diamond_fit" } },
+              { "when": "emerald", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_emerald_fit" } },
+              { "when": "lapis", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_lapis_fit" } },
+              { "when": "redstone", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/up_redstone_fit" } }
+            ]
+          }
         },
         {
           "type": "minecraft:select",
