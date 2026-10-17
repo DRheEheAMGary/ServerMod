@@ -25,3 +25,9 @@ libs/
 
 # IDE / build output
 bin/
+
+# 客户端/服务端本地配置（PCL 版本隔离目录里的东西，不是源码）
+config/
+run/
+client/run/
+
