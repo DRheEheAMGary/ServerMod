@@ -47,6 +47,10 @@ public final class RodFishing {
     public static boolean onCatch(FishingHook hook) {
         try {
             Player owner = hook.getPlayerOwner();
+            // 用户定的：钓竿系统只限空岛服，别的服当普通原版钓竿
+            if (!cn.dreamgary.hubsuite.rod.RodScope.allowed(hook.level())) {
+                return false;
+            }
             if (!(owner instanceof ServerPlayer player) || !(hook.level() instanceof ServerLevel level)) {
                 return false;
             }

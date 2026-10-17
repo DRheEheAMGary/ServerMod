@@ -55,6 +55,11 @@ public abstract class AnvilRodUpgradeMixin {
     private void hubsuite$rodUpgrade(CallbackInfo ci) {
         try {
             AnvilMenu self = (AnvilMenu) (Object) this;
+            // 用户定的：铁砧升级只限空岛服
+            var combiner = (cn.dreamgary.hubsuite.mixin.ItemCombinerMenuAccessor) self;
+            if (!cn.dreamgary.hubsuite.rod.RodScope.allowed(combiner.hubsuite$player().level())) {
+                return;
+            }
             ItemStack left = self.getSlot(AnvilMenu.INPUT_SLOT).getItem();
             ItemStack right = self.getSlot(AnvilMenu.ADDITIONAL_SLOT).getItem();
             RodAnvil.Outcome outcome = RodAnvil.combine(left, right);

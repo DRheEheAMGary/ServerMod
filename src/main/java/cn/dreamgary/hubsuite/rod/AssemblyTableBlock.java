@@ -66,6 +66,13 @@ public class AssemblyTableBlock extends BaseEntityBlock {
         if (level.isClientSide()) {
             return InteractionResult.SUCCESS;
         }
+        // 用户定的：钓竿系统只限空岛服（别的服打不开）
+        if (!RodScope.allowed(level)) {
+            if (player instanceof ServerPlayer sp) {
+                sp.sendSystemMessage(Component.literal("\u00A77钓竿装配台只能在空岛服使用。"));
+            }
+            return InteractionResult.CONSUME;
+        }
         if (player instanceof ServerPlayer serverPlayer
                 && level.getBlockEntity(pos) instanceof AssemblyBlockEntity table) {
             serverPlayer.openMenu(new SimpleMenuProvider(

@@ -10,20 +10,21 @@ import net.minecraft.world.inventory.AbstractContainerMenu;
 /**
  * **通用容器界面**（客户端）：一份 {@link UiLayout} 渲染出任意台子的界面。
  *
- * <p>这就是[客户端契约](../../../../../../docs/客户端契约.md) 第 8 节说的那件事：
- * 服务端给布局、客户端通用渲染。加新台子 = 服务端加一份 {@code UiLayout} + 一张底图，
- * **客户端不用改**（也就没有"为了加个机器又要全员更新客户端"）。
+ * <p>配色走**原版容器**那一套（浅灰面板 #C6C6C6、槽位 #8B8B8B + 深/白立体边、
+ * 字 #404040），这样和原版 GUI 放一起不会割裂（用户反馈之前深色板太跳）。
  *
- * <p>底图目前是纯色块占位（面板 + 语义格边框 + 格子边的提示文字），不依赖美术；
- * 将来换真图时在这里加一次 {@code blit} 就行，所有台子一起受益。
+ * <p>加新台子 = 服务端加一份 {@code UiLayout} + 一张底图，客户端不用改。
  */
 public class HubSuiteContainerScreen<T extends AbstractContainerMenu> extends AbstractContainerScreen<T> {
 
-    private static final int PANEL = 0xF01A1A1A;
-    private static final int PANEL_EDGE = 0xFF6E6E6E;
-    private static final int SLOT_BG = 0xFF2B2B2B;
-    private static final int SLOT_EDGE = 0xFF8B8B8B;
-    private static final int LABEL = 0xFFB0B0B0;
+    // 原版容器配色
+    private static final int PANEL = 0xFFC6C6C6;
+    private static final int PANEL_BORDER = 0xFF000000;
+    private static final int HIGHLIGHT = 0xFF8B8B8B;
+    private static final int SHADOW = 0xFF373737;
+    private static final int SLOT_BG = 0xFF8B8B8B;
+    private static final int LABEL = 0xFF404040;
+    private static final int BUTTON = 0xFF8B8B8B;
 
     private final UiLayout layout;
 
@@ -33,7 +34,7 @@ public class HubSuiteContainerScreen<T extends AbstractContainerMenu> extends Ab
         this.titleLabelX = 8;
         this.titleLabelY = 6;
         this.inventoryLabelX = 8;
-        this.inventoryLabelY = layout.height() - 93;   // 原版箱子面板（166）算下来是 73
+        this.inventoryLabelY = layout.height() - 93;
     }
 
     public UiLayout layout() {
@@ -67,15 +68,28 @@ public class HubSuiteContainerScreen<T extends AbstractContainerMenu> extends Ab
         return super.mouseClicked(event, doubled);
     }
 
-    /** 底图（占位）：面板 + 活预览 + 语义格 + 按钮，坐标全部来自布局。 */
+    /** 原版风格的槽位：灰底 + 左上深边 + 右下白边。 */
+    private void drawSlot(GuiGraphicsExtractor g, int sx, int sy) {
+        g.fill(sx, sy, sx + 18, sy + 18, SLOT_BG);
+        g.fill(sx, sy, sx + 18, sy + 1, SHADOW);
+        g.fill(sx, sy, sx + 1, sy + 18, SHADOW);
+        g.fill(sx + 17, sy, sx + 18, sy + 18, 0xFFFFFFFF);
+        g.fill(sx, sy + 17, sx + 18, sy + 18, 0xFFFFFFFF);
+    }
+
     private void drawPanel(GuiGraphicsExtractor g, int mouseX, int mouseY) {
         int x = leftPos;
         int y = topPos;
-        g.fill(x, y, x + imageWidth, y + imageHeight, PANEL);
-        g.outline(x, y, imageWidth, imageHeight, PANEL_EDGE);
 
-        // 活预览：装配台会按材料格演算"如果应用"的结果（AssemblyPreview），
-        // 材料一进格竿的外观立刻跟着变；其它台子就画槽位原物
+        // 面板：原版浅灰 + 黑外框 + 白高光 / 灰阴影
+        g.fill(x, y, x + imageWidth, y + imageHeight, PANEL);
+        g.outline(x, y, imageWidth, imageHeight, PANEL_BORDER);
+        g.fill(x + 1, y + 1, x + imageWidth - 1, y + 2, 0xFFFFFFFF);
+        g.fill(x + 1, y + 1, x + 2, y + imageHeight - 1, 0xFFFFFFFF);
+        g.fill(x + 1, y + imageHeight - 2, x + imageWidth - 1, y + imageHeight - 1, HIGHLIGHT);
+        g.fill(x + imageWidth - 2, y + 1, x + imageWidth - 1, y + imageHeight - 1, HIGHLIGHT);
+
+        // 活预览（装配台会按材料格演算"如果应用"的结果；其它台子画槽位原物）
         UiLayout.Preview preview = layout.preview();
         if (preview != null && preview.slotIndex() < menu.slots.size()) {
             var stack = cn.dreamgary.hubsuite.rod.AssemblyPreview.previewStack(menu);
@@ -83,7 +97,6 @@ public class HubSuiteContainerScreen<T extends AbstractContainerMenu> extends Ab
                 stack = menu.getSlot(preview.slotIndex()).getItem();
             }
             if (!stack.isEmpty()) {
-                // 用户要求：竿画大、顶端可以超出，但**超出的部分要被面板边框裁掉**
                 g.enableScissor(x, y, x + imageWidth, y + imageHeight);
                 var pose = g.pose();
                 pose.pushMatrix();
@@ -93,7 +106,6 @@ public class HubSuiteContainerScreen<T extends AbstractContainerMenu> extends Ab
                 pose.popMatrix();
                 g.disableScissor();
 
-                // 悬浮在竿上直接看它的 tooltip（按住 Shift 展开 —— 之前只有槽位能看，预览看不了）
                 int boxX = x + preview.x();
                 int boxY = y + preview.y();
                 int boxSize = (int) (16 * preview.scale());
@@ -104,37 +116,32 @@ public class HubSuiteContainerScreen<T extends AbstractContainerMenu> extends Ab
             }
         }
 
+        // 语义格 + 提示
         for (UiLayout.SlotFrame frame : layout.frames()) {
             int sx = x + frame.x() - 1;
             int sy = y + frame.y() - 1;
-            g.fill(sx, sy, sx + 18, sy + 18, SLOT_BG);
-            g.outline(sx, sy, 18, 18, SLOT_EDGE);
+            drawSlot(g, sx, sy);
             g.text(font, frame.hint(), sx + 20, sy + 5, LABEL);
         }
 
-        /*
-         * 玩家背包（以及任何"没有语义框的槽位"）也要画框。
-         *
-         * 原版容器界面是靠**底图**画出槽位背景的，我们这套是纯色占位面板、不 blit 任何图，
-         * 所以不补这一步的话，背包区看起来就是"一片空白"（用户实测截图里就是这样）。
-         */
+        // 背包等"没有语义框的槽位"也补上原版槽位背景
         for (int i = layout.frames().size(); i < menu.slots.size(); i++) {
             var slot = menu.getSlot(i);
-            int bx2 = x + slot.x - 1;
-            int by2 = y + slot.y - 1;
-            g.fill(bx2, by2, bx2 + 18, by2 + 18, SLOT_BG);
-            g.outline(bx2, by2, 18, 18, SLOT_EDGE);
+            drawSlot(g, x + slot.x - 1, y + slot.y - 1);
         }
 
+        // 按钮：原版按钮配色（灰底 + 立体边）
         for (UiLayout.Button b : layout.buttons()) {
             int bx = x + b.x();
             int by = y + b.y();
             boolean hover = mouseX >= bx && mouseX < bx + b.width() && mouseY >= by && mouseY < by + b.height();
-            g.fill(bx, by, bx + b.width(), by + b.height(), hover ? 0xFF4A5A7E : 0xFF33334A);
-            g.outline(bx, by, b.width(), b.height(), hover ? 0xFFB0C0E0 : SLOT_EDGE);
+            g.fill(bx, by, bx + b.width(), by + b.height(), hover ? 0xFFA8A8A8 : BUTTON);
+            g.fill(bx, by, bx + b.width(), by + 1, 0xFFFFFFFF);
+            g.fill(bx, by, bx + 1, by + b.height(), 0xFFFFFFFF);
+            g.fill(bx, by + b.height() - 1, bx + b.width(), by + b.height(), SHADOW);
+            g.fill(bx + b.width() - 1, by, bx + b.width(), by + b.height(), SHADOW);
             int tw = font.width(b.label());
-            g.text(font, b.label(), bx + (b.width() - tw) / 2, by + (b.height() - 7) / 2,
-                    hover ? 0xFFFFFFFF : 0xFFE0E0E0);
+            g.text(font, b.label(), bx + (b.width() - tw) / 2, by + (b.height() - 7) / 2, 0xFF404040);
         }
     }
 }

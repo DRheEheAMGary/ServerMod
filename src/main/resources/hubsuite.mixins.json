@@ -8,6 +8,7 @@
     "BaseFireBlockPortalMixin",
     "CommonPlayerSpawnInfoMixin",
     "FishingHookAccessor",
+    "ItemCombinerMenuAccessor",
     "FishingHookMixin",
     "FishingRodCastMixin",
     "ConnectionChannelAccessor",
