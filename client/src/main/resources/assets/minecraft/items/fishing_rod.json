@@ -21,7 +21,19 @@
         {
           "type": "minecraft:condition",
           "property": "minecraft:fishing_rod/cast",
-          "on_true": { "type": "minecraft:model", "model": "hubsuite:item/rod/cast_line" },
+          "on_true": {
+            "type": "minecraft:select",
+            "property": "minecraft:custom_model_data",
+            "index": 1,
+            "fallback": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_string_cast" },
+            "cases": [
+              { "when": "string", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_string_cast" } },
+              { "when": "nether_string", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_nether_string_cast" } },
+              { "when": "vine", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_vine_cast" } },
+              { "when": "weeping_vines", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_weeping_vines_cast" } },
+              { "when": "twisting_vines", "model": { "type": "minecraft:model", "model": "hubsuite:item/rod/line_twisting_vines_cast" } }
+            ]
+          },
           "on_false": {
           "type": "minecraft:select",
           "property": "minecraft:custom_model_data",
