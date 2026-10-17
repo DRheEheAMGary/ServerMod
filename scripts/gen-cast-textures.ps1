@@ -1,20 +1,24 @@
-# Generate "<line>_cast.png" = "<line>.png" minus the shape in "cast_<line>.png".
+# Generate "<line>_cast.png" = "<line>.png" minus the mask shape.
 #
-# For every line texture line_<id>.png we look for a mask cast_<id>.png in the same folder.
+# Mask lookup order for every line texture line_<id>.png:
+#   1. cast_<id>.png      (per-line override, optional)
+#   2. cast_string.png    (the universal mask used by all lines)
 # Opaque pixels of the mask are punched out (alpha = 0); everything else is copied as-is.
-# No mask -> the cast variant is simply a copy (nothing is cut yet).
+# No mask at all -> the cast variant is just a copy (nothing is cut).
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File scripts\gen-cast-textures.ps1
-# Re-run after changing any line texture or any cast mask.
+# Re-run after changing any line texture or the mask.
 Add-Type -AssemblyName System.Drawing
 
 $dir = Join-Path $PSScriptRoot "..\client\src\main\resources\assets\hubsuite\textures\item\rod"
+$universal = Join-Path $dir "cast_string.png"
 $lines = Get-ChildItem $dir -Filter "line_*.png" | Where-Object { $_.Name -notlike "*_cast.png" }
 $done = 0
 $cut = 0
 foreach ($f in $lines) {
     $id = $f.BaseName.Substring(5)                       # line_<id> -> <id>
     $maskPath = Join-Path $dir ("cast_" + $id + ".png")
+    if (-not (Test-Path $maskPath)) { $maskPath = $universal }
     $src = [System.Drawing.Bitmap]::FromFile($f.FullName)
     $mask = $null
     if (Test-Path $maskPath) {
@@ -38,4 +42,4 @@ foreach ($f in $lines) {
     if ($null -ne $mask) { $mask.Dispose(); $cut++ }
     $done++
 }
-Write-Host ("generated " + $done + " cast textures (" + $cut + " with a mask)")
+Write-Host ("generated " + $done + " cast textures (" + $cut + " used a mask)")
