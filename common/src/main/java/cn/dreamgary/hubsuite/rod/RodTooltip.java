@@ -56,8 +56,6 @@ public final class RodTooltip {
         }
         if (data.lineHeatProof()) {
             lines.add(Component.literal("\u00A7e耐烧灼"));
-        } else if (data.lavaCapable()) {
-            lines.add(Component.literal("\u00A7c线不耐烧灼 —— 岩浆里断线 ×10"));
         }
         lines.add(Component.literal(DARK + HINT));
         lines.add(Component.literal(GRAY + "速度: " + "\u00A7f×" + tenths(data.speedTenths())));
@@ -91,8 +89,6 @@ public final class RodTooltip {
         }
         if (line.heatProof()) {
             lines.add(Component.literal("   \u00A7e耐烧灼"));
-        } else if (data.lavaCapable()) {
-            lines.add(Component.literal("   \u00A7c不耐烧灼 —— 岩浆里断线 ×10"));
         }
 
         String cHook = color(hook.id());

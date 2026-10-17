@@ -23,13 +23,13 @@ public final class UiLayouts {
             Identifier.fromNamespaceAndPath("hubsuite", "assembly"),
             176, 186, "钓竿装配台",
             List.of(
-                    new UiLayout.SlotFrame(0, 22, 20, "钓竿"),
-                    // 1/2/3 是**钉在竿的部件上**的（坐标按预览竿的斜线算出来的，见 Preview 注释）
-                    new UiLayout.SlotFrame(1, 84, 30, "杆"),
-                    new UiLayout.SlotFrame(2, 98, 16, "线"),
-                    new UiLayout.SlotFrame(3, 67, 47, "钩"),
-                    // 成品格：钩（最后一个输入）正下方
-                    new UiLayout.SlotFrame(4, 67, 68, "成品")),
+                    // 坐标直接**量用户的稿子**得出（553x400 稿 → 面板内容区 176x100 等比换算）
+                    new UiLayout.SlotFrame(0, 25, 21, "钓竿"),
+                    new UiLayout.SlotFrame(1, 98, 34, "杆"),
+                    new UiLayout.SlotFrame(2, 138, 40, "线"),
+                    new UiLayout.SlotFrame(3, 122, 67, "钩"),
+                    // 成品格：钩正下方（稿子里没有，按用户要的加）
+                    new UiLayout.SlotFrame(4, 122, 85, "成品")),
             "背包",
             /*
              * 活预览（用户定的稿）：
@@ -38,7 +38,7 @@ public final class UiLayouts {
              *   斜线从 (px+0.15W, py+0.85H) 到 (px+0.85W, py+0.15H)，
              *   t=0.70 -> 线、(0.45) -> 杆、t=0.15 -> 钩（中心减 9 得槽左上角）。
              */
-            new UiLayout.Preview(0, 56, -4, 5.0F),
+            new UiLayout.Preview(0, 68, 12, 5.0F),
             List.of());
 
     /** 菜单类型 id → 布局。 */

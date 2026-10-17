@@ -27,7 +27,13 @@ public final class ClientRodTooltip {
                 data = cn.dreamgary.hubsuite.rod.RodData.defaults();
             }
             lines.addAll(RodTooltip.summary(data));
-            if (net.minecraft.client.Minecraft.getInstance().options.keyShift.isDown()) {
+            // 菜单打开时 KeyMapping.isDown() 不可靠（收不到按键状态），直接问窗口的物理按键
+            var window = net.minecraft.client.Minecraft.getInstance().getWindow();
+            boolean shift = com.mojang.blaze3d.platform.InputConstants.isKeyDown(window,
+                    org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT_SHIFT)
+                    || com.mojang.blaze3d.platform.InputConstants.isKeyDown(window,
+                    org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT_SHIFT);
+            if (shift) {
                 lines.addAll(RodTooltip.details(data));
             }
         });
