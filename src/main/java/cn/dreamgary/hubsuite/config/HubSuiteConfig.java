@@ -458,14 +458,15 @@ public final class HubSuiteConfig {
          * v2 = 渔获表从 3 池 18 条扩到 5 池 40+ 条；
          * v3 = 修掉 v2 里一个不存在的物品 id（minecraft:scute）；
          * v4 = 加岩浆渔获表 + 副手钓饵配置（v0.4.0-alpha.2 的内容，当时没升版本号 ——
-         *      升级上来的配置里没有岩浆表，自检「岩浆渔获表就绪」会红）。
+         *      升级上来的配置里没有岩浆表，自检「岩浆渔获表就绪」会红）；
+         * v5 = 钓鱼收窄到海岛服：老配置里空岛服（skyblock_classic*）的渔获表要清掉。
          *
          * 迁移就是把 fishing 段整体换成当前默认表 —— alpha 阶段不承诺配置兼容，
          * 改过 fishing 段的管理员需要重新配（release 说明里写清楚了）。
          */
-        if (configVersion < 4) {
+        if (configVersion < 5) {
             fishing = cn.dreamgary.hubsuite.feature.FishingPresets.defaults();
-            configVersion = 4;
+            configVersion = 5;
         }
         fishing.normalize();
         if (clientCompat != null) {

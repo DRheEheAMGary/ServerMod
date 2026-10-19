@@ -373,8 +373,8 @@ public final class FishingPresets {
                 entry("minecraft:rotten_flesh", 8.0, "1-2", "common")));
 
         lava.normalize();
+        // 只有海岛服有渔获表：空岛服（经典空岛）走原版渔获
         config.tables.put("hubsuite:skyblock_ocean_nether", lava);
-        config.tables.put("hubsuite:skyblock_classic_nether", lava);
 
         config.normalize();
         return config;

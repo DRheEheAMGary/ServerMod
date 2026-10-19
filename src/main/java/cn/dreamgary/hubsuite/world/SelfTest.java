@@ -260,7 +260,7 @@ public final class SelfTest {
             // 岩浆渔获表（按群系分化）
             var config = HubSuite.fishing();
             int totalBiomeEntries = 0;
-            for (String dim : new String[]{"hubsuite:skyblock_ocean_nether", "hubsuite:skyblock_classic_nether"}) {
+            for (String dim : new String[]{"hubsuite:skyblock_ocean_nether"}) {
                 var key = net.minecraft.resources.ResourceKey.create(
                         net.minecraft.core.registries.Registries.DIMENSION,
                         net.minecraft.resources.Identifier.parse(dim));
@@ -277,11 +277,19 @@ public final class SelfTest {
                     }
                 }
             }
+            // 钓鱼只属于海岛服：空岛服（经典空岛）的下界不该挂渔获表
+            var classicNetherKey = net.minecraft.resources.ResourceKey.create(
+                    net.minecraft.core.registries.Registries.DIMENSION,
+                    net.minecraft.resources.Identifier.parse("hubsuite:skyblock_classic_nether"));
+            if (cn.dreamgary.hubsuite.feature.FishingLoot.tableFor(config, classicNetherKey) != null) {
+                fail("空岛服（经典空岛）不该有岩浆渔获表：钓鱼只属于海岛服");
+                return;
+            }
             if (totalBiomeEntries < 5) {
                 fail("岩浆渔获表没有按群系分化（带群系的条目只有 " + totalBiomeEntries + " 条）");
                 return;
             }
-            ok("岩浆渔获表就绪（两个海岛下界，按群系分化的条目 " + totalBiomeEntries + " 条）");
+            ok("岩浆渔获表就绪（海岛下界，按群系分化的条目 " + totalBiomeEntries + " 条；空岛服不挂表）");
 
             // 配方真的加载了（JSON 写错是静默失败）
             String[] recipes = {"nether_string",
@@ -2383,11 +2391,23 @@ public final class SelfTest {
          * 竿 + 钻石这种"原版没有的组合"走**早期返回**；注入点若用 TAIL（只挂最后一个 return）
          * 就永远执行不到。这里直接建一个真菜单、走原版回调，把这条路径钉住。
          */
-        // 钓竿系统只限空岛服（用户定的）：用例必须跑在空岛维度，否则按新规则不出结果
-        var skyblockLevel = cn.dreamgary.hubsuite.HubSuite.worlds().subServer("skyblock")
-                .map(sub -> sub.level()).orElse(server.overworld());
+        // 钓竿系统只限海岛服（用户定的）：用例必须跑在海岛维度，否则按新规则不出结果
+        var oceanLevel = server.getLevel(
+                cn.dreamgary.hubsuite.world.WorldBuilder.dimensionKey("skyblock_ocean"));
+        if (oceanLevel == null) {
+            oceanLevel = server.overworld();
+        }
+        // 作用域断言：海岛生效、空岛与主世界不生效
+        var scopeClassic = server.getLevel(
+                cn.dreamgary.hubsuite.world.WorldBuilder.dimensionKey("skyblock_classic"));
+        expectBool(wrong, "钓竿作用域：海岛服生效",
+                true, cn.dreamgary.hubsuite.rod.RodScope.allowed(oceanLevel));
+        expectBool(wrong, "钓竿作用域：空岛服（经典空岛）不生效",
+                false, cn.dreamgary.hubsuite.rod.RodScope.allowed(scopeClassic));
+        expectBool(wrong, "钓竿作用域：主世界不生效",
+                false, cn.dreamgary.hubsuite.rod.RodScope.allowed(server.overworld()));
         var anvilProbe = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_anvil",
-                skyblockLevel, false);
+                oceanLevel, false);
         if (anvilProbe != null) {
             try {
                 var anvil = new net.minecraft.world.inventory.AnvilMenu(2, anvilProbe.getInventory(),
@@ -2397,11 +2417,12 @@ public final class SelfTest {
                         .set(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND));
                 anvil.slotsChanged(anvil.getSlot(0).container);   // 原版铁砧就是靠包装容器回调它
                 var anvilResult = anvil.getSlot(net.minecraft.world.inventory.AnvilMenu.RESULT_SLOT).getItem();
-                expectBool(wrong, "真实铁砧菜单（空岛服）：竿 + 钻石 出结果", true, !anvilResult.isEmpty());
+                expectBool(wrong, "真实铁砧菜单（海岛服）：竿 + 钻石 出结果", true, !anvilResult.isEmpty());
 
-                // 回归：非空岛服里同一组合**不该**出结果（作用域限制）
+                // 回归：空岛服（经典空岛）里同一组合**不该**出结果（作用域限制）
+                var outsideLevel = scopeClassic != null ? scopeClassic : server.overworld();
                 var outside = cn.dreamgary.hubsuite.fake.FakePlayers.spawn(server, "hubsuite_anvil_out",
-                        server.overworld(), false);
+                        outsideLevel, false);
                 if (outside != null) {
                     var anvilOut = new net.minecraft.world.inventory.AnvilMenu(3, outside.getInventory(),
                             net.minecraft.world.inventory.ContainerLevelAccess.NULL);
@@ -2409,7 +2430,7 @@ public final class SelfTest {
                     anvilOut.getSlot(net.minecraft.world.inventory.AnvilMenu.ADDITIONAL_SLOT)
                             .set(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND));
                     anvilOut.slotsChanged(anvilOut.getSlot(0).container);
-                    expectBool(wrong, "非空岛服：铁砧不出升级结果", false,
+                    expectBool(wrong, "非海岛服（空岛服）：铁砧不出升级结果", false,
                             !anvilOut.getSlot(net.minecraft.world.inventory.AnvilMenu.RESULT_SLOT).getItem().isEmpty());
                 }
                 if (!anvilResult.isEmpty()) {
