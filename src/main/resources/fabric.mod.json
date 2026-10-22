@@ -13,7 +13,7 @@
 	},
 	"license": "MIT",
 	"icon": "assets/hubsuite/icon.png",
-	"environment": "*",
+	"environment": "server",
 	"accessWidener": "hubsuite.accesswidener",
 	"entrypoints": {
 		"main": [
