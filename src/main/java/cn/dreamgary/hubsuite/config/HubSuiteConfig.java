@@ -95,7 +95,7 @@ public final class HubSuiteConfig {
         public int timeoutSeconds = 15;
 
         /** 提示 / 踢出时给出的下载地址。 */
-        public String downloadUrl = "https://github.com/DRheEheAMGary/ServerMod/releases/latest";
+        public String downloadUrl = "https://github.com/DRheEheAMServer/HubSuite/releases/latest";
 
         /** 解析 {@link #mode}（认不出来一律按 warn）。 */
         public cn.dreamgary.hubsuite.net.ClientCompat.Mode modeOf() {
@@ -120,7 +120,7 @@ public final class HubSuiteConfig {
                 minClientVersion = "";
             }
             if (downloadUrl == null || downloadUrl.isBlank()) {
-                downloadUrl = "https://github.com/DRheEheAMGary/ServerMod/releases/latest";
+                downloadUrl = "https://github.com/DRheEheAMServer/HubSuite/releases/latest";
             }
         }
     }
