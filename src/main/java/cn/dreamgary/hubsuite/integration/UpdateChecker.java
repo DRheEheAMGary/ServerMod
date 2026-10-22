@@ -43,7 +43,7 @@ public final class UpdateChecker {
 
     /** GitHub Releases API（含预发布，才能实现 checkBeta）。 */
     private static final String API =
-            "https://api.github.com/repos/DRheEheAMGary/ServerMod/releases?per_page=10";
+            "https://api.github.com/repos/DRheEheAMServer/HubSuite/releases?per_page=10";
     /** 同类检查的最小间隔：24h。避免频繁重启把 API 配额耗光。 */
     private static final long CACHE_TTL_MS = 24L * 60L * 60L * 1000L;
     private static final String CACHE_FILE = "update-check.json";
