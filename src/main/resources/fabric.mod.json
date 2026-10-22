@@ -3,7 +3,7 @@
 	"id": "hubsuite",
 	"version": "${version}",
 	"name": "HubSuite",
-	"description": "纯服务端的多世界服务器套件：对话框注册/登录、假人大厅、生存/创造/空岛三个独立子服，并对 HuskHomes 与 Text Placeholder API 做适配。",
+	"description": "多世界服务器套件：对话框注册/登录、假人大厅、生存/创造/空岛/海岛等完全独立的子服，并适配 HuskHomes 与 Placeholder API。玩家需同时安装配套的 hubsuite-client 客户端模组。",
 	"authors": [
 		"DreamGary"
 	],

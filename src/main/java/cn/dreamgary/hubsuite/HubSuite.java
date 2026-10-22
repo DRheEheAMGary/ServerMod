@@ -15,8 +15,9 @@ import org.slf4j.LoggerFactory;
 /**
  * HubSuite 主入口。
  *
- * <p>本项目是<strong>纯服务端</strong>模组：所有功能都跑在 dedicated server 上，
- * 客户端使用原版即可进服（不安装也能玩）。
+ * <p>本项目的主体是<strong>纯服务端</strong>模组：所有玩法都跑在 dedicated server 上。
+ * 但自定义物品用的是<strong>真实物品 id</strong>（Polymer 已下线），玩家客户端必须安装配套的
+ * {@code hubsuite-client} 模组，否则注册表同步对不上、进不了服。
  *
  * <p>子系统一览（按开发阶段逐步接入）：
  * <ul>
