@@ -155,7 +155,7 @@ hub selftest
 ## 目录结构
 
 ```text
-MinecraftSeverMod/
+HubSuite/
 ├─ src/main/java/cn/dreamgary/hubsuite/   源码（93 个 Java 文件 / 22 个 Mixin）
 ├─ src/main/resources/                    fabric.mod.json / mixin 配置 / 图标
 ├─ docs/                                  中文文档
